@@ -1,3 +1,4 @@
+
 # Language zh-CHT translations for PACKAGE package.
 # Copyright (C) 2025 THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the PACKAGE package.
@@ -1297,3 +1298,67 @@ msgstr "🔥 Firehose 模式 🔥"
 #, python-format
 #~ msgid "INACTIVE: connect to an unmetered network"
 #~ msgstr "未啟用：請連接不限流量網路"
+
+#: selfdrive/ui/onroad/augmented_road_view.py:271
+msgid "Control"
+msgstr "控制"
+
+#: selfdrive/ui/onroad/augmented_road_view.py:271
+msgid "Direction"
+msgstr "方向"
+
+#: selfdrive/ui/onroad/augmented_road_view.py:272
+msgid "Memory"
+msgstr "記憶體用量"
+
+#: selfdrive/ui/onroad/augmented_road_view.py:273
+msgid "CPU Temp"
+msgstr "CPU 溫度"
+
+#: selfdrive/ui/onroad/augmented_road_view.py:305
+msgid "Disk Free"
+msgstr "剩餘空間"
+
+#: selfdrive/ui/onroad/augmented_road_view.py:333
+msgid "Auto control"
+msgstr "自動巡航"
+
+#: selfdrive/ui/onroad/augmented_road_view.py:335
+msgid "Manual control"
+msgstr "人工接管"
+
+msgid "### Human Turn Detection ###"
+msgstr "### 人工轉彎檢測 ###"
+
+msgid "Enable Human Turn Detection"
+msgstr "啟用人工轉彎檢測(HTD)"
+
+msgid "Unavailable during cruise control.Automatically pause steering when the driver applies large manual steering input, then smoothly resume."
+msgstr "自動巡航時不可用。當車速35公里以下駕駛員大角度手動打方向時自動暫停橫向控制，鬆手後平滑恢復。"
+
+msgid "Trigger angle"
+msgstr "觸發角度"
+
+msgid "Driver steering angle that triggers HTD (degrees)."
+msgstr "觸發人工轉彎檢測的方向盤角度（度）。"
+
+msgid "Dynamic Follow Mode (DFM)"
+msgstr "動態車距模式 (DFM)"
+
+msgid "Dynamically adjusts the follow distance based on speed and selected longitudinal personality."
+msgstr "根據速度和選定的縱向特性動態調整跟車距離。"
+
+msgid "Dynamic Accel Personality"
+msgstr "動態加速度模式開關"
+
+msgid "Dynamic acceleration switch"
+msgstr "動態加速度模式開關"
+
+msgid "Accel Personality"
+msgstr "動態加速度模式"
+
+msgid "Dynamic acceleration selection mode"
+msgstr "動態加速度選擇模式"
+
+msgid "Std."
+msgstr "標準"

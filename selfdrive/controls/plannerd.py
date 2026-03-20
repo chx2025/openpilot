@@ -18,9 +18,21 @@ def main():
 
   ldw = LaneDepartureWarning()
   longitudinal_planner = LongitudinalPlanner(CP)
-  pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance'])
-  sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'liveParameters', 'radarState', 'modelV2', 'selfdriveState', 'maaControl'],
-                           poll='modelV2', ignore_alive=['maaControl'])
+  pm = messaging.PubMaster(['longitudinalPlan', 'longitudinalPlanDP', 'driverAssistance'])
+  sm = messaging.SubMaster(
+    [
+      'carControl',
+      'carState',
+      'controlsState',
+      'liveParameters',
+      'radarState',
+      'modelV2',
+      'selfdriveState',
+      'controlsState',
+      'controlsStateExt',
+    ],
+    poll='modelV2',
+  )
 
   dp_flags = 0
 
@@ -30,10 +42,6 @@ def main():
     dp_flags |= DPFlags.AEM
   if params.get_bool("dp_lon_dtsc"):
     dp_flags |= DPFlags.DTSC
-  if params.get_bool("dp_lon_apm"):
-    dp_flags |= DPFlags.APM
-  if params.get_bool("dp_lon_dasr"):
-    dp_flags |= DPFlags.DASR
 
   while True:
     sm.update()

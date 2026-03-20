@@ -39,7 +39,6 @@ SETTINGS = [
         "title": lambda: tr("Use Stock Longitudinal Control"),
         "description": ""
       },
-
     ],
   },
   {
@@ -64,14 +63,12 @@ SETTINGS = [
         "title": lambda: tr("Avoid EPS Lockout"),
         "description": ""
       },
-
     ],
   },
   {
     "title": "Mazda",
     "condition": "brand == 'mazda'",
     "settings": [
-
     ],
   },
   {
@@ -82,7 +79,7 @@ SETTINGS = [
         "type": "toggle_item",
         "title": lambda: tr("Always-on Lane Keeping Assist (ALKA)"),
         "description": lambda: tr("Enable lateral control even when ACC/cruise is disengaged, using ACC Main or LKAS button to toggle. Vehicle must be moving."),
-        "brands": ["toyota", "hyundai", "honda", "volkswagen", "subaru", "mazda", "nissan", "ford"],
+        #"brands": ["toyota", "hyundai", "honda", "volkswagen", "subaru", "mazda", "nissan", "ford"],
       },
       {
         "key": "dp_lat_lca_speed",
@@ -125,6 +122,34 @@ SETTINGS = [
         "description": lambda: tr("Block lane change assist when the system detects the road edge.<br>NOTE: This will show 'Car Detected in Blindspot' warning."),
       },
       {
+        "key": "dp_htd_enabled",
+        "type": "toggle_item",
+        "title": lambda: tr("Enable Human Turn Detection"),
+        "description": lambda: tr("Unavailable during cruise control.Automatically pause steering when the driver applies large manual steering input, then smoothly resume."),
+        # 移除了 default: True，現在預設為關閉 (False)
+        "on_change": [{
+          "target": "dp_htd_turn_angle_threshold",
+          "action": "set_enabled",
+          "condition": "value"
+        }]
+      },
+      {
+        "key": "dp_htd_turn_angle_threshold",
+        "type": "spin_button_item",
+        "title": lambda: tr("Trigger angle"),
+        "description": lambda: tr("Driver steering angle that triggers HTD (degrees)."),
+        "default": 90,
+        "min_val": 60,
+        "max_val": 120,
+        "step": 5,
+        "suffix": lambda: tr(" °"),
+        "initially_enabled_by": {
+          "param": "dp_htd_enabled",
+          "condition": "value == True",
+          "default": False # 這裡也對應設為 False，確保一開始是灰的
+        }
+      },
+      {
         "key": "dp_lat_offset_cm",
         "type": "spin_button_item",
         "title": lambda: tr("Position Offset"),
@@ -135,12 +160,11 @@ SETTINGS = [
         "step": 1,
         "suffix": lambda: tr("cm"),
       },
-
     ],
   },
   {
     "title": "Longitudinal",
-    "condition": "openpilotLongitudinalControl",
+    "condition": "openpilotLongitudinalControl", #隱藏縱向代碼
     "settings": [
       {
         "key": "dp_lon_acm",
@@ -161,6 +185,12 @@ SETTINGS = [
         "description": lambda: tr("DTSC automatically adjusts the vehicle's predicted speed based on upcoming road curvature and grip conditions.<br>Originally from the openpilot TACO branch."),
       },
       {
+        "key": "DynamicFollow",
+        "type": "toggle_item",
+        "title": lambda: tr("Dynamic Follow Mode (DFM)"),
+        "description": lambda: tr("Dynamically adjusts the follow distance based on speed and selected longitudinal personality."),
+      },
+      {
         "key": "dp_lon_apm",
         "type": "toggle_item",
         "title": lambda: tr("Adaptive Personality Mode (APM)"),
@@ -172,9 +202,30 @@ SETTINGS = [
         "title": lambda: tr("Dynamic Accel Slew Rate (DASR)"),
         "description": lambda: tr("Speed-dependent acceleration smoothing. Allows faster accel changes at low speeds for responsive city driving, smoother changes at highway speeds for comfort."),
       },
-
-    ],
-  },
+      {
+        "key": "AccelPersonalityEnabled",
+        "type": "toggle_item",
+        "title": lambda: tr("Dynamic Accel Personality"),
+        "description": lambda: tr("Dynamic acceleration switch"),
+        "on_change": [{
+          "target": "AccelPersonality",
+          "action": "set_enabled",
+          "condition": "value"
+        }]
+      },
+      {
+        "key": "AccelPersonality",
+        "type": "text_spin_button_item",
+        "title": lambda: tr("Accel Personality"),
+        "description": lambda: tr("Dynamic acceleration selection mode"),
+        "options": [
+          lambda: tr("Sport"),
+          lambda: tr("Normal"),
+          lambda: tr("Eco"),
+        ],
+      }, # <--- 修正處：補上這個逗號與括號
+    ],   # <--- 修正處：補上這個逗號與括號
+  },     # <--- 修正處：補上這個逗號與括號
   {
     "title": "UI",
     "condition": "not MICI",
@@ -230,7 +281,6 @@ SETTINGS = [
         "title": lambda: tr("Use MICI (comma four) UI"),
         "description": lambda: tr("Why not?"),
       },
-
     ],
   },
   {
@@ -311,7 +361,6 @@ SETTINGS = [
         "title": lambda: tr("Disable Comma Connect"),
         "description": lambda: tr("Disable Comma connect service if you do not wish to upload / being tracked by the service."),
       },
-
     ],
   },
 ]

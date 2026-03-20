@@ -12,6 +12,7 @@ $Cxx.namespace("cereal");
 
 struct ControlsStateExt @0x81c2f05a394cf4af {
   alkaActive @0 :Bool;
+  htdAction @1 :Bool;
 }
 
 struct CarStateExt @0xaedffd8f31e7b55d {
@@ -106,8 +107,34 @@ struct NavInstructionExt @0xf98d843bfd7004a3 {
   turnAngle @0 :Float32;      # degrees, positive=left, negative=right
   turnCurvature @1 :Float32;  # 1/m, positive=left, negative=right
 }
+struct LongitudinalPlanDP @0xb86e6369214c01c8 {
+  accelPersonality @0 :AccelerationPersonality;
+  longitudinalPlanSource @1 :LongitudinalPlanSource;
+  vTarget @2 :Float32;
+  aTarget @3 :Float32;
+  targets @4 :List(Target);
 
-struct CustomReserved7 @0xb86e6369214c01c8 {
+  struct Target {
+    available @0: Bool;
+    enable @1: Bool;
+    action @2: Bool;
+    braking @3: Bool;
+    vTarget @4 :Float32;
+    aTarget @5 :Float32;
+    outputVtarget @6 :Float32;
+    outputAtarget @7 :Float32;
+  }
+
+  enum LongitudinalPlanSource {
+    cruise @0;
+    acm @1;
+    dtsc @2;
+  }
+  enum AccelerationPersonality {
+    sport @0;
+    normal @1;
+    eco @2;
+  }
 }
 
 struct CustomReserved8 @0xf416ec09499d9d19 {

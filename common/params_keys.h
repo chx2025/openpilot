@@ -169,4 +169,13 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_vag_pq_steering_patch", {PERSISTENT, BOOL, "0"}},
     {"dp_vag_avoid_eps_lockout", {PERSISTENT, BOOL, "0"}},
     {"dp_honda_nidec_stock_long", {PERSISTENT, BOOL, "0"}},
+    {"dp_htd_enabled", {PERSISTENT, BOOL, "1"}},
+    {"dp_htd_turn_angle_threshold", {PERSISTENT, INT, "90"}},
+    {"dp_htd_turn_angle_release_deg", {PERSISTENT, FLOAT, "8.0"}},
+    {"dp_htd_torque_start_nm", {PERSISTENT, FLOAT, "1.2"}},
+    {"dp_htd_torque_release_nm", {PERSISTENT, FLOAT, "0.6"}},
+    {"dp_htd_recovery_delay", {PERSISTENT, FLOAT, "1.0"}},
+    {"DynamicFollow", {PERSISTENT, BOOL, "1"}},
+    {"AccelPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPlanDP::AccelerationPersonality::NORMAL))}},
+    {"AccelPersonalityEnabled", {PERSISTENT, BOOL, "1"}},
 };

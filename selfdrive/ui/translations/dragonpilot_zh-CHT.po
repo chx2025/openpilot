@@ -1,3 +1,4 @@
+
 # Traditional Chinese translations for dragonpilot.
 # Copyright (C) 2025 dragonpilot
 # This file is distributed under the same license as the dragonpilot package.
@@ -47,7 +48,7 @@ msgstr "自適駕駛風格 (APM)"
 #, python-format
 msgid ""
 "Adaptive mode switcher between ACC and Blended based on driving context."
-msgstr "根據駕駛情境自動在 ACC 和混合模式間切換。"
+msgstr "根據駕駛情境自動在 ACC 和混合模式間切換。車速70公里以上關閉動態實驗模式。"
 
 #: dragonpilot/settings.py:224
 #, python-format

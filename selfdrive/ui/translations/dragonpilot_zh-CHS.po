@@ -10,7 +10,7 @@ msgstr ""
 "PO-Revision-Date: 2025-12-18 12:30+0800\n"
 "Last-Translator: dragonpilot\n"
 "Language-Team: Chinese (Simplified)\n"
-"Language: zh-CHS\n"
+"Language: zh-CN\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -19,7 +19,7 @@ msgstr ""
 #: dragonpilot/settings.py:107
 #, python-format
 msgid "+ Auto Lane Change after:"
-msgstr "+ 自动变换车道延迟："
+msgstr "+ 自动变道延迟："
 
 #: dragonpilot/settings.py:276
 #, python-format
@@ -47,7 +47,7 @@ msgstr "自适应驾驶风格 (APM)"
 #, python-format
 msgid ""
 "Adaptive mode switcher between ACC and Blended based on driving context."
-msgstr "根据驾驶情境自动在 ACC 和混合模式间切换。"
+msgstr "根据驾驶场景自动在 ACC 和混合模式间切换。车速70公里以上关闭动态实验模式。"
 
 #: dragonpilot/settings.py:224
 #, python-format
@@ -58,17 +58,17 @@ msgstr "全部"
 #, python-format
 msgid ""
 "Allow openpilot to obey right-hand traffic conventions on right driver seat."
-msgstr "允许 openpilot 在右驾车辆上遵循右侧通行规则。"
+msgstr "允许 openpilot 在右舵车辆上遵循右侧通行规则。"
 
 #: dragonpilot/settings.py:83
 #, python-format
 msgid "Always-on Lane Keeping Assist (ALKA)"
-msgstr "持续车道保持辅助 (ALKA)"
+msgstr "全时车道保持辅助 (ALKA)"
 
 #: dragonpilot/selfdrive/ui/layouts/settings/dragonpilot.py:198
 #, python-format
 msgid "Are you sure you want to reset ALL DP SETTINGS to default?"
-msgstr "确定要将所有 DP 设定重置为默认值吗？"
+msgstr "确定要将所有 DP 设置重置为默认值吗？"
 
 #: dragonpilot/settings.py:262
 #, python-format
@@ -86,8 +86,8 @@ msgid ""
 "Automatically switches personality to \"Aggressive\" below 30 km/h and "
 "restores your selected personality above 40 km/h."
 msgstr ""
-"当车速低于 30 km/h 时，自动切换至“激进”模式；当车速高于 40 km/h 时，恢复您原"
-"先选择的模式。"
+"当车速低于 30 km/h 时，自动切换至“积极”模式；当车速高于 40 km/h 时，恢复成"
+"您原先选择的模式。"
 
 #: dragonpilot/settings.py:64
 #, python-format
@@ -100,7 +100,7 @@ msgid ""
 "Block lane change assist when the system detects the road edge.<br>NOTE: "
 "This will show 'Car Detected in Blindspot' warning."
 msgstr ""
-"当系统侦测到道路边缘时阻止变换车道辅助。<br>注意：这将显示「侦测到盲点车辆」"
+"当系统检测到道路边缘时阻止变道辅助。<br>注意：这将显示“检测到盲区车辆”"
 "警告。"
 
 #: dragonpilot/settings.py:288
@@ -132,7 +132,7 @@ msgid ""
 "on-road.<br>This prevents the initial moments of a drive from being "
 "recorded, protecting location privacy at the start of a trip."
 msgstr ""
-"当设备上路时延迟启动记录程序及相关进程。<br>这可防止行程开始时的位置被记录，"
+"当设备进入驾驶状态时延迟启动记录程序及相关进程。<br>这可防止行程开始时的位置被记录，"
 "保护隐私。"
 
 #: dragonpilot/settings.py:311
@@ -164,13 +164,13 @@ msgid ""
 "Lead stats only<br>Radar: Radar tracking point stats only<br>All: Lead and "
 "Radar stats<br>NOTE: Radar option only works on certain vehicle models."
 msgstr ""
-"显示前车和/或雷达追踪点的统计数据。<br>前车：仅显示前车统计<br>雷达：仅显示雷"
-"达追踪点统计<br>全部：显示前车和雷达统计<br>注意：雷达选项仅适用于特定车型。"
+"显示前车和/或雷达跟踪点的统计数据。<br>前车：仅显示前车统计<br>雷达：仅显示雷"
+"达跟踪点统计<br>全部：显示前车和雷达统计<br>注意：雷达选项仅适用于特定车型。"
 
 #: dragonpilot/settings.py:27
 #, python-format
 msgid "Door Auto Lock/Unlock"
-msgstr "车门自动锁定/解锁"
+msgstr "车门自动上锁/解锁"
 
 #: dragonpilot/settings.py:172
 #, python-format
@@ -195,7 +195,7 @@ msgstr "启用蜂鸣器（警告）"
 #: dragonpilot/settings.py:242
 #, python-format
 msgid "Enable Right-Hand Drive Mode"
-msgstr "启用右驾模式"
+msgstr "启用右舵模式"
 
 #: dragonpilot/settings.py:33
 #, python-format
@@ -216,7 +216,7 @@ msgstr ""
 msgid ""
 "Enable openpilot to auto-lock doors above 20 km/h and auto-unlock when "
 "shifting to Park."
-msgstr "启用 openpilot 在时速超过 20 公里时自动锁门，换至 P 档时自动解锁。"
+msgstr "启用 openpilot 在时速超过 20 公里时自动落锁，挂入 P 挡时自动解锁。"
 
 #: dragonpilot/settings.py:287
 #, python-format
@@ -231,7 +231,7 @@ msgid ""
 "(±5cm) and adjust based on preference."
 msgstr ""
 "微调车辆在车道内的位置。正值使车辆向左偏移，负值使车辆向右偏移。<br>建议从较"
-"小的数值（±5 厘米）开始，并依个人喜好进行调整。"
+"小的数值（±5 厘米）开始，并根据个人喜好进行调整。"
 
 #: dragonpilot/settings.py:199
 #, python-format
@@ -241,7 +241,7 @@ msgstr "行驶超过此速度时隐藏 HUD："
 #: dragonpilot/settings.py:90
 #, python-format
 msgid "Lane Change Assist At:"
-msgstr "变换车道辅助启用速度："
+msgstr "变道辅助启用速度："
 
 #: dragonpilot/settings.py:222
 #, python-format
@@ -266,7 +266,7 @@ msgstr "MQB A0 走停修正"
 #: dragonpilot/settings.py:14
 #, python-format
 msgid "Nidec: Use Stock Longitudinal Control"
-msgstr "Nidec: 使用原厂纵向控制"
+msgstr "Nidec: 使用原车纵向控制"
 
 #: dragonpilot/settings.py:191
 #, python-format
@@ -289,12 +289,12 @@ msgstr "关闭"
 #: dragonpilot/settings.py:108
 #, python-format
 msgid "Off = Disable Auto Lane Change."
-msgstr "关闭 = 停用自动变换车道。"
+msgstr "关闭 = 停用自动变道。"
 
 #: dragonpilot/settings.py:91
 #, python-format
 msgid "Off = Disable LCA.<br>1 mph = 1.2 km/h."
-msgstr "关闭 = 停用变换车道辅助。<br>1 英里/时 = 1.2 公里/时。"
+msgstr "关闭 = 停用变道辅助。<br>1 mph = 1.2 km/h。"
 
 #: dragonpilot/settings.py:58
 #, python-format
@@ -329,17 +329,17 @@ msgstr "重置"
 #: dragonpilot/selfdrive/ui/layouts/settings/dragonpilot.py:40
 #, python-format
 msgid "Reset DP Settings"
-msgstr "重置 DP 设定"
+msgstr "重置 DP 设置"
 
 #: dragonpilot/selfdrive/ui/layouts/settings/dragonpilot.py:42
 #, python-format
 msgid "Reset dragonpilot settings to default and restart the device."
-msgstr "将 dragonpilot 设定重置为默认值并重新启动设备。"
+msgstr "将 dragonpilot 设置重置为默认值并重启设备。"
 
 #: dragonpilot/settings.py:124
 #, python-format
 msgid "Road Edge Detection (RED)"
-msgstr "道路边缘侦测 (RED)"
+msgstr "道路边缘检测 (RED)"
 
 #: dragonpilot/settings.py:257
 #, python-format
@@ -370,7 +370,7 @@ msgid ""
 "= Display ON.<br>MAIN-: ACC MAIN on = Display OFF<br>OP-: OP enabled = "
 "Display OFF."
 msgstr ""
-"标准：原厂行为。<br>MAIN+：ACC MAIN 开启 = 屏幕开启。<br>OP+：OP 启用 = 屏幕"
+"标准：原厂逻辑。<br>MAIN+：ACC MAIN 开启 = 屏幕开启。<br>OP+：OP 启用 = 屏幕"
 "开启。<br>MAIN-：ACC MAIN 开启 = 屏幕关闭。<br>OP-：OP 启用 = 屏幕关闭。"
 
 #: dragonpilot/settings.py:263
@@ -379,7 +379,7 @@ msgid ""
 "Std.: Stock behaviour.<br>Warning: Only emits sound when there is a warning."
 "<br>Off: Does not emit any sound at all."
 msgstr ""
-"标准：原厂行为。<br>警告：仅在有警告时发出声音。<br>关闭：完全不发出声音。"
+"标准：原厂逻辑。<br>警告：仅在有警告时发出声音。<br>关闭：完全不发出声音。"
 
 #: dragonpilot/settings.py:200
 #, python-format
@@ -387,8 +387,8 @@ msgid ""
 "To prevent screen burn-in, hide Speed, MAX Speed, and Steering/DM Icons when "
 "the car moves.<br>Off = Stock Behavior<br>1 km/h = 0.6 mph"
 msgstr ""
-"为防止屏幕烙印，在车辆行驶时隐藏速度、最高速度和转向/DM 图标。<br>关闭 = 原厂"
-"行为<br>1 公里/时 = 0.6 英里/时"
+"为防止烧屏，在车辆行驶时隐藏速度、最高速度和转向/DM 图标。<br>关闭 = 原厂"
+"逻辑<br>1 km/h = 0.6 mph"
 
 #: dragonpilot/settings.py:250
 #, python-format
@@ -405,7 +405,7 @@ msgstr "使用外部雷达"
 msgid ""
 "Use Honda's factory ACC for gas/brake control instead of openpilot. "
 "openpilot will only control steering. Requires reboot to take effect."
-msgstr "使用 Honda 原厂 ACC 进行油门与刹车控制，而非 openpilot。openpilot 将仅负责控制转向。需重新启动才会生效。"
+msgstr "使用 Honda 原厂 ACC 进行油门与刹车控制，而非 openpilot。openpilot 将仅负责控制转向。需重启才会生效。"
 
 #: dragonpilot/settings.py:230
 #, python-format
@@ -415,7 +415,7 @@ msgstr "使用 MICI (comma four) 界面"
 #: dragonpilot/settings.py:39
 #, python-format
 msgid "Use Stock Longitudinal Control"
-msgstr "使用原厂纵向控制"
+msgstr "使用原车纵向控制"
 
 #: dragonpilot/settings.py:267
 #, python-format
@@ -438,7 +438,7 @@ msgid ""
 "dashy - dragonpilot's all-in-one system hub for you.<br><br>Visit http://"
 "<device_ip>:5088 to access.<br><br>Enable this to use Tesla HUD."
 msgstr ""
-"dashy - dragonpilot 的控制台。<br><br>请访问 http://<device_ip>:5088 进入。"
+"dashy - dragonpilot 为您提供的多合一系统中心。<br><br>请访问 http://<device_ip>:5088 访问。"
 "<br><br>启用此功能以使用 Tesla HUD。"
 
 #: dragonpilot/settings.py:293
@@ -475,36 +475,3 @@ msgstr "扫描以访问"
 #, python-format
 msgid "sec"
 msgstr "秒"
-
-#, python-format
-#~ msgid " km/h"
-#~ msgstr " 公里/时"
-
-#, python-format
-#~ msgid " mins"
-#~ msgstr " 分钟"
-
-#, python-format
-#~ msgid " mph"
-#~ msgstr " 英里/时"
-
-#, python-format
-#~ msgid " sec"
-#~ msgstr " 秒"
-
-#, python-format
-#~ msgid " secs"
-#~ msgstr " 秒"
-
-#, python-format
-#~ msgid "0 mins = Immediately"
-#~ msgstr "0 分钟 = 立即"
-
-#, python-format
-#~ msgid ""
-#~ "dashy - dragonpilot's all-in-one system hub for you.<br><br>Visit http://"
-#~ "<device_ip>:5088 to access.<br><br>Enable this to use HUD feature (live "
-#~ "streaming)."
-#~ msgstr ""
-#~ "dashy - dragonpilot 的控制台。<br><br>请访问 http://<device_ip>:5088 进"
-#~ "入。<br><br>启用此功能以使用 HUD 功能（即时串流）。"

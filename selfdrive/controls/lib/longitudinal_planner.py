@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
+  #!/usr/bin/env python3
 import math
 import numpy as np
 
 import cereal.messaging as messaging
+from cereal import custom
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -14,9 +15,9 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDX
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
+from dragonpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerDP
 from dragonpilot.selfdrive.controls.lib.acm import ACM
 from dragonpilot.selfdrive.controls.lib.aem import AEM
-from dragonpilot.selfdrive.controls.lib.dtsc import DTSC
 from dragonpilot.selfdrive.controls.lib.apm import APM
 from dragonpilot.selfdrive.controls.lib.dasr import DASR
 
@@ -29,8 +30,9 @@ except ImportError:
   RadarStateWrapper = None
 
 LON_MPC_STEP = 0.2  # first step is 0.2s
-A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
-A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
+#高速100~120加速度抑制 20260329
+A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.5, 0.4]
+A_CRUISE_MAX_BP = [0., 10.0, 25., 30, 40.]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
@@ -38,6 +40,8 @@ MIN_ALLOW_THROTTLE_SPEED = 2.5
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
+
+LongitudinalPlanSource = custom.LongitudinalPlanDP.LongitudinalPlanSource
 
 class DPFlags:
   ACM = 1
@@ -51,7 +55,7 @@ def get_max_accel(v_ego):
   return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
 
 def get_coast_accel(pitch):
-  return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
+  return np.sin(pitch) * -5.65 - 0.3
 
 
 def limit_accel_in_turns(v_ego, angle_steers, a_target, CP):
@@ -68,12 +72,16 @@ def limit_accel_in_turns(v_ego, angle_steers, a_target, CP):
   return [a_target[0], min(a_target[1], a_x_allowed)]
 
 
-class LongitudinalPlanner:
+class LongitudinalPlanner(LongitudinalPlannerDP):
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt)
     # TODO remove mpc modes when TR released
     self.mpc.mode = 'acc'
+    
+    # 初始化 DP Planner (接管 Dynamic Follow, DTSC, accel_controller)
+    LongitudinalPlannerDP.__init__(self, self.CP, self.mpc)
+    
     self.fcw = False
     self.dt = dt
     self.allow_throttle = True
@@ -90,7 +98,6 @@ class LongitudinalPlanner:
     self.solverExecutionTime = 0.0
     self.acm = ACM()
     self.aem = AEM()
-    self.dtsc = DTSC(aggressiveness=0.8)
     self.apm = APM()
     self.dasr = DASR()
 
@@ -119,6 +126,9 @@ class LongitudinalPlanner:
 
   def update(self, sm, dp_flags = 0):
     mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
+    
+    # 刷新 DP Planner 內的 dynamic_follow, accel_controller 等
+    LongitudinalPlannerDP.update(self, sm)
 
     if dp_flags & DPFlags.AEM:
       self.aem.update_states(model_msg=sm['modelV2'], radar_msg=sm['radarState'], v_ego=sm['carState'].vEgo)
@@ -146,7 +156,12 @@ class LongitudinalPlanner:
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
     if mode == 'acc':
-      accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
+      # 從 DP 父類別取得 accel_controller 的最大加速度限制
+      if dp_accel_clip := LongitudinalPlannerDP.get_accel_clip(self, v_ego, mode):
+        accel_clip = dp_accel_clip
+      else:
+        accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
+        
       steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
       accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
     else:
@@ -173,12 +188,17 @@ class LongitudinalPlanner:
       clipped_accel_coast_interp = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [accel_clip[1], clipped_accel_coast])
       accel_clip[1] = min(accel_clip[1], clipped_accel_coast_interp)
 
-    if force_slow_decel:
-      v_cruise = 0.0
-
     personality = sm['selfdriveState'].personality
     if dp_flags & DPFlags.APM:
-      personality = self.apm.get_personality(v_ego, personality)
+      # --- 新增擷取前車資訊，傳入 APM ---
+      lead_one = sm['radarState'].leadOne
+      has_lead = lead_one.status
+      v_lead = lead_one.vLead if has_lead else 0.0
+      a_lead = lead_one.aLeadK if has_lead else 0.0
+      d_lead = lead_one.dRel if has_lead else 0.0  # <--- 新增擷取前車距離
+      
+      # 將 d_lead 加入第 5 個參數位置傳入
+      personality = self.apm.get_personality(v_ego, has_lead, v_lead, a_lead, d_lead, personality)
 
     self.mpc.set_weights(prev_accel_constraint, personality=personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
@@ -189,28 +209,48 @@ class LongitudinalPlanner:
     else:
       radar_state = sm['radarState']
 
-    # Apply DTSC curve speed constraints if enabled
+    # DTSC MPC 下限約束 (從父類別的 self.dtsc 獲取)
+    is_dtsc_active = getattr(self.dtsc, 'active', False)
     if dp_flags & DPFlags.DTSC:
-      # Get modified acceleration constraints based on curvature
-      a_min_dtsc, a_max_dtsc = self.dtsc.get_mpc_constraints(
-        sm['modelV2'], v_ego, accel_clip[0], accel_clip[1])
-
-      # Update MPC parameters with curve constraints
-      # This directly modifies the acceleration bounds in the MPC solver
+      a_min_dtsc, a_max_dtsc = self.dtsc.get_mpc_constraints(sm['modelV2'], v_ego, accel_clip[0], accel_clip[1])
       for i in range(len(a_min_dtsc)):
-        # Apply the more restrictive constraint
-        self.mpc.params[i, 0] = max(accel_clip[0], a_min_dtsc[i])  # a_min
-        self.mpc.params[i, 1] = min(accel_clip[1], a_max_dtsc[i])  # a_max
+        self.mpc.params[i, 0] = max(accel_clip[0], a_min_dtsc[i])
+        self.mpc.params[i, 1] = min(accel_clip[1], a_max_dtsc[i])
+        if self.mpc.params[i, 0] > self.mpc.params[i, 1]:
+             self.mpc.params[i, 0] = self.mpc.params[i, 1] - 0.05
 
-    self.mpc.update(radar_state, v_cruise, x, v, a, j, personality=personality)
+    # 取得 DP Planner 的保守目標與自定義參數 (動態跟車)
+    v_cruise_target, a_target_from_dp = LongitudinalPlannerDP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
+    
+    # 從 DP 父類別取得 accel_controller 的最小加速度限制
+    a_cruise_min_override = LongitudinalPlannerDP.get_cruise_min_accel(self, v_ego)
+    t_follow_override = LongitudinalPlannerDP.get_t_follow(self, v_ego)
+
+    if force_slow_decel:
+      v_cruise_target = 0.0
+
+    # 傳入 override 參數給 MPC
+    self.mpc.update(radar_state, v_cruise_target, x, v, a, j, 
+                    personality=personality,
+                    a_cruise_min_override=a_cruise_min_override, 
+                    t_follow_override=t_follow_override)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
+    
     # ACM - Adaptive Coasting Module
     if dp_flags & DPFlags.ACM:
       user_control = long_control_off if self.CP.openpilotLongitudinalControl else not sm['selfdriveState'].enabled
-      self.acm.update_states(sm['carControl'], sm['radarState'], user_control, v_ego, v_cruise)
-      self.a_desired_trajectory = self.acm.update_a_desired_trajectory(self.a_desired_trajectory)
+      self.acm.update_states(sm['carControl'], sm['radarState'], user_control, v_ego, v_cruise, personality=personality, dtsc_is_active=is_dtsc_active)
+
+      lead = sm['radarState'].leadOne
+      self.a_desired_trajectory = self.acm.update_a_desired_trajectory(
+        self.a_desired_trajectory,
+        v_ego=v_ego,
+        lead=lead,
+        t_follow=t_follow_override  # 動態車距傳入 ACM
+      )
+      
     self.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC[:-1], self.mpc.j_solution)
 
     # TODO counter is only needed because radar is glitchy, remove once radar is gone
@@ -236,12 +276,29 @@ class LongitudinalPlanner:
       output_a_target = min(output_a_target_mpc, output_a_target_e2e)
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
 
+    # ==========================================
+    # 動態斜率 (DASR) 處理區塊 —— 【徹底二分法】
+    # ==========================================
     if dp_flags & DPFlags.DASR:
-      self.dasr.update(v_ego)
+      # --- 當 UI 開關【開啟】DASR 時，完全由 DASR 100% 接管 ---
+      has_lead = sm['radarState'].leadOne.status
+      self.dasr.update(v_ego, output_a_target, has_lead=has_lead)
+      slew_rate_down = self.dasr.slew_rate_down
+      slew_rate_up = self.dasr.slew_rate_up
+    else:
+      # --- 當 UI 開關【關閉】DASR 時，才使用原廠死數字 ---
+      slew_rate_down = 0.05
+      slew_rate_up = 0.05
+
     for idx in range(2):
-      accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - self.dasr.slew_rate, self.prev_accel_clip[idx] + self.dasr.slew_rate)
+      accel_clip[idx] = np.clip(
+          accel_clip[idx], 
+          self.prev_accel_clip[idx] - slew_rate_down, 
+          self.prev_accel_clip[idx] + slew_rate_up
+      )
+      
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
-    self.prev_accel_clip = accel_clip
+    self.prev_accel_clip = accel_clip.copy()
 
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan')
@@ -258,7 +315,10 @@ class LongitudinalPlanner:
     longitudinalPlan.jerks = self.j_desired_trajectory.tolist()
 
     longitudinalPlan.hasLead = sm['radarState'].leadOne.status
-    longitudinalPlan.longitudinalPlanSource = self.mpc.source
+    
+    # 傳遞 DP Planner 算出來的 source 來源
+    longitudinalPlan.longitudinalPlanSource = self.mpc.source    
+
     longitudinalPlan.fcw = self.fcw
 
     longitudinalPlan.aTarget = float(self.output_a_target)
@@ -267,3 +327,7 @@ class LongitudinalPlanner:
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
 
     pm.send('longitudinalPlan', plan_send)
+    
+    # 呼叫父類別的 DP 專用 UI 發布方法
+    if hasattr(self, 'publish_longitudinal_plan_dp'):
+      self.publish_longitudinal_plan_dp(sm, pm)

@@ -137,9 +137,15 @@ class AugmentedRoadView(CameraView):
     rl.draw_rectangle_lines_ex(rect, UI_BORDER_SIZE, rl.BLACK)
     border_roundness = 0.12
     border_color = BORDER_COLORS.get(ui_state.status, BORDER_COLORS[UIStatus.DISENGAGED])
+    
     # dp - ALKA: use ALKA border color when active and disengaged
     if ui_state.dp_alka_active and ui_state.status == UIStatus.DISENGAGED:
       border_color = BORDER_COLORS[UIStatus.ALKA]
+      
+      # [作法一] 只要偵測到駕駛正在轉動方向盤，立刻將邊框變成灰色 (OVERRIDE)
+      if ui_state.sm['carState'].steeringPressed:
+        border_color = BORDER_COLORS[UIStatus.OVERRIDE]
+
     border_rect = rl.Rectangle(rect.x + UI_BORDER_SIZE, rect.y + UI_BORDER_SIZE,
                                rect.width - 2 * UI_BORDER_SIZE, rect.height - 2 * UI_BORDER_SIZE)
     rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, UI_BORDER_SIZE, border_color)

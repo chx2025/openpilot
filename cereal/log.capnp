@@ -2632,7 +2632,7 @@ struct Event {
     maaControl @111 :Custom.MaaControl;
     dashyState @112 :Custom.DashyState;
     navInstructionExt @113 :Custom.NavInstructionExt;
-    customReserved7 @114 :Custom.CustomReserved7;
+    longitudinalPlanDP @114 :Custom.LongitudinalPlanDP;
     customReserved8 @115 :Custom.CustomReserved8;
     customReserved9 @116 :Custom.CustomReserved9;
     customReserved10 @136 :Custom.CustomReserved10;

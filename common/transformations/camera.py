@@ -67,7 +67,7 @@ DEVICE_CAMERAS = {
   # simulator (emulates a tici)
   ("pc", "unknown"): _ar_ox_config,
 }
-prods = itertools.product(('tici', 'tizi', 'mici'), (('ar0231', _ar_ox_config), ('ox03c10', _ar_ox_config), ('os04c10', _os_config)))
+prods = itertools.product(('tici', 'tizi', 'mici', 'pc'), (('ar0231', _ar_ox_config), ('ox03c10', _ar_ox_config), ('os04c10', _os_config)))
 DEVICE_CAMERAS.update({(d, c[0]): c[1] for d, c in prods})
 
 # device/mesh : x->forward, y-> right, z->down
@@ -176,4 +176,3 @@ def img_from_device(pt_device):
 
   pt_img = pt_view/pt_view[:, 2:3]
   return pt_img.reshape(input_shape)[:, :2]
-
