@@ -4,6 +4,7 @@ Dynamic Turn Speed Controller (DTSC) - v27 省道順暢微調版 (Golden Right F
 1. 放寬外拋容忍度與軌跡偏差，減少省道急彎誤判急煞。
 2. 提高非 HTD 狀態下的基礎安全車速係數，過彎更流暢。
 3. 縮短死咬機制 (Hysteresis) 時間，出彎加速更俐落。
+4. [修復] 修正預測速度導致的減速失效問題，確保確實減速。
 """
 
 import time
@@ -154,7 +155,8 @@ class DTSC:
         return clamp(final_decel, EMERGENCY_DECEL, 0.0)
 
     def _compute_dtsc_decel(self, v_ego, v_pred, rel_pos, safe_speeds):
-        speed_excess = v_pred - safe_speeds
+        # 【致命盲點修復】：必須使用 "當下車速 (v_ego)" 減去安全車速，不能用未來預測車速(v_pred)
+        speed_excess = v_ego - safe_speeds
         if np.all(speed_excess <= 0.0): return 0.0, None, None
 
         critical_idx = int(np.argmax(speed_excess))
@@ -219,34 +221,30 @@ class DTSC:
         # ==========================================================
         # [時間陣列掃描與彎道判定] 全軌跡60% + 0~3秒直線判定 + 3~5秒彎道啟動
         # ==========================================================
-        speed_excess = v_pred - safe_speeds
+        # 【致命盲點修復】：單純依賴幾何曲率判定彎道，不再被速度遮罩干擾
         mask_curve = curvatures > CURVATURE_MIN_FOR_PERSIST
-        mask_speed = speed_excess > 0.01
-        mask = np.logical_and(mask_speed, mask_curve)
 
-        # 1. 模型做全軌跡掃描 60% (滿足即判定為有效連續彎道)
-        persistence_ok = (float(np.sum(mask)) / len(mask)) >= PERSISTENCE_MIN_FRAC if len(mask) > 0 else False
+        # 1. 模型做全軌跡掃描 60%
+        persistence_ok = (float(np.sum(mask_curve)) / len(mask_curve)) >= PERSISTENCE_MIN_FRAC if len(mask_curve) > 0 else False
 
-        # 2. 擷取時間陣列，定義 0~3秒 與 3~5秒 的時間遮罩
+        # 2. 擷取時間陣列
         t_arr = np.array(T_IDXS_MPC)
         mask_0_3 = (t_arr >= 0.0) & (t_arr <= 3.0)
         mask_3_5 = (t_arr > 3.0) & (t_arr <= 5.0)
 
-        # 判斷各時間區間內是否有彎道特徵
-        curve_in_0_3 = np.any(mask[mask_0_3])
-        curve_in_3_5 = np.any(mask[mask_3_5])
+        curve_in_0_3 = np.any(mask_curve[mask_0_3])
+        curve_in_3_5 = np.any(mask_curve[mask_3_5])
 
         # 3. 綜合決策：是否要關閉/取消減速
-        if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
-            # 預測 G 值過低 (假彎道/微彎)，直接取消
+        if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH and not (curve_in_0_3 or curve_in_3_5):
+            # 預測 G 值過低且完全沒彎道，才取消減速
             dt_decel = sp_decel = 0.0
             dt_mode = None
             raw_suggested_speed = V_CRUISE_MAX 
         elif curve_in_3_5 or curve_in_0_3 or persistence_ok:
-            # 3~5秒有彎道 (啟動減速) / 0~3秒身處彎中 / 全軌跡 60% 達標
+            # 只要確認是彎道，維持計算出來的煞車需求
             pass 
         else:
-            # 0~3秒是直線，且 3~5秒沒彎道，且未達 60% (關閉減速)
             dt_decel = sp_decel = 0.0
             dt_mode = None
             raw_suggested_speed = V_CRUISE_MAX
@@ -260,8 +258,6 @@ class DTSC:
         # ==========================================================
         backup_triggered = False
         
-        # 動態預瞄距離 (Dynamic Lookahead)
-        # 依據車速往前方看 1.5 秒的距離，下限 15m，上限 50m
         target_dist = clamp(v_ego * 1.5, 15.0, 50.0)
         check_idx = (np.abs(rel_pos - target_dist)).argmin()
         
@@ -301,28 +297,21 @@ class DTSC:
         # ==========================================================
         # [軌跡偏差 5%~25% 線性備援機制 (省道放寬版)]
         # ==========================================================
-        # 判斷 DTSC 是否處於「作動中」 (已有減速要求 或 本身 active 為 True)
         is_dtsc_active = (final_required_decel < -0.05) or self.active
         
         if is_dtsc_active:
-            # 抓取前方 5m 到 30m 的有效預測點來判斷軌跡偏差
             dev_mask = (rel_pos > 5.0) & (rel_pos < 30.0)
             if np.any(dev_mask):
-                # 計算軌跡偏差比例 = 絕對預測橫向 Y / 預測前方距離 X
                 dev_ratios = np.abs(pred_y[dev_mask]) / np.maximum(rel_pos[dev_mask], 1.0)
                 max_dev_ratio = float(np.max(dev_ratios))
                 
-                # [修改] 給予 5% 容錯區間，超過 5% 才開始介入，到 25% (0.25) 時才拉到最大強制減速
                 if max_dev_ratio > 0.05:
-                    # 線性映射 5% ~ 25% 到 0.0 ~ EMERGENCY_DECEL (-3.0)
                     linear_backup_decel = float(np.interp(max_dev_ratio, [0.05, 0.25], [0.0, EMERGENCY_DECEL]))
                     
-                    # 覆蓋原本較弱的煞車設定
                     if linear_backup_decel < final_required_decel:
                         final_required_decel = linear_backup_decel
                         backup_triggered = True
                         
-                        # 當軌跡偏差達到 25%，視為偏離軌道，觸發強制減速
                         if max_dev_ratio >= 0.25:
                             dt_mode = "EMERGENCY"
 
@@ -341,7 +330,8 @@ class DTSC:
             speed_recovering = self.output_v_target < (raw_suggested_speed - 0.5)
             is_recovering = brake_recovering or speed_recovering
 
-        if final_required_decel < -0.1 or backup_triggered:
+        # 【門檻修復】：只要算出來需要減速，或是目前車速大於安全建議速度，就該啟動！
+        if final_required_decel < -0.01 or backup_triggered or raw_suggested_speed < (v_ego - 0.5):
             self.hysteresis_timer = HYSTERESIS_TIME
             self.active = True
         else:
