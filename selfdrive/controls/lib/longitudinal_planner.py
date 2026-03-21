@@ -1,4 +1,4 @@
-  #!/usr/bin/env python3
+#!/usr/bin/env python3
 import math
 import numpy as np
 
@@ -209,21 +209,32 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
     else:
       radar_state = sm['radarState']
 
-    # DTSC MPC 下限約束 (從父類別的 self.dtsc 獲取)
+    # DTSC MPC 下限約束 (打包為陣列，交由 MPC 套用)
     is_dtsc_active = getattr(self.dtsc, 'active', False)
+    a_min_mpc_override = None
+    a_max_mpc_override = None
     if dp_flags & DPFlags.DTSC:
       a_min_dtsc, a_max_dtsc = self.dtsc.get_mpc_constraints(sm['modelV2'], v_ego, accel_clip[0], accel_clip[1])
+      a_min_mpc_override = []
+      a_max_mpc_override = []
       for i in range(len(a_min_dtsc)):
-        self.mpc.params[i, 0] = max(accel_clip[0], a_min_dtsc[i])
-        self.mpc.params[i, 1] = min(accel_clip[1], a_max_dtsc[i])
-        if self.mpc.params[i, 0] > self.mpc.params[i, 1]:
-             self.mpc.params[i, 0] = self.mpc.params[i, 1] - 0.05
+        min_v = max(accel_clip[0], a_min_dtsc[i])
+        max_v = min(accel_clip[1], a_max_dtsc[i])
+        if min_v > max_v:
+             min_v = max_v - 0.05
+        a_min_mpc_override.append(min_v)
+        a_max_mpc_override.append(max_v)
 
     # 取得 DP Planner 的保守目標與自定義參數 (動態跟車)
     v_cruise_target, a_target_from_dp = LongitudinalPlannerDP.update_targets(self, sm, self.v_desired_filter.x, self.a_desired, v_cruise)
     
-    # 從 DP 父類別取得 accel_controller 的最小加速度限制
-    a_cruise_min_override = LongitudinalPlannerDP.get_cruise_min_accel(self, v_ego)
+    # --- [修改] 解封過彎煞車力度 ---
+    # 如果目前的降速來源是 DTSC (彎道)，我們就給予最大煞車權限 (ACCEL_MIN)
+    if getattr(self, 'source', None) == LongitudinalPlanSource.dtsc:
+      a_cruise_min_override = ACCEL_MIN
+    else:
+      a_cruise_min_override = LongitudinalPlannerDP.get_cruise_min_accel(self, v_ego)
+
     t_follow_override = LongitudinalPlannerDP.get_t_follow(self, v_ego)
 
     if force_slow_decel:
@@ -233,7 +244,9 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
     self.mpc.update(radar_state, v_cruise_target, x, v, a, j, 
                     personality=personality,
                     a_cruise_min_override=a_cruise_min_override, 
-                    t_follow_override=t_follow_override)
+                    t_follow_override=t_follow_override,
+                    a_min_override=a_min_mpc_override,
+                    a_max_override=a_max_mpc_override)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
