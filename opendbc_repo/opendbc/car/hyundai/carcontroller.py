@@ -117,11 +117,11 @@ class CarController(CarControllerBase):
   def create_can_msgs(self, apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel, stopping, hud_control, actuators, CS, CC):
     can_sends = []
 
-    # HUD messages (修改點 1：CC.latActive 改為 CC.enabled)
+    # HUD messages (已修正為 CC.enabled)
     sys_warning, sys_state, left_lane_warning, right_lane_warning = process_hud_alert(CC.enabled, self.car_fingerprint,
                                                                                       hud_control)
 
-    # (修改點 2：倒數第三個參數 CC.latActive 改為 CC.enabled)
+    # LKAS11 (已修正為 CC.enabled)
     can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.CP, apply_torque, apply_steer_req,
                                               torque_fault, CS.lkas11, sys_warning, sys_state, CC.enabled,
                                               hud_control.leftLaneVisible, hud_control.rightLaneVisible,
@@ -147,9 +147,9 @@ class CarController(CarControllerBase):
                                                       hud_control, set_speed_in_units, stopping,
                                                       CC.cruiseControl.override, use_fca, self.CP))
 
-    # 20 Hz LFA MFA message
+    # 20 Hz LFA MFA message (【重大修正點】已將 CC.latActive 改為 CC.enabled)
     if self.frame % 5 == 0 and self.CP.flags & HyundaiFlags.SEND_LFA.value:
-      can_sends.append(hyundaican.create_lfahda_mfc(self.packer, CC.latActive))
+      can_sends.append(hyundaican.create_lfahda_mfc(self.packer, CC.enabled))
 
     # 5 Hz ACC options
     if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:
@@ -167,7 +167,7 @@ class CarController(CarControllerBase):
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
-    # steering control (修改點 3：CC.latActive 改為 CC.enabled)
+    # steering control (已修正為 CC.enabled)
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
@@ -175,7 +175,7 @@ class CarController(CarControllerBase):
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
                                                         self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT))
 
-    # LFA and HDA icons (修改點 4：CC.latActive 改為 CC.enabled)
+    # LFA and HDA icons (已修正為 CC.enabled)
     if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
       can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled))
 
