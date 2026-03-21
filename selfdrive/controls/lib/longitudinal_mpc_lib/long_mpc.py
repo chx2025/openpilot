@@ -332,8 +332,8 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  # [加入覆寫參數支援]
-  def update(self, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, a_cruise_min_override=None, t_follow_override=None):
+  # [加入覆寫參數支援，新增 a_min_override, a_max_override]
+  def update(self, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, a_cruise_min_override=None, t_follow_override=None, a_min_override=None, a_max_override=None):
     t_follow = t_follow_override if t_follow_override is not None else get_T_FOLLOW(personality)
     a_cruise_min = a_cruise_min_override if a_cruise_min_override is not None else CRUISE_MIN_ACCEL
     v_ego = self.x0[1]
@@ -348,13 +348,14 @@ class LongitudinalMpc:
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
-# 2. 修改這裡：如果有收到 Planner 傳來的 DTSC 陣列，就用它；否則用預設值
+    # --- [修改] 如果 Planner 有傳入 DTSC 約束，就套用；否則使用預設值 ---
     if a_min_override is not None and a_max_override is not None:
       self.params[:,0] = a_min_override
       self.params[:,1] = a_max_override
     else:
       self.params[:,0] = ACCEL_MIN
       self.params[:,1] = ACCEL_MAX
+    # ------------------------------------------------------------------
 
     # Update in ACC mode or ACC/e2e blend
     if self.mode == 'acc':
