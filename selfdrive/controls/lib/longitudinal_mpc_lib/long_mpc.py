@@ -348,8 +348,13 @@ class LongitudinalMpc:
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
-    self.params[:,0] = ACCEL_MIN
-    self.params[:,1] = ACCEL_MAX
+# 2. 修改這裡：如果有收到 Planner 傳來的 DTSC 陣列，就用它；否則用預設值
+    if a_min_override is not None and a_max_override is not None:
+      self.params[:,0] = a_min_override
+      self.params[:,1] = a_max_override
+    else:
+      self.params[:,0] = ACCEL_MIN
+      self.params[:,1] = ACCEL_MAX
 
     # Update in ACC mode or ACC/e2e blend
     if self.mode == 'acc':
