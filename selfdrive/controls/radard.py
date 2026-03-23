@@ -57,6 +57,10 @@ class Track:
     self.K_C = kalman_params.C
     self.K_K = kalman_params.K
     self.kf = KF1D([[v_lead], [0.0]], self.K_A, self.K_C, self.K_K)
+    
+    # --- 靜止車輛計數器 (融合魔改/cp邏輯) ---
+    self.is_stopped_car_count = 0
+    self.selected_count = 0
 
   def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float):
     # relative values, copy
@@ -128,14 +132,38 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
 
   track = max(tracks.values(), key=prob)
 
-  # if no 'sane' match is found return -1
-  # stationary radar points can be false positives
+  # 基礎合理性檢查
   dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
   vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
+  
+  # --- 台灣特化：靜止車強化邏輯 ---
+  # 1. 嚴格橫向限制 (1.0公尺)：防台灣路邊違停與機車鑽縫，目標必須在正前方
+  y_sane_strict = abs(track.yRel + lead.y[0]) < 1.0
+  
+  best_track = None
+
+  # 常規判定：距離與速度皆符合視覺預期
   if dist_sane and vel_sane:
-    return track
-  else:
-    return None
+    best_track = track
+  # 靜止車判定：即使速度不符(視覺易將靜止物誤判有速度)，但距離合理、在正前方，且視覺有一定把握度
+  elif dist_sane and y_sane_strict and lead.prob > 0.3:
+    if track.selected_count > 0:
+      best_track = track # 已經確認的目標，延續鎖定
+    else:
+      track.is_stopped_car_count += 2
+      # 2. 縮短觸發時間至 0.8 秒 (16幀)：提早應對台灣常見的紅綠燈停等車陣
+      if track.is_stopped_car_count > int(0.8 / DT_MDL):
+        best_track = track
+
+  # 更新所有軌跡的選中狀態，未選中則遞減計數
+  for c in tracks.values():
+    if best_track is not None and c is best_track:
+      c.selected_count += 1
+    else:
+      c.selected_count = 0
+      c.is_stopped_car_count = max(0, c.is_stopped_car_count - 1)
+
+  return best_track
 
 
 def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: float, model_v_ego: float):
