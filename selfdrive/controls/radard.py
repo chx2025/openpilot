@@ -130,35 +130,48 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
     # This isn't exactly right, but it's a good heuristic
     return prob_d * prob_y * prob_v
 
-  track = max(tracks.values(), key=prob)
+  # 先用原版機率找出「最符合相機綜合預測」的軌跡 (可能是正常移動的車)
+  vision_track = max(tracks.values(), key=prob)
 
-  # 基礎合理性檢查 (原版邏輯)
-  dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
-  vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
-  
-  # --- 台灣特化：彎道/軌跡靜止車強化邏輯 ---
-  # 1. 座標系對齊：雷達距離加上相機偏移量，以查表模型預測軌跡
-  model_x = track.dRel + RADAR_TO_CAMERA
-  # 雷達的 yRel 與模型的 y 符號相反，所以預期 yRel 為負的模型軌跡 Y 值
-  expected_yRel = -np.interp(model_x, path_x, path_y)
-  
-  # 2. 判斷雷達目標是否在未來的預測行駛軌跡上 (容錯 1.2m 約為半個車道，並對抗軌跡輕微抖動)
-  y_sane_on_path = abs(track.yRel - expected_yRel) < 1.2
-  
+  # --- 將條件檢查包裝成輔助函數 ---
+  def is_dist_sane(t: Track) -> bool:
+    return abs(t.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
+
+  def is_vel_sane(t: Track) -> bool:
+    return (abs(t.vRel + v_ego - lead.v[0]) < 10) or (v_ego + t.vRel > 3)
+
+  def is_y_sane_on_path(t: Track) -> bool:
+    # 台灣特化：彎道/軌跡靜止車強化邏輯
+    model_x = t.dRel + RADAR_TO_CAMERA
+    expected_yRel = -np.interp(model_x, path_x, path_y)
+    # 判斷雷達目標是否在未來的預測行駛軌跡上 (容錯 1.2m 約為半個車道)
+    return abs(t.yRel - expected_yRel) < 1.2
+
   best_track = None
 
   # 第一關：【完全保留原版邏輯】距離與速度皆符合視覺預期，直接選定
-  if dist_sane and vel_sane:
-    best_track = track
-  # 第二關：【追加魔改邏輯】靜止車判定：速度不符但距離合理、在預測軌跡上(支援彎道)，且視覺有一定把握度
-  elif dist_sane and y_sane_on_path and lead.prob > 0.3:
-    if track.selected_count > 0:
-      best_track = track # 已經確認的目標，延續鎖定
-    else:
-      track.is_stopped_car_count += 2
-      # 縮短觸發時間至 0.8 秒 (16幀)：提早應對停等車陣。此計數器同時具備「時間濾波」效果抗軌跡抖動
-      if track.is_stopped_car_count > int(0.8 / DT_MDL):
-        best_track = track
+  if is_dist_sane(vision_track) and is_vel_sane(vision_track):
+    best_track = vision_track
+  else:
+    # 第二關：【全域掃描靜止車與誤判車輛】
+    # 當第一關失敗時（通常是因為相機猜錯速度），掃描「所有」雷達軌跡，
+    # 尋找距離合理且「在預測軌跡上」的目標。
+    candidates = []
+    for t in tracks.values():
+      if is_dist_sane(t) and is_y_sane_on_path(t) and lead.prob > 0.3:
+        candidates.append(t)
+        
+    if len(candidates) > 0:
+      # 如果有多個符合條件的點，選絕對距離離我們最近的那個
+      closest_track = min(candidates, key=lambda t: t.dRel)
+      
+      if closest_track.selected_count > 0:
+        best_track = closest_track # 已經確認的目標，延續鎖定
+      else:
+        closest_track.is_stopped_car_count += 2
+        # 0.8 秒 (16幀) 觀察期：具備時間濾波效果抗軌跡抖動
+        if closest_track.is_stopped_car_count > int(0.8 / DT_MDL):
+          best_track = closest_track
 
   # 更新所有軌跡的選中狀態，未選中則遞減計數 (緩降機制，防止軌跡偶發抖動導致計數直接歸零)
   for c in tracks.values():
