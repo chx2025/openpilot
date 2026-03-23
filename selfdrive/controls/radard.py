@@ -119,7 +119,7 @@ def laplacian_pdf(x: float, mu: float, b: float):
   return math.exp(-abs(x-mu)/b)
 
 
-def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks: dict[int, Track]):
+def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks: dict[int, Track], path_x: list[float], path_y: list[float]):
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
   def prob(c):
@@ -132,30 +132,35 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
 
   track = max(tracks.values(), key=prob)
 
-  # 基礎合理性檢查
+  # 基礎合理性檢查 (原版邏輯)
   dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
   vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
   
-  # --- 台灣特化：靜止車強化邏輯 ---
-  # 1. 嚴格橫向限制 (1.0公尺)：防台灣路邊違停與機車鑽縫，目標必須在正前方
-  y_sane_strict = abs(track.yRel + lead.y[0]) < 1.0
+  # --- 台灣特化：彎道/軌跡靜止車強化邏輯 ---
+  # 1. 座標系對齊：雷達距離加上相機偏移量，以查表模型預測軌跡
+  model_x = track.dRel + RADAR_TO_CAMERA
+  # 雷達的 yRel 與模型的 y 符號相反，所以預期 yRel 為負的模型軌跡 Y 值
+  expected_yRel = -np.interp(model_x, path_x, path_y)
+  
+  # 2. 判斷雷達目標是否在未來的預測行駛軌跡上 (容錯 1.2m 約為半個車道，並對抗軌跡輕微抖動)
+  y_sane_on_path = abs(track.yRel - expected_yRel) < 1.2
   
   best_track = None
 
-  # 常規判定：距離與速度皆符合視覺預期
+  # 第一關：【完全保留原版邏輯】距離與速度皆符合視覺預期，直接選定
   if dist_sane and vel_sane:
     best_track = track
-  # 靜止車判定：即使速度不符(視覺易將靜止物誤判有速度)，但距離合理、在正前方，且視覺有一定把握度
-  elif dist_sane and y_sane_strict and lead.prob > 0.3:
+  # 第二關：【追加魔改邏輯】靜止車判定：速度不符但距離合理、在預測軌跡上(支援彎道)，且視覺有一定把握度
+  elif dist_sane and y_sane_on_path and lead.prob > 0.3:
     if track.selected_count > 0:
       best_track = track # 已經確認的目標，延續鎖定
     else:
       track.is_stopped_car_count += 2
-      # 2. 縮短觸發時間至 0.8 秒 (16幀)：提早應對台灣常見的紅綠燈停等車陣
+      # 縮短觸發時間至 0.8 秒 (16幀)：提早應對停等車陣。此計數器同時具備「時間濾波」效果抗軌跡抖動
       if track.is_stopped_car_count > int(0.8 / DT_MDL):
         best_track = track
 
-  # 更新所有軌跡的選中狀態，未選中則遞減計數
+  # 更新所有軌跡的選中狀態，未選中則遞減計數 (緩降機制，防止軌跡偶發抖動導致計數直接歸零)
   for c in tracks.values():
     if best_track is not None and c is best_track:
       c.selected_count += 1
@@ -185,10 +190,10 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 
 
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
-             model_v_ego: float, low_speed_override: bool = True) -> dict[str, Any]:
+             model_v_ego: float, path_x: list[float], path_y: list[float], low_speed_override: bool = True) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
   if len(tracks) > 0 and ready and lead_msg.prob > .5:
-    track = match_vision_to_track(v_ego, lead_msg, tracks)
+    track = match_vision_to_track(v_ego, lead_msg, tracks, path_x, path_y)
   else:
     track = None
 
@@ -199,6 +204,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
   if low_speed_override:
+    # 這裡保留原版，不傳入 path_x, path_y
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
     if len(low_speed_tracks) > 0:
       closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
@@ -261,14 +267,24 @@ class RadarD:
     self.radar_state.radarErrors = rr.errors
     self.radar_state.carStateMonoTime = sm.logMonoTime['carState']
 
+    # --- 擷取模型預測的行駛軌跡 ---
+    if len(sm['modelV2'].position.x) > 0:
+      path_x = list(sm['modelV2'].position.x)
+      path_y = list(sm['modelV2'].position.y)
+    else:
+      # 如果剛開機模型還沒準備好，預設為直走
+      path_x = [0.0, 100.0]
+      path_y = [0.0, 0.0]
+
     if len(sm['modelV2'].velocity.x):
       model_v_ego = sm['modelV2'].velocity.x[0]
     else:
       model_v_ego = self.v_ego
+      
     leads_v3 = sm['modelV2'].leadsV3
     if len(leads_v3) > 1:
-      self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, low_speed_override=True)
-      self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, low_speed_override=False)
+      self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, path_x, path_y, low_speed_override=True)
+      self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, path_x, path_y, low_speed_override=False)
 
   def publish(self, pm: messaging.PubMaster):
     assert self.radar_state is not None
