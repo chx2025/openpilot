@@ -151,8 +151,8 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
       best_track = track # 已經確認的目標，延續鎖定
     else:
       track.is_stopped_car_count += 2
-      # 2. 縮短觸發時間至 0.8 秒 (16幀)：提早應對台灣常見的紅綠燈停等車陣
-      if track.is_stopped_car_count > int(0.8 / DT_MDL):
+      # 2. 縮短觸發時間至 1.0 秒 (20幀)：提早應對台灣常見的紅綠燈停等車陣
+      if track.is_stopped_car_count > int(1.0 / DT_MDL):
         best_track = track
 
   # 更新所有軌跡的選中狀態，未選中則遞減計數
