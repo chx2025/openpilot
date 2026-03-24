@@ -58,7 +58,7 @@ class Track:
     self.K_K = kalman_params.K
     self.kf = KF1D([[v_lead], [0.0]], self.K_A, self.K_C, self.K_K)
     
-    # --- 靜止車輛計數器 (融合魔改/cp邏輯) ---
+    # --- 前車信心度分數 (抗抖動漏桶機制) ---
     self.is_stopped_car_count = 0
     self.selected_count = 0
 
@@ -102,8 +102,7 @@ class Track:
     }
 
   def potential_low_speed_lead(self, v_ego: float):
-    # stop for stuff in front of you and low speed, even without model confirmation
-    # Radar points closer than 0.75, are almost always glitches on toyota radars
+    # 原版低速盲煞防撞：只看正前方 1.0m 內，不使用預測軌跡防止低速抖動誤判
     return abs(self.yRel) < 1.0 and (v_ego < V_EGO_STATIONARY) and (0.75 < self.dRel < 25)
 
   def is_potential_fcw(self, model_prob: float):
@@ -127,59 +126,50 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
     prob_y = laplacian_pdf(c.yRel, -lead.y[0], lead.yStd[0])
     prob_v = laplacian_pdf(c.vRel + v_ego, lead.v[0], lead.vStd[0])
 
-    # This isn't exactly right, but it's a good heuristic
     return prob_d * prob_y * prob_v
 
-  # 先用原版機率找出「最符合相機綜合預測」的軌跡 (可能是正常移動的車)
-  vision_track = max(tracks.values(), key=prob)
+  track = max(tracks.values(), key=prob)
 
-  # --- 將條件檢查包裝成輔助函數 ---
-  def is_dist_sane(t: Track) -> bool:
-    return abs(t.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
+  # 1. 基礎合理性檢查 (原版邏輯 - 動態車)
+  dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
+  vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
+  
+  # 2. 彎道/軌跡靜止車強化邏輯
+  model_x = track.dRel + RADAR_TO_CAMERA
+  expected_yRel = -np.interp(model_x, path_x, path_y)
+  y_sane_on_path = abs(track.yRel - expected_yRel) < 1.2
+  
+  # === 核心修改：分離「計分」與「選定」，打造完美抗抖動煞車 ===
+  
+  # 判斷這幀是否為有效前車 (動態車 OR 軌跡上的靜止車)
+  is_valid_lead = (dist_sane and vel_sane) or (dist_sane and y_sane_on_path and lead.prob > 0.3)
 
-  def is_vel_sane(t: Track) -> bool:
-    return (abs(t.vRel + v_ego - lead.v[0]) < 10) or (v_ego + t.vRel > 3)
-
-  def is_y_sane_on_path(t: Track) -> bool:
-    # 台灣特化：彎道/軌跡靜止車強化邏輯
-    model_x = t.dRel + RADAR_TO_CAMERA
-    expected_yRel = -np.interp(model_x, path_x, path_y)
-    # 判斷雷達目標是否在未來的預測行駛軌跡上 (容錯 1.2m 約為半個車道)
-    return abs(t.yRel - expected_yRel) < 1.2
+  # 先更新所有軌跡的信心度分數 (Leak Bucket)
+  for c in tracks.values():
+    if c is track and is_valid_lead:
+      # 看見目標，加分 (上限 25，賦予約 0.3 秒的滯後保持期)
+      c.is_stopped_car_count = min(c.is_stopped_car_count + 5, 25)
+    else:
+      # 沒看見或軌跡飄走，扣分衰減 (最低 0)
+      c.is_stopped_car_count = max(0, c.is_stopped_car_count - 1)
 
   best_track = None
 
-  # 第一關：【完全保留原版邏輯】距離與速度皆符合視覺預期，直接選定
-  if is_dist_sane(vision_track) and is_vel_sane(vision_track):
-    best_track = vision_track
-  else:
-    # 第二關：【全域掃描靜止車與誤判車輛】
-    # 當第一關失敗時（通常是因為相機猜錯速度），掃描「所有」雷達軌跡，
-    # 尋找距離合理且「在預測軌跡上」的目標。
-    candidates = []
-    for t in tracks.values():
-      if is_dist_sane(t) and is_y_sane_on_path(t) and lead.prob > 0.3:
-        candidates.append(t)
-        
-    if len(candidates) > 0:
-      # 如果有多個符合條件的點，選絕對距離離我們最近的那個
-      closest_track = min(candidates, key=lambda t: t.dRel)
-      
-      if closest_track.selected_count > 0:
-        best_track = closest_track # 已經確認的目標，延續鎖定
-      else:
-        closest_track.is_stopped_car_count += 2
-        # 0.8 秒 (16幀) 觀察期：具備時間濾波效果抗軌跡抖動
-        if closest_track.is_stopped_car_count > int(0.8 / DT_MDL):
-          best_track = closest_track
+  # 決定要鎖定輸出的目標
+  if dist_sane and vel_sane:
+    # 常規動態車：最優先，直接鎖定
+    best_track = track
+  elif track.is_stopped_car_count >= 20:
+    # 靜止車：只要分數大於等於門檻 20 就強制鎖定！
+    # (完美解決低速煞停頓挫：即使軌跡短暫抖走，分數依然 >= 20，死死咬住煞車)
+    best_track = track
 
-  # 更新所有軌跡的選中狀態，未選中則遞減計數 (緩降機制，防止軌跡偶發抖動導致計數直接歸零)
+  # 更新選中狀態
   for c in tracks.values():
     if best_track is not None and c is best_track:
       c.selected_count += 1
     else:
       c.selected_count = 0
-      c.is_stopped_car_count = max(0, c.is_stopped_car_count - 1)
 
   return best_track
 
@@ -217,7 +207,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
   if low_speed_override:
-    # 這裡保留原版，不傳入 path_x, path_y
+    # 這裡保留原版，不傳入 path_x, path_y，專注正前方防撞
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
     if len(low_speed_tracks) > 0:
       closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
