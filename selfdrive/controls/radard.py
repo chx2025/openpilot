@@ -58,17 +58,28 @@ class Track:
     self.K_K = kalman_params.K
     self.kf = KF1D([[v_lead], [0.0]], self.K_A, self.K_C, self.K_K)
     
-    # --- 前車信心度分數 (抗抖動漏桶機制) ---
+    # --- 前車信心度分數 (抗抖動漏桶機制 - 原 radard5 邏輯) ---
     self.is_stopped_car_count = 0
     self.selected_count = 0
 
-  def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float):
+    # 🚨 新增：用於記錄旁車切入狀態的專屬變數
+    self.y_prev = None          
+    self.y_vel = 0.0            
+    self.cut_in_count = 0       
+    self.is_cutting_in = False  
+
+  def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float, md: Any = None, v_cruise: float = 0.0):
     # relative values, copy
     self.dRel = d_rel   # LONG_DIST
     self.yRel = y_rel   # -LAT_DIST
     self.vRel = v_rel   # REL_SPEED
     self.vLead = v_lead
     self.measured = measured   # measured or estimate
+
+    # 計算目標橫向移動速度 (y_vel)
+    if self.y_prev is not None:
+      self.y_vel = (self.yRel - self.y_prev) / DT_MDL
+    self.y_prev = self.yRel
 
     # computed velocity and accelerations
     if self.cnt > 0:
@@ -85,10 +96,54 @@ class Track:
 
     self.cnt += 1
 
+    # ==========================================
+    # 高速旁車切入 (Cut-in) 獨立判斷邏輯
+    # ==========================================
+    is_cut_in_condition = False
+    
+    # 條件 1 & 2: 儀表板定速 >= 90 km/h 且 目標距離在 80 米內
+    if md is not None and v_cruise >= 90.0 and 0.0 < self.dRel <= 80.0:
+      if len(md.laneLines) >= 3 and len(md.laneLineProbs) >= 3:
+        # 條件 3: 左、右車道線辨識信心度必須 > 0.3
+        if md.laneLineProbs[1] > 0.3 and md.laneLineProbs[2] > 0.3:
+          lane_x = list(md.laneLines[1].x)
+          if len(lane_x) > 0:
+            left_y = np.interp(self.dRel, lane_x, list(md.laneLines[1].y))
+            right_y = np.interp(self.dRel, lane_x, list(md.laneLines[2].y))
+            
+            # 條件 6: 縱向相對速度條件 (對方比你快，或頂多慢 10.8 km/h 內)
+            speed_condition = (self.vRel > -3.0)
+            
+            # 條件 4 & 5 (左側切入): 右邊緣越線 1m 且正在往右逼近
+            left_cut_in = (self.yRel > 0) and \
+                          ((self.yRel - 1.0) < (left_y - 1.0)) and \
+                          (self.y_vel < -0.1) and speed_condition
+                          
+            # 條件 4 & 5 (右側切入): 左邊緣越線 1m 且正在往左逼近
+            right_cut_in = (self.yRel < 0) and \
+                           ((self.yRel + 1.0) > (right_y + 1.0)) and \
+                           (self.y_vel > 0.1) and speed_condition
+            
+            if left_cut_in or right_cut_in:
+              is_cut_in_condition = True
+
+    # 防雜訊積分累積 (檢測到 +5，未檢測到 -1)
+    if is_cut_in_condition:
+      self.cut_in_count = min(25, self.cut_in_count + 5)
+    else:
+      self.cut_in_count = max(0, self.cut_in_count - 1)
+
+    # 積分到達 20 分正式判定為切入車
+    self.is_cutting_in = self.cut_in_count >= 20
+    # ==========================================
+
   def get_RadarState(self, model_prob: float = 0.0):
+    # 🚨 新增：欺騙系統邏輯。如果是切入目標，橫向參數歸 0 僅觸發煞車，防止方向盤閃躲。
+    output_yRel = 0.0 if self.is_cutting_in else float(self.yRel)
+
     return {
       "dRel": float(self.dRel),
-      "yRel": float(self.yRel),
+      "yRel": output_yRel,  # 使用修改過的橫向位置
       "vRel": float(self.vRel),
       "vLead": float(self.vLead),
       "vLeadK": float(self.vLeadK),
@@ -123,6 +178,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
 
   def prob(c):
     prob_d = laplacian_pdf(c.dRel, offset_vision_dist, lead.xStd[0])
+    # 內部匹配仍然使用真實的 c.yRel，保證追蹤精準度不受 output_yRel 的影響
     prob_y = laplacian_pdf(c.yRel, -lead.y[0], lead.yStd[0])
     prob_v = laplacian_pdf(c.vRel + v_ego, lead.v[0], lead.vStd[0])
 
@@ -206,6 +262,17 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
   elif (track is None) and ready and (lead_msg.prob > .5):
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
+  # ==========================================
+  # 高速切入車強行覆蓋目標 (Cut-in Override)
+  # ==========================================
+  cut_in_tracks = [c for c in tracks.values() if c.is_cutting_in]
+  if len(cut_in_tracks) > 0:
+    closest_cut_in = min(cut_in_tracks, key=lambda c: c.dRel)
+    # 條件 8: 只有在目前沒前車，或切入車比前車更近時，才強行切換鎖定
+    if (not lead_dict['status']) or (closest_cut_in.dRel < lead_dict.get('dRel', 1000.0)):
+      lead_dict = closest_cut_in.get_RadarState(model_prob=0.99)
+  # ==========================================
+
   if low_speed_override:
     # 這裡保留原版，不傳入 path_x, path_y，專注正前方防撞
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
@@ -244,6 +311,10 @@ class RadarD:
       self.v_ego_hist.append(self.v_ego)
       self.last_v_ego_frame = sm.recv_frame['carState']
 
+    # 獲取儀表板定速 (km/h) 與模型資料
+    v_cruise_kph = sm['carState'].cruiseState.speed * 3.6 if sm.seen['carState'] else 0.0
+    md = sm['modelV2'] if sm.seen['modelV2'] else None
+
     ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel, pt.measured] for pt in rr.points}
 
     # *** remove missing points from meta data ***
@@ -261,7 +332,8 @@ class RadarD:
       # create the track if it doesn't exist or it's a new track
       if ids not in self.tracks:
         self.tracks[ids] = Track(ids, v_lead, self.kalman_params)
-      self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3])
+      # 將 md 與定速一併傳入 update
+      self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3], md, v_cruise_kph)
 
     # *** publish radarState ***
     self.radar_state_valid = sm.all_checks()
