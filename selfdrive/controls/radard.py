@@ -110,7 +110,7 @@ class Track:
     self.is_stopped_car_count = 0
     self.selected_count = 0
 
-    # 🚨 用於記錄旁車切入狀態的專屬變數
+    # 用於記錄旁車切入狀態的專屬變數
     self.y_prev = None          
     self.y_vel = 0.0            
     self.cut_in_count = 0       
@@ -196,7 +196,7 @@ class Track:
       "radar": True,
       "radarTrackId": self.identifier,
       
-      # 🚨 新增：傳出內部信心度積分供 Log 紀錄
+      # 傳出內部信心度積分供 Log 紀錄
       "stoppedConf": self.is_stopped_car_count,
       "cutInConf": self.cut_in_count,
     }
@@ -281,7 +281,7 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
     "radar": False,
     "radarTrackId": -1,
     
-    # 🚨 新增：純視覺無雷達積分，設為 0
+    # 純視覺無雷達積分，設為 0
     "stoppedConf": 0,
     "cutInConf": 0,
   }
@@ -404,8 +404,10 @@ class RadarD:
       lead1 = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, path_x, path_y, low_speed_override=True)
       lead2 = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, path_x, path_y, low_speed_override=False)
       
-      self.radar_state.leadOne = lead1
-      self.radar_state.leadTwo = lead2
+      # 🚨 關鍵修正：剔除 Cap'n Proto 模具不認識的自訂欄位，防止當機
+      custom_keys = {'category', 'stoppedConf', 'cutInConf'}
+      self.radar_state.leadOne = {k: v for k, v in lead1.items() if k not in custom_keys}
+      self.radar_state.leadTwo = {k: v for k, v in lead2.items() if k not in custom_keys}
 
       # --- 將有效目標傳送至非同步 Logger ---
       now_str = datetime.now().strftime('%H:%M:%S.%f')[:-3]
