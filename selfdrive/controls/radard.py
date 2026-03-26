@@ -28,14 +28,9 @@ RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
 
 class KalmanParams:
   def __init__(self, dt: float):
-    # Lead Kalman Filter params, calculating K from A, C, Q, R requires the control library.
-    # hardcoding a lookup table to compute K for values of radar_ts between 0.01s and 0.2s
     assert dt > .01 and dt < .2, "Radar time step must be between .01s and 0.2s"
     self.A = [[1.0, dt], [0.0, 1.0]]
     self.C = [1.0, 0.0]
-    #Q = np.matrix([[10., 0.0], [0.0, 100.]])
-    #R = 1e3
-    #K = np.matrix([[ 0.05705578], [ 0.03073241]])
     dts = [i * 0.01 for i in range(1, 21)]
     K0 = [0.12287673, 0.14556536, 0.16522756, 0.18281627, 0.1988689,  0.21372394,
           0.22761098, 0.24069424, 0.253096,   0.26491023, 0.27621103, 0.28705801,
@@ -63,21 +58,18 @@ class Track:
     self.selected_count = 0
 
   def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float):
-    # relative values, copy
-    self.dRel = d_rel   # LONG_DIST
-    self.yRel = y_rel   # -LAT_DIST
-    self.vRel = v_rel   # REL_SPEED
+    self.dRel = d_rel
+    self.yRel = y_rel
+    self.vRel = v_rel
     self.vLead = v_lead
-    self.measured = measured   # measured or estimate
+    self.measured = measured
 
-    # computed velocity and accelerations
     if self.cnt > 0:
       self.kf.update(self.vLead)
 
     self.vLeadK = float(self.kf.x[SPEED][0])
     self.aLeadK = float(self.kf.x[ACCEL][0])
 
-    # Learn if constant acceleration
     if abs(self.aLeadK) < 0.5:
       self.aLeadTau.x = _LEAD_ACCEL_TAU
     else:
@@ -85,7 +77,7 @@ class Track:
 
     self.cnt += 1
 
-    # 🚨 關鍵修復：每幀自然漏水扣分，解決雙重扣分 Bug
+    # 每幀自然漏水扣分，解決雙重扣分 Bug
     self.is_stopped_car_count = max(0, self.is_stopped_car_count - 1)
 
   def get_RadarState(self, model_prob: float = 0.0):
@@ -128,36 +120,46 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
     prob_d = laplacian_pdf(c.dRel, offset_vision_dist, lead.xStd[0])
     prob_y = laplacian_pdf(c.yRel, -lead.y[0], lead.yStd[0])
     prob_v = laplacian_pdf(c.vRel + v_ego, lead.v[0], lead.vStd[0])
-
     return prob_d * prob_y * prob_v
 
   track = max(tracks.values(), key=prob)
 
-  # 1. 基礎合理性檢查 (動態車)
+  # ==========================================
+  # 目標分類與驗證邏輯
+  # ==========================================
+  
+  # 1. 動態車條件 (原版邏輯)
   dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
   vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
+  is_dynamic_target = dist_sane and vel_sane
   
-  # 2. 彎道/軌跡靜止車強化邏輯
+  # 2. 靜止車強化邏輯
   model_x = track.dRel + RADAR_TO_CAMERA
   expected_yRel = -np.interp(model_x, path_x, path_y)
   y_sane_on_path = abs(track.yRel - expected_yRel) < 1.2
   
-  # === 核心修改：分離「計分」與「選定」，打造完美抗抖動煞車 ===
-  is_valid_lead = (dist_sane and vel_sane) or (dist_sane and y_sane_on_path and lead.prob > 0.3)
+  # 新增：判斷物體在物理世界上是否真正靜止 (絕對速度 < 2 m/s，容許少許雷達雜訊)
+  v_absolute = track.vRel + v_ego
+  is_physically_stationary = abs(v_absolute) < 2.0
+  
+  # 靜止車嚴格條件：100米以內、絕對靜止、在軌跡上、視覺模型稍微看見 (prob > 0.2)
+  is_stationary_target = (0.0 < track.dRel <= 100.0) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > 0.2)
 
-  # 🚨 關鍵修復：不再用 for 迴圈扣所有車的分數，只針對有配對到的有效目標補水加分
+  # 只要符合動態車或靜止車其一，即為有效前車
+  is_valid_lead = is_dynamic_target or is_stationary_target
+
+  # 只要是有效目標，就補水加分 (+6 抵消原本的 -1，淨賺 +5)
   if is_valid_lead:
-    # +6 是因為在 update 中固定扣了 1，這裡淨賺 +5
     track.is_stopped_car_count = min(track.is_stopped_car_count + 6, 25)
 
   best_track = None
 
   # 決定要鎖定輸出的目標
-  if dist_sane and vel_sane:
+  if is_dynamic_target:
     # 常規動態車：最優先，直接鎖定
     best_track = track
   elif track.is_stopped_car_count >= 20:
-    # 靜止車：只要分數大於等於門檻 20 就強制鎖定！
+    # 靜止車：只要分數大於等於門檻 20 就死死咬住，防止視覺閃爍導致煞車頓挫
     best_track = track
 
   # 更新選中狀態
@@ -190,7 +192,6 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, path_x: list[float], path_y: list[float], low_speed_override: bool = True) -> dict[str, Any]:
-  # Determine leads, this is where the essential logic happens
   if len(tracks) > 0 and ready and lead_msg.prob > .5:
     track = match_vision_to_track(v_ego, lead_msg, tracks, path_x, path_y)
   else:
@@ -203,12 +204,10 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
   if low_speed_override:
-    # 專注正前方防撞
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
     if len(low_speed_tracks) > 0:
       closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
 
-      # Only choose new track if it is actually closer than the previous one
       if (not lead_dict['status']) or (closest_track.dRel < lead_dict.get('dRel', 1000.0)):
         lead_dict = closest_track.get_RadarState()
 
@@ -218,7 +217,6 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
 class RadarD:
   def __init__(self, delay: float = 0.0):
     self.current_time = 0.0
-
     self.tracks: dict[int, Track] = {}
     self.kalman_params = KalmanParams(DT_MDL)
 
@@ -228,7 +226,6 @@ class RadarD:
 
     self.radar_state: capnp._DynamicStructBuilder | None = None
     self.radar_state_valid = False
-
     self.ready = False
 
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
@@ -242,38 +239,29 @@ class RadarD:
 
     ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel, pt.measured] for pt in rr.points}
 
-    # *** remove missing points from meta data ***
     for ids in list(self.tracks.keys()):
       if ids not in ar_pts:
         self.tracks.pop(ids, None)
 
-    # *** compute the tracks ***
     for ids in ar_pts:
       rpt = ar_pts[ids]
-
-      # align v_ego by a fixed time to align it with the radar measurement
       v_lead = rpt[2] + self.v_ego_hist[0]
 
-      # create the track if it doesn't exist or it's a new track
       if ids not in self.tracks:
         self.tracks[ids] = Track(ids, v_lead, self.kalman_params)
       
-      # 更新軌跡資訊，已移除不需要的 md 與 v_cruise 參數
       self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3])
 
-    # *** publish radarState ***
     self.radar_state_valid = sm.all_checks()
     self.radar_state = log.RadarState.new_message()
     self.radar_state.mdMonoTime = sm.logMonoTime['modelV2']
     self.radar_state.radarErrors = rr.errors
     self.radar_state.carStateMonoTime = sm.logMonoTime['carState']
 
-    # --- 擷取模型預測的行駛軌跡 ---
     if len(sm['modelV2'].position.x) > 0:
       path_x = list(sm['modelV2'].position.x)
       path_y = list(sm['modelV2'].position.y)
     else:
-      # 如果剛開機模型還沒準備好，預設為直走
       path_x = [0.0, 100.0]
       path_y = [0.0, 0.0]
 
@@ -289,23 +277,19 @@ class RadarD:
 
   def publish(self, pm: messaging.PubMaster):
     assert self.radar_state is not None
-
     radar_msg = messaging.new_message("radarState")
     radar_msg.valid = self.radar_state_valid
     radar_msg.radarState = self.radar_state
     pm.send("radarState", radar_msg)
 
 
-# fuses camera and radar data for best lead detection
 def main() -> None:
   config_realtime_process(5, Priority.CTRL_LOW)
 
-  # wait for stats about the car to come in from controls
   cloudlog.info("radard is waiting for CarParams")
   CP = messaging.log_from_bytes(Params().get("CarParams", block=True), car.CarParams)
   cloudlog.info("radard got CarParams")
 
-  # *** setup messaging
   sm = messaging.SubMaster(['modelV2', 'carState', 'liveTracks'], poll='modelV2')
   pm = messaging.PubMaster(['radarState'])
 
@@ -313,10 +297,8 @@ def main() -> None:
 
   while 1:
     sm.update()
-
     RD.update(sm, sm['liveTracks'])
     RD.publish(pm)
-
 
 if __name__ == "__main__":
   main()
