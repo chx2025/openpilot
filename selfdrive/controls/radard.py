@@ -12,6 +12,7 @@ from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
 
+
 # Default lead acceleration decay set to 50% at 1s
 _LEAD_ACCEL_TAU = 1.5
 
@@ -164,12 +165,9 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   elif track.is_stopped_car_count >= 20: 
     best_track = track
 
-  # 更新選中狀態
-  for c in tracks.values():
-    if best_track is not None and c is best_track:
-      c.selected_count += 1
-    else:
-      c.selected_count = 0
+  # 【優化】單純為選中的目標加分，避免 LeadOne/LeadTwo 變數互相踐踏
+  if best_track is not None:
+    best_track.selected_count += 1
 
   return best_track
 
@@ -347,7 +345,8 @@ class RadarD:
         self.high_prob_frames = 0
         self.prob_score = 0
         if self.dynamic_prob_threshold < 0.5:
-          self.threshold_recovery_timer = 20 # 沒車時快速回升門檻
+          # 【優化】使用 min() 避免死結，讓計時器順利歸零
+          self.threshold_recovery_timer = min(self.threshold_recovery_timer, 20)
 
       # 降階觸發
       if self.prob_score >= 20:
