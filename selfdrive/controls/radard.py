@@ -2,7 +2,7 @@
 import math
 import numpy as np
 from collections import deque
-from typing import Any
+from typing import Any, Tuple
 
 import capnp
 from cereal import messaging, log, car
@@ -29,6 +29,9 @@ STATIONARY_MAX_DIST = 120.0        # 靜止車最遠偵測距離 (公尺)。建�
 
 STATIONARY_MIN_PROB = 0.3          # 視覺模型最低信心度 (大於此值才啟動雷達判定)。建議值：0.1 ~ 0.3
                                    # (數值越低越依賴雷達，提早鎖定；數值越高越依賴鏡頭，較晚鎖定但抗雜訊強)
+
+BLIND_SPOT_PRIORITY_DIST = 25.0    # [新增] 低速盲區煞停「強制接管並鎖定」的距離 (公尺)
+BLIND_SPOT_HYSTERESIS_DIST = 27.0  # [新增] 盲區煞停「解除鎖定」的退場距離 (公尺)。必須大於接管距離，以形成防跳動的遲滯區間
 # ==========================================
 
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
@@ -106,7 +109,8 @@ class Track:
     }
 
   def potential_low_speed_lead(self, v_ego: float):
-    return abs(self.yRel) < 1.0 and (v_ego < V_EGO_STATIONARY) and (0.75 < self.dRel < 25)
+    # [修改] 將盲區最大判斷距離從 25 放寬到 BLIND_SPOT_HYSTERESIS_DIST (27m)，確保退場時不會因為抓不到目標而提前斷線
+    return abs(self.yRel) < 1.0 and (v_ego < V_EGO_STATIONARY) and (0.75 < self.dRel < BLIND_SPOT_HYSTERESIS_DIST)
 
   def is_potential_fcw(self, model_prob: float):
     return model_prob > .9
@@ -196,28 +200,63 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
   }
 
 
+# [修改] 增加回傳值 Tuple[dict, bool]，將鎖定狀態同步傳回給主系統
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
-             model_v_ego: float, path_x: list[float], path_y: list[float], low_speed_override: bool = True) -> dict[str, Any]:
+             model_v_ego: float, path_x: list[float], path_y: list[float], 
+             low_speed_override: bool = True, is_locked: bool = False) -> Tuple[dict[str, Any], bool]:
+  
+  # --- Step 1: 取得視覺融合目標 (作為遠距或常規輔助) ---
   if len(tracks) > 0 and ready and lead_msg.prob > .5:
     track = match_vision_to_track(v_ego, lead_msg, tracks, path_x, path_y)
   else:
     track = None
 
-  lead_dict = {'status': False}
+  fused_lead_dict = {'status': False}
   if track is not None:
-    lead_dict = track.get_RadarState(lead_msg.prob)
-  elif (track is None) and ready and (lead_msg.prob > .5):
-    lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
+    fused_lead_dict = track.get_RadarState(lead_msg.prob)
+  elif ready and (lead_msg.prob > .5):
+    fused_lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
+
+  # --- Step 2: 盲區雷達強制接管與單向條件鎖定邏輯 ---
+  lead_dict = fused_lead_dict  # 預設使用視覺融合結果
+  new_locked_state = is_locked # 繼承上一幀的鎖定狀態
 
   if low_speed_override:
+    # 尋找盲區內的雷達目標
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
+    
     if len(low_speed_tracks) > 0:
-      closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
+      closest_low_speed_track = min(low_speed_tracks, key=lambda c: c.dRel)
+      blind_spot_dict = closest_low_speed_track.get_RadarState()
+      
+      # 若目前處於「已鎖定」狀態：死守雷達目標，直到脫離退場距離
+      if is_locked:
+        if blind_spot_dict['dRel'] <= BLIND_SPOT_HYSTERESIS_DIST:
+          lead_dict = blind_spot_dict # 繼續鎖死盲區煞停
+          new_locked_state = True
+        else:
+          new_locked_state = False    # 目標距離已大於 27m，解除警報解開鎖定
+          
+      # 若目前處於「未鎖定」狀態：檢查是否需要觸發鎖定
+      else:
+        if blind_spot_dict['dRel'] <= BLIND_SPOT_PRIORITY_DIST:
+          lead_dict = blind_spot_dict # 距離小於 25m，強制接管
+          new_locked_state = True     # 觸發條件鎖定！
+        else:
+          # 若目標在 25m~27m 之間，還沒達到觸發鎖定的門檻
+          # 但如果此時視覺融合失效，或是雷達抓得比較近，為了安全先用雷達訊號 (但不鎖死)
+          if not fused_lead_dict['status'] or blind_spot_dict['dRel'] < fused_lead_dict.get('dRel', 1000.0):
+            lead_dict = blind_spot_dict
+            
+    else:
+      # 如果雷達沒掃到任何低速目標，或根本沒有雷達 (純視覺車輛)
+      # 強制解除鎖定，回歸純視覺/融合輔助
+      new_locked_state = False
+  else:
+    # 不使用低速覆寫 (例如 LeadTwo)，則確保不會被鎖定
+    new_locked_state = False
 
-      if (not lead_dict['status']) or (closest_track.dRel < lead_dict.get('dRel', 1000.0)):
-        lead_dict = closest_track.get_RadarState()
-
-  return lead_dict
+  return lead_dict, new_locked_state
 
 
 class RadarD:
@@ -233,6 +272,9 @@ class RadarD:
     self.radar_state: capnp._DynamicStructBuilder | None = None
     self.radar_state_valid = False
     self.ready = False
+    
+    # [新增] 紀錄 LeadOne 的盲區條件鎖定狀態
+    self.lead_one_locked = False 
 
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
     self.ready = sm.seen['modelV2']
@@ -278,8 +320,17 @@ class RadarD:
       
     leads_v3 = sm['modelV2'].leadsV3
     if len(leads_v3) > 1:
-      self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, path_x, path_y, low_speed_override=True)
-      self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, path_x, path_y, low_speed_override=False)
+      # [修改] 傳入並接收鎖定狀態，確保跨影格的鎖定連貫性
+      self.radar_state.leadOne, self.lead_one_locked = get_lead(
+          self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, path_x, path_y, 
+          low_speed_override=True, is_locked=self.lead_one_locked
+      )
+      
+      # LeadTwo 備用目標不需要低速鎖定機制
+      self.radar_state.leadTwo, _ = get_lead(
+          self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, path_x, path_y, 
+          low_speed_override=False, is_locked=False
+      )
 
   def publish(self, pm: messaging.PubMaster):
     assert self.radar_state is not None
