@@ -30,8 +30,8 @@ STATIONARY_MAX_DIST = 120.0        # 靜止車最遠偵測距離 (公尺)。建�
 STATIONARY_MIN_PROB = 0.3          # 視覺模型最低信心度 (大於此值才啟動雷達判定)。建議值：0.1 ~ 0.3
                                    # (數值越低越依賴雷達，提早鎖定；數值越高越依賴鏡頭，較晚鎖定但抗雜訊強)
 
-BLIND_SPOT_PRIORITY_DIST = 25.0    # [新增] 低速盲區煞停「強制接管並鎖定」的距離 (公尺)
-BLIND_SPOT_HYSTERESIS_DIST = 27.0  # [新增] 盲區煞停「解除鎖定」的退場距離 (公尺)。必須大於接管距離，以形成防跳動的遲滯區間
+BLIND_SPOT_PRIORITY_DIST = 23.0    # [新增] 低速盲區煞停「強制接管並鎖定」的距離 (公尺)
+BLIND_SPOT_HYSTERESIS_DIST = 25.0  # [新增] 盲區煞停「解除鎖定」的退場距離 (公尺)。必須大於接管距離，以形成防跳動的遲滯區間
 # ==========================================
 
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
