@@ -143,7 +143,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   is_physically_stationary = abs(v_absolute) < 2.0
   
   # 靜止車嚴格條件：100米以內、絕對靜止、在軌跡上、視覺模型稍微看見 (prob > 0.2)
-  is_stationary_target = (0.0 < track.dRel <= 100.0) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > 0.2)
+  is_stationary_target = (0.0 < track.dRel <= 100.0) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > 0.3)
 
   # 只要符合動態車或靜止車其一，即為有效前車
   is_valid_lead = is_dynamic_target or is_stationary_target
