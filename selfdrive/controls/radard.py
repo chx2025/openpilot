@@ -12,7 +12,6 @@ from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
 
-
 # Default lead acceleration decay set to 50% at 1s
 _LEAD_ACCEL_TAU = 1.5
 
@@ -25,13 +24,10 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 # ==========================================
 # [自訂參數區] 您可以在這裡快速微調雷達邏輯
 # ==========================================
-STATIONARY_MAX_DIST = 120.0        # 靜止車最遠偵測距離 (公尺)。建議值：80.0 ~ 120.0
+STATIONARY_MAX_DIST = 120.0        # 軌跡偵測車最遠偵測距離 (公尺)。建議值：80.0 ~ 120.0
 
-STATIONARY_MIN_PROB = 0.3          # 視覺模型最低信心度 (大於此值才啟動雷達判定)。建議值：0.1 ~ 0.3
-                                   # (數值越低越依賴雷達，提早鎖定；數值越高越依賴鏡頭，較晚鎖定但抗雜訊強)
-
-BLIND_SPOT_PRIORITY_DIST = 23.0    # [新增] 低速盲區煞停「強制接管並鎖定」的距離 (公尺)
-BLIND_SPOT_HYSTERESIS_DIST = 25.0  # [新增] 盲區煞停「解除鎖定」的退場距離 (公尺)。必須大於接管距離，以形成防跳動的遲滯區間
+BLIND_SPOT_PRIORITY_DIST = 23.0    # 低速盲區煞停「強制接管並鎖定」的距離 (公尺)
+BLIND_SPOT_HYSTERESIS_DIST = 25.0  # 盲區煞停「解除鎖定」的退場距離 (公尺)。必須大於接管距離，以形成防跳動的遲滯區間
 # ==========================================
 
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
@@ -89,7 +85,7 @@ class Track:
 
     self.cnt += 1
 
-    # 每幀自然漏水扣分，解決雙重扣分 Bug
+    # 每幀自然漏水扣分
     self.is_stopped_car_count = max(0, self.is_stopped_car_count - 1)
 
   def get_RadarState(self, model_prob: float = 0.0):
@@ -109,7 +105,7 @@ class Track:
     }
 
   def potential_low_speed_lead(self, v_ego: float):
-    # [修改] 將盲區最大判斷距離從 25 放寬到 BLIND_SPOT_HYSTERESIS_DIST (27m)，確保退場時不會因為抓不到目標而提前斷線
+    # 維持原廠低速盲區邏輯
     return abs(self.yRel) < 1.0 and (v_ego < V_EGO_STATIONARY) and (0.75 < self.dRel < BLIND_SPOT_HYSTERESIS_DIST)
 
   def is_potential_fcw(self, model_prob: float):
@@ -125,7 +121,7 @@ def laplacian_pdf(x: float, mu: float, b: float):
   return math.exp(-abs(x-mu)/b)
 
 
-def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks: dict[int, Track], path_x: list[float], path_y: list[float]):
+def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks: dict[int, Track], path_x: list[float], path_y: list[float], current_prob_threshold: float):
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
   def prob(c):
@@ -140,27 +136,23 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   # 目標分類與驗證邏輯
   # ==========================================
   
-  # 1. 動態車條件 (原版邏輯)
+  # 1. 動態車條件 (原版邏輯，強制 0.5 門檻)
   dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
   vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
-  is_dynamic_target = dist_sane and vel_sane
+  is_dynamic_target = dist_sane and vel_sane and (lead.prob > 0.5)
   
-  # 2. 靜止車強化邏輯
+  # 2. 軌跡偵測車強化邏輯 (客製化邏輯，享有動態降階特權)
   model_x = track.dRel + RADAR_TO_CAMERA
   expected_yRel = -np.interp(model_x, path_x, path_y)
   y_sane_on_path = abs(track.yRel - expected_yRel) < 1.2
-  
-  # 判斷物體在物理世界上是否真正靜止 (絕對速度 < 2 m/s，容許少許雷達雜訊)
   v_absolute = track.vRel + v_ego
   is_physically_stationary = abs(v_absolute) < 2.0
   
-  # 靜止車嚴格條件：使用自訂距離與信心度參數
-  is_stationary_target = (0.0 < track.dRel <= STATIONARY_MAX_DIST) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > STATIONARY_MIN_PROB)
+  is_stationary_target = (0.0 < track.dRel <= STATIONARY_MAX_DIST) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > current_prob_threshold)
 
   # 只要符合動態車或靜止車其一，即為有效前車
   is_valid_lead = is_dynamic_target or is_stationary_target
 
-  # 只要是有效目標，就補水加分 (+6 抵消原本的 -1，淨賺 +5)，上限固定為 25
   if is_valid_lead:
     track.is_stopped_car_count = min(track.is_stopped_car_count + 6, 25)
 
@@ -169,7 +161,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   # 決定要鎖定輸出的目標
   if is_dynamic_target:
     best_track = track
-  elif track.is_stopped_car_count >= 20:  # 鎖定門檻固定為 20
+  elif track.is_stopped_car_count >= 20: 
     best_track = track
 
   # 更新選中狀態
@@ -200,60 +192,54 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
   }
 
 
-# [修改] 增加回傳值 Tuple[dict, bool]，將鎖定狀態同步傳回給主系統
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, path_x: list[float], path_y: list[float], 
-             low_speed_override: bool = True, is_locked: bool = False) -> Tuple[dict[str, Any], bool]:
+             low_speed_override: bool = True, is_locked: bool = False,
+             current_prob_threshold: float = 0.5) -> Tuple[dict[str, Any], bool]:
   
-  # --- Step 1: 取得視覺融合目標 (作為遠距或常規輔助) ---
-  if len(tracks) > 0 and ready and lead_msg.prob > .5:
-    track = match_vision_to_track(v_ego, lead_msg, tracks, path_x, path_y)
+  # --- Step 1: 取得視覺融合目標 ---
+  # 統一用動態門檻開門
+  if len(tracks) > 0 and ready and lead_msg.prob > current_prob_threshold:
+    best_valid_track = match_vision_to_track(v_ego, lead_msg, tracks, path_x, path_y, current_prob_threshold)
   else:
-    track = None
+    best_valid_track = None
 
   fused_lead_dict = {'status': False}
-  if track is not None:
-    fused_lead_dict = track.get_RadarState(lead_msg.prob)
-  elif ready and (lead_msg.prob > .5):
+  if best_valid_track is not None:
+    fused_lead_dict = best_valid_track.get_RadarState(lead_msg.prob)
+  elif ready and (lead_msg.prob > current_prob_threshold):
+    # 純視覺備案，享有動態降階特權
     fused_lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
   # --- Step 2: 盲區雷達強制接管與單向條件鎖定邏輯 ---
-  lead_dict = fused_lead_dict  # 預設使用視覺融合結果
-  new_locked_state = is_locked # 繼承上一幀的鎖定狀態
+  lead_dict = fused_lead_dict  
+  new_locked_state = is_locked 
 
   if low_speed_override:
-    # 尋找盲區內的雷達目標
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
     
     if len(low_speed_tracks) > 0:
       closest_low_speed_track = min(low_speed_tracks, key=lambda c: c.dRel)
       blind_spot_dict = closest_low_speed_track.get_RadarState()
       
-      # 若目前處於「已鎖定」狀態：死守雷達目標，直到脫離退場距離
       if is_locked:
         if blind_spot_dict['dRel'] <= BLIND_SPOT_HYSTERESIS_DIST:
-          lead_dict = blind_spot_dict # 繼續鎖死盲區煞停
+          lead_dict = blind_spot_dict 
           new_locked_state = True
         else:
-          new_locked_state = False    # 目標距離已大於 27m，解除警報解開鎖定
+          new_locked_state = False    
           
-      # 若目前處於「未鎖定」狀態：檢查是否需要觸發鎖定
       else:
         if blind_spot_dict['dRel'] <= BLIND_SPOT_PRIORITY_DIST:
-          lead_dict = blind_spot_dict # 距離小於 25m，強制接管
-          new_locked_state = True     # 觸發條件鎖定！
+          lead_dict = blind_spot_dict 
+          new_locked_state = True     
         else:
-          # 若目標在 25m~27m 之間，還沒達到觸發鎖定的門檻
-          # 但如果此時視覺融合失效，或是雷達抓得比較近，為了安全先用雷達訊號 (但不鎖死)
           if not fused_lead_dict['status'] or blind_spot_dict['dRel'] < fused_lead_dict.get('dRel', 1000.0):
             lead_dict = blind_spot_dict
             
     else:
-      # 如果雷達沒掃到任何低速目標，或根本沒有雷達 (純視覺車輛)
-      # 強制解除鎖定，回歸純視覺/融合輔助
       new_locked_state = False
   else:
-    # 不使用低速覆寫 (例如 LeadTwo)，則確保不會被鎖定
     new_locked_state = False
 
   return lead_dict, new_locked_state
@@ -272,9 +258,16 @@ class RadarD:
     self.radar_state: capnp._DynamicStructBuilder | None = None
     self.radar_state_valid = False
     self.ready = False
-    
-    # [新增] 紀錄 LeadOne 的盲區條件鎖定狀態
     self.lead_one_locked = False 
+
+    # ==========================================
+    # 純視覺動態信心度參數狀態
+    # ==========================================
+    self.dynamic_prob_threshold = 0.5  # 當前信心度門檻 (範圍 0.3 ~ 0.5)
+    self.low_prob_frames = 0           # 連續介於 0.15~0.5 的幀數計數器
+    self.high_prob_frames = 0          # 連續大於等於 0.5 的幀數計數器
+    self.prob_score = 0                # 動態信心度計分板
+    self.threshold_recovery_timer = 0  # 回升計時器 (單位: 幀數)
 
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
     self.ready = sm.seen['modelV2']
@@ -319,17 +312,71 @@ class RadarD:
       model_v_ego = self.v_ego
       
     leads_v3 = sm['modelV2'].leadsV3
+
+    # ==========================================
+    # 動態信心度門檻調節邏輯
+    # ==========================================
+    if len(leads_v3) > 0:
+      lead_prob = leads_v3[0].prob
+
+      if 0.15 <= lead_prob < 0.5:
+        # 處於模糊地帶，累積降階壓力
+        self.low_prob_frames += 1
+        self.high_prob_frames = 0
+        if self.low_prob_frames >= 20:
+          self.prob_score += 5
+          self.low_prob_frames = 0 
+          
+      elif lead_prob >= 0.5:
+        # 處於高信心區間，準備回血或懲罰閃爍
+        self.high_prob_frames += 1
+        self.low_prob_frames = 0
+        
+        # 剛從低於 0.5 彈上來的第一幀，懲罰閃爍不穩定
+        if self.high_prob_frames == 1:
+          self.prob_score += 1
+          
+        # 持續高信心滿 1 秒，獎勵回血
+        if self.high_prob_frames >= 20:
+          self.prob_score = max(0, self.prob_score - 5)
+          self.high_prob_frames = 0 
+          
+      else:
+        # 空曠無車防呆 (lead_prob < 0.15)
+        self.low_prob_frames = 0
+        self.high_prob_frames = 0
+        self.prob_score = 0
+        if self.dynamic_prob_threshold < 0.5:
+          self.threshold_recovery_timer = 20 # 沒車時快速回升門檻
+
+      # 降階觸發
+      if self.prob_score >= 20:
+        if self.dynamic_prob_threshold > 0.3:
+          self.dynamic_prob_threshold = round(max(0.3, self.dynamic_prob_threshold - 0.1), 1)
+          self.threshold_recovery_timer = 100 
+        self.prob_score = 0  
+
+      # 冷卻與自然回升
+      if self.threshold_recovery_timer > 0:
+        self.threshold_recovery_timer -= 1
+        if self.threshold_recovery_timer == 0:
+          self.dynamic_prob_threshold = round(min(0.5, self.dynamic_prob_threshold + 0.1), 1)
+          if self.dynamic_prob_threshold < 0.5:
+            self.threshold_recovery_timer = 100
+
     if len(leads_v3) > 1:
-      # [修改] 傳入並接收鎖定狀態，確保跨影格的鎖定連貫性
+      # LeadOne 套用動態門檻
       self.radar_state.leadOne, self.lead_one_locked = get_lead(
           self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, path_x, path_y, 
-          low_speed_override=True, is_locked=self.lead_one_locked
+          low_speed_override=True, is_locked=self.lead_one_locked,
+          current_prob_threshold=self.dynamic_prob_threshold
       )
       
-      # LeadTwo 備用目標不需要低速鎖定機制
+      # LeadTwo 維持原有的嚴格標準 0.5
       self.radar_state.leadTwo, _ = get_lead(
           self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, path_x, path_y, 
-          low_speed_override=False, is_locked=False
+          low_speed_override=False, is_locked=False,
+          current_prob_threshold=0.5
       )
 
   def publish(self, pm: messaging.PubMaster):
