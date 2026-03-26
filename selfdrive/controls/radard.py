@@ -22,6 +22,15 @@ SPEED, ACCEL = 0, 1     # Kalman filter states enum
 # stationary qualification parameters
 V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 
+# ==========================================
+# [自訂參數區] 您可以在這裡快速微調雷達邏輯
+# ==========================================
+STATIONARY_MAX_DIST = 100.0        # 靜止車最遠偵測距離 (公尺)。建議值：80.0 ~ 120.0
+
+STATIONARY_MIN_PROB = 0.2          # 視覺模型最低信心度 (大於此值才啟動雷達判定)。建議值：0.1 ~ 0.3
+                                   # (數值越低越依賴雷達，提早鎖定；數值越高越依賴鏡頭，較晚鎖定但抗雜訊強)
+# ==========================================
+
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
 RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
 
@@ -97,7 +106,6 @@ class Track:
     }
 
   def potential_low_speed_lead(self, v_ego: float):
-    # 原版低速盲煞防撞：只看正前方 1.0m 內，不使用預測軌跡防止低速抖動誤判
     return abs(self.yRel) < 1.0 and (v_ego < V_EGO_STATIONARY) and (0.75 < self.dRel < 25)
 
   def is_potential_fcw(self, model_prob: float):
@@ -138,17 +146,17 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   expected_yRel = -np.interp(model_x, path_x, path_y)
   y_sane_on_path = abs(track.yRel - expected_yRel) < 1.2
   
-  # 新增：判斷物體在物理世界上是否真正靜止 (絕對速度 < 2 m/s，容許少許雷達雜訊)
+  # 判斷物體在物理世界上是否真正靜止 (絕對速度 < 2 m/s，容許少許雷達雜訊)
   v_absolute = track.vRel + v_ego
   is_physically_stationary = abs(v_absolute) < 2.0
   
-  # 靜止車嚴格條件：100米以內、絕對靜止、在軌跡上、視覺模型稍微看見 (prob > 0.2)
-  is_stationary_target = (0.0 < track.dRel <= 100.0) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > 0.3)
+  # 靜止車嚴格條件：使用自訂距離與信心度參數
+  is_stationary_target = (0.0 < track.dRel <= STATIONARY_MAX_DIST) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > STATIONARY_MIN_PROB)
 
   # 只要符合動態車或靜止車其一，即為有效前車
   is_valid_lead = is_dynamic_target or is_stationary_target
 
-  # 只要是有效目標，就補水加分 (+6 抵消原本的 -1，淨賺 +5)
+  # 只要是有效目標，就補水加分 (+6 抵消原本的 -1，淨賺 +5)，上限固定為 25
   if is_valid_lead:
     track.is_stopped_car_count = min(track.is_stopped_car_count + 6, 25)
 
@@ -156,10 +164,8 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
 
   # 決定要鎖定輸出的目標
   if is_dynamic_target:
-    # 常規動態車：最優先，直接鎖定
     best_track = track
-  elif track.is_stopped_car_count >= 20:
-    # 靜止車：只要分數大於等於門檻 20 就死死咬住，防止視覺閃爍導致煞車頓挫
+  elif track.is_stopped_car_count >= 20:  # 鎖定門檻固定為 20
     best_track = track
 
   # 更新選中狀態
