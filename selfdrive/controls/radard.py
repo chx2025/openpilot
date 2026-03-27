@@ -27,7 +27,7 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 # ==========================================
 STATIONARY_MAX_DIST = 120.0        # 軌跡偵測車最遠偵測距離 (公尺)
 
-STATIONARY_MIN_PROB = 0.35         # 【修改點 3】靜止車專屬最低信心度門檻 (固定 0.35)
+STATIONARY_MIN_PROB = 0.4         # 【修改點 3】靜止車專屬最低信心度門檻 (固定 0.35)
 
 BLIND_SPOT_PRIORITY_DIST = 23.0    # 低速盲區煞停「強制接管並鎖定」的距離 (公尺)
 BLIND_SPOT_HYSTERESIS_DIST = 25.0  # 盲區煞停「解除鎖定」的退場距離 (公尺)
