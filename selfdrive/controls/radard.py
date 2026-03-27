@@ -25,9 +25,9 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 # ==========================================
 # [自訂參數區] 您可以在這裡快速微調雷達邏輯
 # ==========================================
-STATIONARY_MAX_DIST = 120.0        # 軌跡偵測車最遠偵測距離 (公尺)。建議值：80.0 ~ 120.0
+STATIONARY_MAX_DIST = 120.0        # 軌跡偵測車最遠偵測距離 (公尺)
 
-STATIONARY_MIN_PROB = 0.35         # 靜止車專屬最低信心度門檻 (配合全局極限改為 0.35)
+STATIONARY_MIN_PROB = 0.35         # 【修改點 3】靜止車專屬最低信心度門檻 (固定 0.35)
 
 BLIND_SPOT_PRIORITY_DIST = 23.0    # 低速盲區煞停「強制接管並鎖定」的距離 (公尺)
 BLIND_SPOT_HYSTERESIS_DIST = 25.0  # 盲區煞停「解除鎖定」的退場距離 (公尺)
@@ -138,20 +138,20 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   # 目標分類與驗證邏輯
   # ==========================================
   
-  # 1. 動態車條件 (強制 0.5 防高速急煞)
+  # 1. 動態車條件 【修改點 2】：不再固定 0.5，改為使用動態降階門檻 (最低會降至 0.35)
   dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
   vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
-  is_dynamic_target = dist_sane and vel_sane and (lead.prob > 0.5)
+  is_dynamic_target = dist_sane and vel_sane and (lead.prob > current_prob_threshold)
   
-  # 2. 靜止車強化邏輯 (享有降階特權)
+  # 2. 靜止車強化邏輯
   model_x = track.dRel + RADAR_TO_CAMERA
   expected_yRel = -np.interp(model_x, path_x, path_y)
   y_sane_on_path = abs(track.yRel - expected_yRel) < 1.2
   v_absolute = track.vRel + v_ego
   is_physically_stationary = abs(v_absolute) < 2.0
   
-  stationary_threshold = min(current_prob_threshold, STATIONARY_MIN_PROB)
-  is_stationary_target = (0.0 < track.dRel <= STATIONARY_MAX_DIST) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > stationary_threshold)
+  # 【修改點 3】：靜止車不跟隨動態降階，永遠固定使用 0.35 門檻
+  is_stationary_target = (0.0 < track.dRel <= STATIONARY_MAX_DIST) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > STATIONARY_MIN_PROB)
 
   is_valid_lead = is_dynamic_target or is_stationary_target
 
@@ -165,7 +165,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   elif track.is_stopped_car_count >= 20: 
     best_track = track
 
-  # 【完全保留原廠寫法：不修復 LeadOne/LeadTwo 變數踐踏問題】
+  # 【保留原廠寫法：不修復 LeadOne/LeadTwo 變數踐踏問題】
   for c in tracks.values():
     if best_track is not None and c is best_track:
       c.selected_count += 1
@@ -199,6 +199,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
              current_prob_threshold: float = 0.5) -> Tuple[dict[str, Any], bool]:
   
   # --- Step 1: 取得視覺融合目標 ---
+  # 大門口放寬，允許進入配對的最低門檻為 0.35
   gate_threshold = min(current_prob_threshold, STATIONARY_MIN_PROB)
   
   if len(tracks) > 0 and ready and lead_msg.prob > gate_threshold:
@@ -209,8 +210,8 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
   fused_lead_dict = {'status': False}
   if best_valid_track is not None:
     fused_lead_dict = best_valid_track.get_RadarState(lead_msg.prob)
-  # 【修改點】純視覺備案不再死守 0.5，改為跟隨動態降階門檻 (最低會降至 0.35)
-  elif ready and (lead_msg.prob > current_prob_threshold):
+  # 【修改點 1】：純視覺備案固定死守 0.5 門檻，不受天氣降階影響
+  elif ready and (lead_msg.prob > 0.5):
     fused_lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
   # --- Step 2: 盲區雷達強制接管與單向條件鎖定邏輯 ---
@@ -346,7 +347,7 @@ class RadarD:
         if self.dynamic_prob_threshold < 0.5:
           self.threshold_recovery_timer = min(self.threshold_recovery_timer, 20)
 
-      # 降階觸發 【修改點：極限值改為 0.35】
+      # 降階觸發 (最低降至 0.35)
       if self.prob_score >= 20:
         if self.dynamic_prob_threshold > 0.35:
           self.dynamic_prob_threshold = round(max(0.35, self.dynamic_prob_threshold - 0.1), 2)
