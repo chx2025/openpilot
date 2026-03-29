@@ -176,6 +176,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_htd_torque_release_nm", {PERSISTENT, FLOAT, "0.6"}},
     {"dp_htd_recovery_delay", {PERSISTENT, FLOAT, "1.0"}},
     {"DynamicFollow", {PERSISTENT, BOOL, "1"}},
-    {"AccelPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPlanSP::AccelerationPersonality::NORMAL))}},
+    {"AccelPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPlanDP::AccelerationPersonality::NORMAL))}},
     {"AccelPersonalityEnabled", {PERSISTENT, BOOL, "1"}},
 };
