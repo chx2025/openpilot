@@ -137,7 +137,7 @@ class HumanTurnDetection:
     if condition_met:
       if self._trigger_start_time == 0.0:
         self._trigger_start_time = time.monotonic()
-      elif time.monotonic() - self._trigger_start_time >= 0.2:
+      elif time.monotonic() - self._trigger_start_time >= 0.1:
         return True 
     else:
       self._trigger_start_time = 0.0 
