@@ -143,22 +143,25 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   model_x = track.dRel + RADAR_TO_CAMERA
   expected_yRel = -np.interp(model_x, path_x, path_y)
   
-  # --- 橫向容錯計算 (使用車道線 85%) ---
-  y_threshold = 1.2
+  # --- 橫向容錯計算 ---
+  # 預設最大橫向容錯為 1.0m
+  y_threshold = 1.0
   if lane_data['left_prob'] > 0.3 and lane_data['right_prob'] > 0.3 and len(lane_data['x']) > 0:
     left_y_at_d = np.interp(model_x, lane_data['x'], lane_data['left_y'])
     right_y_at_d = np.interp(model_x, lane_data['x'], lane_data['right_y'])
     lane_width = abs(left_y_at_d - right_y_at_d)
     
-    dynamic_threshold = (lane_width / 2.0) * 0.85
-    y_threshold = max(0.5, min(dynamic_threshold, 1.2))
+    # 取車道半寬的 50% 作為有效範圍 (保證只抓取正中央的車，不摸牆壁)
+    dynamic_threshold = (lane_width / 2.0) * 0.50
+    
+    # 限制最高不超過 1.0，最低不小於 0.5
+    y_threshold = max(0.5, min(dynamic_threshold, 1.0))
   
   y_sane_on_path = abs(track.yRel - expected_yRel) < y_threshold
   
   # --- 距離加權信心度計算 ---
   # 30m 以內：要求 0.5 (防近距離幽靈煞車)
   # 80m 以外：放寬至 0.4 (遠距離容許模糊)
-  # 中間距離則線性平滑過渡
   dynamic_stat_prob = np.interp(track.dRel, [30.0, 80.0], [0.5, 0.4])
   
   v_absolute = track.vRel + v_ego
@@ -212,7 +215,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
              current_prob_threshold: float = 0.5) -> Tuple[dict[str, Any], bool]:
   
   # --- Step 1: 取得視覺融合目標 ---
-  # 大門口放寬到 0.4，讓遠距離的靜止車有機會進來被 match_vision_to_track 審查
+  # 允許最低到 0.4 的訊號進來參與靜止車加權審查
   gate_threshold = min(current_prob_threshold, 0.4)
   
   if len(tracks) > 0 and ready and lead_msg.prob > gate_threshold:
