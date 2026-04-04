@@ -26,6 +26,7 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 # [自訂參數區] 
 # ==========================================
 STATIONARY_MAX_DIST = 90.0         # 縮短靜止車最遠偵測距離，避免隧道微彎誤判
+STATIONARY_MIN_PROB = 0.5          # 靜止車固定最低信心度門檻 (嚴格遵守 0.5)
 
 BLIND_SPOT_PRIORITY_DIST = 23.0    # 低速盲區煞停「強制接管並鎖定」的距離 (公尺)
 BLIND_SPOT_HYSTERESIS_DIST = 25.0  # 盲區煞停「解除鎖定」的退場距離 (公尺)
@@ -119,7 +120,7 @@ def laplacian_pdf(x: float, mu: float, b: float):
   return math.exp(-abs(x-mu)/b)
 
 
-def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks: dict[int, Track], path_x: list[float], path_y: list[float], lane_data: dict, current_prob_threshold: float):
+def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks: dict[int, Track], path_x: list[float], path_y: list[float], current_prob_threshold: float):
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
   def prob(c):
@@ -139,36 +140,19 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
   is_dynamic_target = dist_sane and vel_sane and (lead.prob > current_prob_threshold)
   
-  # 2. 靜止車強化邏輯 (車道寬度限制 + 距離加權信心度)
+  # 2. 靜止車強化邏輯 (固定橫向容錯 + 固定 0.5 信心度)
   model_x = track.dRel + RADAR_TO_CAMERA
   expected_yRel = -np.interp(model_x, path_x, path_y)
   
-  # --- 橫向容錯計算 ---
-  # 預設最大橫向容錯為 1.0m
+  # --- 固定橫向容錯為 1.0m ---
   y_threshold = 1.0
-  if lane_data['left_prob'] > 0.3 and lane_data['right_prob'] > 0.3 and len(lane_data['x']) > 0:
-    left_y_at_d = np.interp(model_x, lane_data['x'], lane_data['left_y'])
-    right_y_at_d = np.interp(model_x, lane_data['x'], lane_data['right_y'])
-    lane_width = abs(left_y_at_d - right_y_at_d)
-    
-    # 取車道半寬的 50% 作為有效範圍 (保證只抓取正中央的車，不摸牆壁)
-    dynamic_threshold = (lane_width / 2.0) * 0.50
-    
-    # 限制最高不超過 1.0，最低不小於 0.5
-    y_threshold = max(0.5, min(dynamic_threshold, 1.0))
-  
   y_sane_on_path = abs(track.yRel - expected_yRel) < y_threshold
-  
-  # --- 距離加權信心度計算 ---
-  # 30m 以內：要求 0.5 (防近距離幽靈煞車)
-  # 80m 以外：放寬至 0.4 (遠距離容許模糊)
-  dynamic_stat_prob = np.interp(track.dRel, [30.0, 80.0], [0.5, 0.4])
   
   v_absolute = track.vRel + v_ego
   is_physically_stationary = abs(v_absolute) < 2.0
   
-  # 套用動態靜止車門檻
-  is_stationary_target = (0.0 < track.dRel <= STATIONARY_MAX_DIST) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > dynamic_stat_prob)
+  # 靜止車固定使用 STATIONARY_MIN_PROB (0.5)
+  is_stationary_target = (0.0 < track.dRel <= STATIONARY_MAX_DIST) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > STATIONARY_MIN_PROB)
 
   is_valid_lead = is_dynamic_target or is_stationary_target
 
@@ -210,16 +194,15 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 
 
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
-             model_v_ego: float, path_x: list[float], path_y: list[float], lane_data: dict,
+             model_v_ego: float, path_x: list[float], path_y: list[float],
              low_speed_override: bool = True, is_locked: bool = False,
              current_prob_threshold: float = 0.5) -> Tuple[dict[str, Any], bool]:
   
   # --- Step 1: 取得視覺融合目標 ---
-  # 允許最低到 0.4 的訊號進來參與靜止車加權審查
-  gate_threshold = min(current_prob_threshold, 0.4)
+  gate_threshold = min(current_prob_threshold, STATIONARY_MIN_PROB)
   
   if len(tracks) > 0 and ready and lead_msg.prob > gate_threshold:
-    best_valid_track = match_vision_to_track(v_ego, lead_msg, tracks, path_x, path_y, lane_data, current_prob_threshold)
+    best_valid_track = match_vision_to_track(v_ego, lead_msg, tracks, path_x, path_y, current_prob_threshold)
   else:
     best_valid_track = None
 
@@ -327,36 +310,17 @@ class RadarD:
     else:
       model_v_ego = self.v_ego
       
-    # 擷取車道線資訊供動態容錯使用
-    ll_x, ll_y_left, ll_y_right = [], [], []
-    ll_prob_left, ll_prob_right = 0.0, 0.0
-
-    if len(sm['modelV2'].laneLines) == 4:
-      ll_x = list(sm['modelV2'].laneLines[1].x)
-      ll_y_left = list(sm['modelV2'].laneLines[1].y)
-      ll_y_right = list(sm['modelV2'].laneLines[2].y)
-      ll_prob_left = sm['modelV2'].laneLineProbs[1]
-      ll_prob_right = sm['modelV2'].laneLineProbs[2]
-
-    lane_data = {
-      'x': ll_x,
-      'left_y': ll_y_left,
-      'right_y': ll_y_right,
-      'left_prob': ll_prob_left,
-      'right_prob': ll_prob_right
-    }
-      
     leads_v3 = sm['modelV2'].leadsV3
 
     # ==========================================
-    # 動態信心度門檻調節邏輯 (彈性積分制漏桶演算法)
+    # 動態信心度門檻調節邏輯 (彈性積分制漏桶演算法，5秒累積)
     # ==========================================
     if len(leads_v3) > 0:
       lead_prob = leads_v3[0].prob
 
       if 0.15 <= lead_prob < 0.5:
-        # 疑似雨中水花遮擋，緩慢累積 (上限設為 60 分，約 3 秒)
-        self.low_prob_score = min(self.low_prob_score + 1, 60)
+        # 疑似雨中水花遮擋，緩慢累積 (20Hz * 6秒 = 上限 120 分，保留一點緩衝)
+        self.low_prob_score = min(self.low_prob_score + 1, 120)
         
       elif lead_prob >= 0.5:
         # 清楚看到真車，快速扣分，加速解除降階狀態
@@ -367,20 +331,20 @@ class RadarD:
         self.low_prob_score = max(self.low_prob_score - 1, 0)
 
       # --- 決定是否降階 ---
-      if self.low_prob_score >= 50:  # 累積達到約 2.5 秒的不穩定狀態才降階
+      if self.low_prob_score >= 100: # 累積達到約 5 秒的不穩定狀態才降階
         self.dynamic_prob_threshold = 0.45
       elif self.low_prob_score == 0: # 徹底冷卻後恢復原廠門檻
         self.dynamic_prob_threshold = 0.5
 
     if len(leads_v3) > 1:
       self.radar_state.leadOne, self.lead_one_locked = get_lead(
-          self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, path_x, path_y, lane_data,
+          self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, path_x, path_y, 
           low_speed_override=True, is_locked=self.lead_one_locked,
           current_prob_threshold=self.dynamic_prob_threshold
       )
       
       self.radar_state.leadTwo, _ = get_lead(
-          self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, path_x, path_y, lane_data,
+          self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, path_x, path_y, 
           low_speed_override=False, is_locked=False,
           current_prob_threshold=0.5
       )
