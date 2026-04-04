@@ -64,6 +64,7 @@ class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP):
     super().__init__(dbc_names, CP)
     self.params = CarControllerParams(self.CP)
+    self.steer_control_type = self.CP.steerControlType
     self.last_torque = 0
     self.last_angle = 0
     self.alert_active = False
@@ -118,6 +119,13 @@ class CarController(CarControllerBase):
         if int(CS.secoc_synchronization['AUTHENTICATOR']) != expected_mac:
           carlog.error("SecOC synchronization MAC mismatch, wrong key?")
 
+    # *** steer type ***
+    if self.CP.carFingerprint in TSS2_CAR:
+      if actuators.steerControlType == structs.CarControl.Actuators.SteerControlType.angle:
+        self.steer_control_type = SteerControlType.angle
+      else:
+        self.steer_control_type = SteerControlType.torque
+
     # *** steer torque ***
     new_torque = int(round(actuators.torque * self.params.STEER_MAX))
     apply_torque = apply_meas_steer_torque_limits(new_torque, self.last_torque, CS.out.steeringTorqueEps, self.params)
@@ -130,7 +138,7 @@ class CarController(CarControllerBase):
       apply_torque = 0
 
     # *** steer angle ***
-    if self.CP.steerControlType == SteerControlType.angle:
+    if self.steer_control_type == SteerControlType.angle:
       # If using LTA control, disable LKA and set steering angle command
       apply_torque = 0
       apply_steer_req = False
@@ -161,7 +169,7 @@ class CarController(CarControllerBase):
 
     # STEERING_LTA does not seem to allow more rate by sending faster, and may wind up easier
     if self.frame % 2 == 0 and self.CP.carFingerprint in TSS2_CAR:
-      lta_active = lat_active and self.CP.steerControlType == SteerControlType.angle
+      lta_active = lat_active and self.steer_control_type == SteerControlType.angle
       # cut steering torque with TORQUE_WIND_DOWN when either EPS torque or driver torque is above
       # the threshold, to limit max lateral acceleration and for driver torque blending respectively.
       full_torque_condition = (abs(CS.out.steeringTorqueEps) < self.params.STEER_MAX and
@@ -169,7 +177,7 @@ class CarController(CarControllerBase):
 
       # TORQUE_WIND_DOWN at 0 ramps down torque at roughly the max down rate of 1500 units/sec
       torque_wind_down = 100 if lta_active and full_torque_condition else 0
-      can_sends.append(toyotacan.create_lta_steer_command(self.packer, self.CP.steerControlType, self.last_angle,
+      can_sends.append(toyotacan.create_lta_steer_command(self.packer, self.steer_control_type, self.last_angle,
                                                           lta_active, self.frame // 2, torque_wind_down))
 
       if self.CP.flags & ToyotaFlags.SECOC.value:

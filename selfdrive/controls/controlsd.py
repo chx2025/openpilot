@@ -20,7 +20,8 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
-# 導入 HTD 模組
+
+# 導入 DP 的 HTD (人工轉向偵測) 模組
 from dragonpilot.selfdrive.controls.lib.human_turn_detection import HumanTurnDetection, HTDState
 
 State = log.SelfdriveState.OpenpilotState
@@ -60,6 +61,23 @@ class Controls:
       self.LaC = LatControlPID(self.CP, self.CI, DT_CTRL)
     elif self.CP.lateralTuning.which() == 'torque':
       self.LaC = LatControlTorque(self.CP, self.CI, DT_CTRL)
+
+    # ==========================================
+    # TSS2 動態熱備援控制器攔截邏輯
+    # ==========================================
+    from opendbc.car.toyota.values import TSS2_CAR
+
+    # 必須先用 .which() 判斷當前活躍的 Union 是不是 'torque'，避免 Cap'n Proto 底層報錯
+    if self.CP.carFingerprint in TSS2_CAR and self.CP.lateralTuning.which() == 'torque':
+      # 確認是 torque 後，才能安全讀取裡面的參數長度
+      if len(self.CP.lateralTuning.torque.as_builder().to_dict()) > 0:
+        # ⚠️ 確保 latcontrol_dynamic.py 放在正確的路徑
+        # 由於 DP 沒有 CP_SP，因此直接傳入 (self.CP, self.CI, DT_CTRL)
+        # 前面我們改寫的 latcontrol_dynamic.py 已經用 *args, **kwargs 做好兼容，不會報錯
+        from openpilot.selfdrive.controls.lib.latcontrol_dynamic import LatControlDynamic
+        self.LaC = LatControlDynamic(self.CP, self.CI, DT_CTRL)
+        cloudlog.info("LatControlDynamic successfully initialized for TSS2_CAR.")
+    # ==========================================
 
     # dp - ALKA: cache enabled state (CP doesn't change after init)
     self.alka_enabled = bool(self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA)
@@ -120,14 +138,14 @@ class Controls:
     # 1. 不管開關有沒有開，永遠執行 update() 讓系統記錄扭力數據 (供 DTSC 提速判斷用)
     # [修改] 加入 CS.cruiseState.enabled 傳入給 htd
     htd_allowed, self.htd_state = self.htd.update(
-        lat_active, 
-        CS.cruiseState.enabled, 
-        CS.steeringAngleDeg, 
-        CS.steeringTorque, 
-        CS.vEgo, 
+        lat_active,
+        CS.cruiseState.enabled,
+        CS.steeringAngleDeg,
+        CS.steeringTorque,
+        CS.vEgo,
         CS.steeringPressed
     )
-    
+
     # 2. 只有當車主在介面開啟 HTD 功能時，才真正允許 HTD 切斷自動轉向 (lat_active)
     # [修正] 直接讀取 HTD 內部快取的 _enabled 狀態，避免 100Hz 狂讀硬碟導致系統崩潰失效
     if self.htd._enabled:
@@ -162,6 +180,7 @@ class Controls:
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
     actuators.curvature = self.desired_curvature
+    # 如果 LaC 是動態控制器，lac_log 會自動根據當下主控者回傳對應的 log
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                        self.steer_limited_by_safety, self.desired_curvature,
                                                        curvature_limited, lat_delay)
@@ -181,7 +200,7 @@ class Controls:
 
   def publish(self, CC, lac_log):
     CS = self.sm['carState']
-    # Orientation and angle rates can be useful for carcontroller
+        # Orientation and angle rates can be useful for carcontroller
     # Only calibrated (car) frame is relevant for the carcontroller
     CC.currentCurvature = self.curvature
     if self.calibrated_pose is not None:
@@ -233,13 +252,24 @@ class Controls:
     cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.) or
                          (self.sm['selfdriveState'].state == State.softDisabling))
 
-    lat_tuning = self.CP.lateralTuning.which()
-    if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
-      cs.lateralControlState.angleState = lac_log
-    elif lat_tuning == 'pid':
-      cs.lateralControlState.pidState = lac_log
-    elif lat_tuning == 'torque':
-      cs.lateralControlState.torqueState = lac_log
+    # ==========================================
+    # 🌟 橫向控制 Log 儲存：防崩潰與動態識別機制
+    # ==========================================
+    # 如果當前控制器有 'use_angle' 屬性 (即為動態控制器 LatControlDynamic)
+    if hasattr(self.LaC, 'use_angle'):
+      if self.LaC.use_angle:
+        cs.lateralControlState.angleState = lac_log
+      else:
+        cs.lateralControlState.torqueState = lac_log
+    else:
+      # 標準單一控制器流程
+      lat_tuning = self.CP.lateralTuning.which()
+      if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
+        cs.lateralControlState.angleState = lac_log
+      elif lat_tuning == 'pid':
+        cs.lateralControlState.pidState = lac_log
+      elif lat_tuning == 'torque':
+        cs.lateralControlState.torqueState = lac_log
 
     self.pm.send('controlsState', dat)
 
