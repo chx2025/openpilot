@@ -39,7 +39,7 @@ MIN_DIST_V = [5., 10., 15., 20.]
 # --- Soft Hold (柔和跟車/滑行介入) 設定 ---
 SOFT_HOLD_ACCEL = -0.00                
 SOFT_HOLD_RANGE_MIN = 0.76             
-SOFT_HOLD_RANGE_MAX = 0.99             
+SOFT_HOLD_RANGE_MAX = 0.95             
 
 SOFT_HOLD_ENABLE_KPH = 60.0            
 SOFT_HOLD_DISABLE_KPH = 50.0           
