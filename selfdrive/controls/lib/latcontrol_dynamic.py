@@ -31,12 +31,12 @@ class LatControlDynamic(LatControl):
     # 定義「安全直行狀態」：方向盤打角小於 10 度，且轉動速率小於 5 度/秒
     is_safe_to_switch = abs(CS.steeringAngleDeg) < 10.0 and abs(CS.steeringRateDeg) < 5.0
 
-    # 1. 判斷主控權與遲滯區間，並且鎖死過彎時的切換
-    if CS.vEgo > 22.0 and not self.use_angle and is_safe_to_switch:
+    # 1. 判斷主控權與遲滯區間，並且鎖死過彎時的切換 預設22.0
+    if CS.vEgo > 8.33 and not self.use_angle and is_safe_to_switch:
       self.use_angle = True
       self.angle_ctrl.reset()  # 確保角度控制器狀態乾淨
-      
-    elif CS.vEgo < 16.0 and self.use_angle and is_safe_to_switch:
+    #預設16.0  
+    elif CS.vEgo < 5.56 and self.use_angle and is_safe_to_switch:
       self.use_angle = False
       self.torque_ctrl.reset() # 確保扭矩控制器狀態乾淨
       if hasattr(self.torque_ctrl, 'pid'):
