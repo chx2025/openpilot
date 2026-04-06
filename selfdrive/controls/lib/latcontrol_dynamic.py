@@ -29,7 +29,8 @@ class LatControlDynamic(LatControl):
 
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
     # 定義「安全直行狀態」：方向盤打角小於 10 度，且轉動速率小於 5 度/秒
-    is_safe_to_switch = abs(CS.steeringAngleDeg) < 10.0 and abs(CS.steeringRateDeg) < 5.0
+    #is_safe_to_switch = abs(CS.steeringAngleDeg) < 10.0 and abs(CS.steeringRateDeg) < 5.0
+    is_safe_to_switch = True
 
     # 1. 判斷主控權與遲滯區間，並且鎖死過彎時的切換 預設22.0
     if CS.vEgo > 8.33 and not self.use_angle and is_safe_to_switch:
