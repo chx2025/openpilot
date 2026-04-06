@@ -361,6 +361,7 @@ struct CarControl {
 
   struct Actuators {
     # lateral commands, mutually exclusive
+    steerControlType @9 :SteerControlType;
     torque @2: Float32;  # [0.0, 1.0]
     steeringAngleDeg @3: Float32;
     curvature @7: Float32;
@@ -374,6 +375,11 @@ struct CarControl {
     brake @1: Float32; # [0.0, 1.0]
     torqueOutputCan @8: Float32;   # value sent over can to the car
     speed @6: Float32;  # m/s
+
+    enum SteerControlType {
+      torque @0;
+      angle @1;
+    }
 
     enum LongControlState @0xe40f3a917d908282{
       off @0;
