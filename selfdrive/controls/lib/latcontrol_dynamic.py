@@ -27,7 +27,7 @@ class LatControlDynamic(LatControl):
       self.torque_ctrl.update_live_torque_params(latAccelFactor, latAccelOffset, frictionCoefficient)
   # ==========================================
 
-  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
+  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay):
     # 定義「安全直行狀態」：方向盤打角小於 10 度，且轉動速率小於 5 度/秒
     #is_safe_to_switch = abs(CS.steeringAngleDeg) < 10.0 and abs(CS.steeringRateDeg) < 5.0
     is_safe_to_switch = True
@@ -44,11 +44,11 @@ class LatControlDynamic(LatControl):
         self.torque_ctrl.pid.reset() # 徹底清除積分
 
     # 2. Angle 控制器永遠運算 (幾何計算，無風險)
-    _, a_steer, a_log = self.angle_ctrl.update(active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay)
+    _, a_steer, a_log = self.angle_ctrl.update(active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay)
 
     # 3. Torque 控制器永遠運算 (熱備援)
     torque_is_frozen = True if self.use_angle else steer_limited_by_safety
-    t_steer, _, t_log = self.torque_ctrl.update(active, CS, VM, params, torque_is_frozen, desired_curvature, calibrated_pose, curvature_limited, lat_delay)
+    t_steer, _, t_log = self.torque_ctrl.update(active, CS, VM, params, torque_is_frozen, desired_curvature, curvature_limited, lat_delay)
 
     # 4. 雙輸出合併：回傳 (扭矩輸出, 角度輸出, 當前主控的Log)
     if self.use_angle:
