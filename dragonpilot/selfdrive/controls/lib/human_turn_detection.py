@@ -1,24 +1,13 @@
-import os
 import time
 from enum import Enum, auto
 
 from openpilot.common.params import Params
 
 
-LOG_PATH = "/data/media/0/realdata/debug.log"
 PARAM_REFRESH_SEC = 2.0
 MIN_SPEED_MS = 0.1
 # [安全鎖 4] 最高車速限制，約 45 km/h。超過此速度的 90 度大轉向屬危險動作，HTD 拒絕作動
 MAX_SPEED_MS = 12.5
-
-
-def _log(message: str) -> None:
-  try:
-    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-      f.write(f"{time.time():.3f} {message}\n")
-  except Exception:
-    pass
 
 
 class HTDState(Enum):
@@ -71,14 +60,11 @@ class HumanTurnDetection:
     self._enabled = self._params.get_bool("dp_htd_enabled")
     self._angle_threshold_deg = self._get_float("dp_htd_turn_angle_threshold", 90.0)
 
-  def _transition(self, new_state: HTDState, reason: str) -> None:
+  def _transition(self, new_state: HTDState) -> None:
     if new_state == self._state:
       return
     self._state = new_state
     self._state_change_time = time.monotonic()
-    _log(
-      f"HTD {new_state.name} reason={reason} angle={self._last_angle:.1f} torque={self._last_torque:.2f} pressed={self._last_pressed} delay={self._dynamic_delay:.2f}"
-    )
 
   def update(
     self, lat_active: bool, cruise_enabled: bool, steering_angle_deg: float, steering_torque_nm: float, v_ego: float, steering_pressed: bool = False
