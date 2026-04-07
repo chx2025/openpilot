@@ -43,7 +43,7 @@ SOFT_HOLD_TTC_THRESHOLD = 2.0          # [新增] TTC 大於此數值時，暫�
 
 # 車速 (km/h) 對應 最高加速度限制 (m/s²) 的插值陣列
 SOFT_HOLD_SPEED_BP = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]
-SOFT_HOLD_ACCEL_V  = [ 0.7,  0.6,  0.5,  0.4,  0.3,  0.2,  0.1]
+SOFT_HOLD_ACCEL_V  = [ 0.8,  0.7,  0.6,  0.6,  0.5,  0.3,  0.0]
 
 
 class ACM:
