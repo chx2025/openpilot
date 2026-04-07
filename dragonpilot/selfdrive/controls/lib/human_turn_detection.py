@@ -6,8 +6,8 @@ from openpilot.common.params import Params
 
 PARAM_REFRESH_SEC = 2.0
 MIN_SPEED_MS = 0.1
-# [安全鎖 4] 最高車速限制，約 45 km/h。超過此速度的 90 度大轉向屬危險動作，HTD 拒絕作動
-MAX_SPEED_MS = 12.5
+# [安全鎖 4] 最高車速限制，約 35 km/h。超過此速度的 90 度大轉向屬危險動作，HTD 拒絕作動
+MAX_SPEED_MS = 9.72
 
 
 class HTDState(Enum):
@@ -60,7 +60,8 @@ class HumanTurnDetection:
     self._enabled = self._params.get_bool("dp_htd_enabled")
     self._angle_threshold_deg = self._get_float("dp_htd_turn_angle_threshold", 90.0)
 
-  def _transition(self, new_state: HTDState) -> None:
+  # [修正] 增加 reason 參數，避免原版傳入字串時引發 TypeError 崩潰
+  def _transition(self, new_state: HTDState, reason: str = "") -> None:
     if new_state == self._state:
       return
     self._state = new_state
@@ -79,6 +80,15 @@ class HumanTurnDetection:
     self._last_angle = abs(steering_angle_deg)
     self._last_torque = abs(steering_torque_nm)
     self._last_pressed = steering_pressed
+
+    # ==========================================
+    # [新增] 定速巡航鎖：當定速巡航啟用時，強制讓 HTD 暫停作動
+    # ==========================================
+    if cruise_enabled:
+      if self._state != HTDState.INACTIVE:
+        self._transition(HTDState.INACTIVE, "cruise_active")
+      self._trigger_start_time = 0.0
+      return True, self._state
 
     # [安全鎖 4] 超速時強制失效
     if not self._enabled or not lat_active or v_ego < MIN_SPEED_MS or v_ego > MAX_SPEED_MS:
