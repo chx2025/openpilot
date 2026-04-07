@@ -151,7 +151,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks
   v_absolute = track.vRel + v_ego
   is_physically_stationary = abs(v_absolute) < 2.0
   
-  # 靜止車固定使用 STATIONARY_MIN_PROB (0.5)
+  # 靜止車固定使用 STATIONARY_MIN_PROB (0.4)
   is_stationary_target = (0.0 < track.dRel <= STATIONARY_MAX_DIST) and is_physically_stationary and dist_sane and y_sane_on_path and (lead.prob > STATIONARY_MIN_PROB)
 
   is_valid_lead = is_dynamic_target or is_stationary_target
@@ -318,7 +318,7 @@ class RadarD:
     if len(leads_v3) > 0:
       lead_prob = leads_v3[0].prob
 
-      if 0.15 <= lead_prob < 0.5:
+      if 0.2 <= lead_prob < 0.5:
         # 疑似雨中水花遮擋，緩慢累積 (20Hz * 6秒 = 上限 120 分，保留一點緩衝)
         self.low_prob_score = min(self.low_prob_score + 1, 120)
         
@@ -327,7 +327,7 @@ class RadarD:
         self.low_prob_score = max(self.low_prob_score - 2, 0)
         
       else:
-        # 小於 0.15 視為完全遮擋或空曠處雜訊，緩慢冷卻 (允許短暫斷訊)
+        # 小於 0.2 視為完全遮擋或空曠處雜訊，緩慢冷卻 (允許短暫斷訊)
         self.low_prob_score = max(self.low_prob_score - 1, 0)
 
       # --- 決定是否降階 ---
