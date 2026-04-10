@@ -184,6 +184,20 @@ class Controls:
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                        self.steer_limited_by_safety, self.desired_curvature,
                                                        curvature_limited, lat_delay)
+
+    # --- 讀取大腦內部決定並寫入 Enum ---
+    if hasattr(self.LaC, 'use_angle'):
+      if self.LaC.use_angle:
+        actuators.steerControlType = car.CarControl.Actuators.SteerControlType.angle
+      else:
+        actuators.steerControlType = car.CarControl.Actuators.SteerControlType.torque
+    else:
+      if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
+        actuators.steerControlType = car.CarControl.Actuators.SteerControlType.angle
+      else:
+        actuators.steerControlType = car.CarControl.Actuators.SteerControlType.torque
+    # -----------------------------------
+
     actuators.torque = float(steer)
     actuators.steeringAngleDeg = float(steeringAngleDeg)
     # Ensure no NaNs/Infs
