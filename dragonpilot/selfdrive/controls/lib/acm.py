@@ -14,12 +14,12 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
 # =========================================================
 
 # --- 滑行速度容許範圍 ---
-SPEED_OFFSET_MIN_KPH = 1.0             
+SPEED_OFFSET_MIN_KPH = 0.0             # [修改點] 設為 0.0，移除下限偏移
 SPEED_OFFSET_MAX_FLAT_KPH = 15.0       
 SPEED_OFFSET_MAX_DOWNHILL_KPH = 5.0    
 
 # --- 坡度判斷門檻 ---
-PITCH_UPHILL_THRESHOLD = 0.015         
+PITCH_UPHILL_THRESHOLD = 0.050         # 維持 5.0% 坡度門檻
 PITCH_DOWNHILL_THRESHOLD = -0.030      
 
 # --- TTC (Time To Collision) 碰撞時間設定 ---
@@ -37,13 +37,13 @@ SPEED_BP = [0., 10., 20., 30.]
 MIN_DIST_V = [5., 10., 15., 20.]       
 
 # --- Soft Hold (柔和跟車/滑行介入) 設定 ---
-SOFT_HOLD_RANGE_MIN = 0.76             
+SOFT_HOLD_RANGE_MIN = 0.70             
 SOFT_HOLD_RANGE_MAX = 0.99             
-SOFT_HOLD_TTC_THRESHOLD = 2.0          # [新增] TTC 大於此數值時，暫停 Soft Hold 運作
+SOFT_HOLD_TTC_THRESHOLD = 2.5          
 
 # 車速 (km/h) 對應 最高加速度限制 (m/s²) 的插值陣列
-SOFT_HOLD_SPEED_BP = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0]
-SOFT_HOLD_ACCEL_V  = [ 0.8,  0.7,  0.6,  0.6,  0.5,  0.3,  0.0]
+SOFT_HOLD_SPEED_BP = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+SOFT_HOLD_ACCEL_V  = [1.0,  0.80,  0.60,  0.40,  0.20,  0.0]
 
 
 class ACM:
@@ -64,28 +64,32 @@ class ACM:
     self.personality = log.LongitudinalPersonality.standard 
     self._dtsc_is_active = False          
 
-    self._soft_hold_factor = 1.0
+    self._soft_hold_factor = 1.0          
 
   def _check_emergency_conditions(self, lead, v_ego, current_time):
     if not lead or not lead.status:
       return False
 
-    self.lead_ttc = lead.dRel / max(v_ego, 0.1) 
+    closing_speed = max(v_ego - lead.vLead, 0.1)
+    self.lead_ttc = lead.dRel / closing_speed 
+    
     relative_speed = v_ego - lead.vLead         
     min_dist_for_speed = np.interp(v_ego, SPEED_BP, MIN_DIST_V)
 
-    if lead.dRel < min_dist_for_speed and (
-        self.lead_ttc < EMERGENCY_TTC or
-        relative_speed > EMERGENCY_RELATIVE_SPEED):
+    if (self.lead_ttc < EMERGENCY_TTC) or \
+       (relative_speed > EMERGENCY_RELATIVE_SPEED) or \
+       (lead.dRel < min_dist_for_speed and relative_speed > 0):
       self._last_lead_time = current_time
       if self.active:
-        cloudlog.warning(f"ACM emergency disable: dRel={lead.dRel:.1f}m, TTC={self.lead_ttc:.1f}s")
+        cloudlog.warning(f"ACM emergency disable: dRel={lead.dRel:.1f}m, TTC={self.lead_ttc:.1f}s, RelSpeed={relative_speed:.1f}m/s")
       return True
     return False
 
   def _update_lead_status(self, lead, v_ego, current_time):
     if lead and lead.status:
-      self.lead_ttc = lead.dRel / max(v_ego, 0.1)
+      closing_speed = max(v_ego - lead.vLead, 0.1)
+      self.lead_ttc = lead.dRel / closing_speed
+      
       self.current_ttc_threshold = np.interp(v_ego, TTC_BP, TTC_V) 
       if self.lead_ttc < self.current_ttc_threshold:
         self._has_lead = True
@@ -101,29 +105,31 @@ class ACM:
     return time_since_lead < LEAD_COOLDOWN_TIME
 
   def _should_activate(self, user_ctrl_lon, v_ego, v_cruise, in_cooldown, pitch, dtsc_is_active):
-    if dtsc_is_active:
+    if dtsc_is_active: 
         self._is_in_coast_window = False
         return False
-    if pitch > PITCH_UPHILL_THRESHOLD:
+    if pitch > PITCH_UPHILL_THRESHOLD: 
         self._is_in_coast_window = False
         return False
+    
     if pitch < PITCH_DOWNHILL_THRESHOLD:
         self.current_max_offset = SPEED_OFFSET_MAX_DOWNHILL_KPH
     else:
         self.current_max_offset = SPEED_OFFSET_MAX_FLAT_KPH
 
-    lower_bound = v_cruise - (SPEED_OFFSET_MIN_KPH / 3.6)
+    # [修改點] 移除 lower_bound 的偏移判斷，直接以 v_cruise 作為基準
     upper_bound = v_cruise + (self.current_max_offset / 3.6)
-    self._is_in_coast_window = lower_bound < v_ego < upper_bound
+    self._is_in_coast_window = v_ego >= v_cruise and v_ego < upper_bound
 
-    return (not user_ctrl_lon and
-            not self._has_lead and
-            not in_cooldown and
-            self._is_in_coast_window)
+    return (not user_ctrl_lon and     
+            not self._has_lead and    
+            not in_cooldown and       
+            self._is_in_coast_window) 
 
-  def update_states(self, cc, rs, user_ctrl_lon, v_ego, v_cruise, personality=log.LongitudinalPersonality.standard, dtsc_is_active=False):
+  def update_states(self, cc, rs, user_ctrl_lon, v_ego, v_cruise, mode='acc', personality=log.LongitudinalPersonality.standard, dtsc_is_active=False):
     self.personality = personality
     self._dtsc_is_active = dtsc_is_active 
+    self._is_normal_mode = (mode == 'acc')
 
     if not self.enabled or len(cc.orientationNED) != 3:
       self.active = False
@@ -152,45 +158,70 @@ class ACM:
     self._active_prev = self.active
 
   def _apply_soft_hold(self, a_desired_trajectory, v_ego, lead, t_follow):
-    target_factor = 1.0   
-    ratio = 10.0          
+    should_cancel_soft_hold = False
     
-    # 計算當前車速並透過插值取得對應的 Soft Hold 允許最高加速度
+    if lead is None or not lead.status or lead.dRel > 100.0:
+        should_cancel_soft_hold = True
+
+    target_factor = 1.0   
+    ratio = 10.0  
     v_ego_kph = v_ego * 3.6
     current_soft_hold_accel = np.interp(v_ego_kph, SOFT_HOLD_SPEED_BP, SOFT_HOLD_ACCEL_V)
 
-    if lead is not None and lead.status:
-        is_lead_braking = lead.aLeadK < -0.1
+    is_lead_braking_strict = False
+
+    if not should_cancel_soft_hold:
+        is_lead_stopped = lead.vLead < 1.0  
+
+        if v_ego_kph <= 10.0:
+            is_lead_braking_strict = lead.aLeadK < -0.1 or is_lead_stopped
+        elif v_ego_kph <= 30.0:
+            is_lead_braking_strict = lead.aLeadK < -0.5 or is_lead_stopped
+        elif v_ego_kph <= 40.0:
+            is_lead_braking_strict = lead.aLeadK < -1.0 or is_lead_stopped
+        else: 
+            is_lead_braking_strict = lead.aLeadK < -1.25 or is_lead_stopped
+
+        closing_speed = max(v_ego - lead.vLead, 0.1)
+        current_ttc = lead.dRel / closing_speed
         
-        # [新增] 獨立計算當下給 Soft Hold 邏輯使用的 TTC
-        current_ttc = lead.dRel / max(v_ego, 0.1)
-        
-        # 車速 10 以下且前車正在煞車時，保持完全不加速的保守設定
-        if v_ego_kph <= 10.0 and is_lead_braking:
-            current_soft_hold_accel = -0.00
+        desired_dist = get_safe_obstacle_distance(v_ego, t_follow)
+        lead_obstacle_dist = lead.dRel + get_stopped_equivalence_factor(lead.vLead)
+
+        if desired_dist < 0.1:
+            ratio = 10.0
+        else:
+            ratio = lead_obstacle_dist / desired_dist
+
+        if ratio > 1.2:
+            should_cancel_soft_hold = True
+
+    if should_cancel_soft_hold:
+        target_factor = 1.0
+        alpha = 0.40  
+    else:
+        distance_factor = 1.0 
 
         if self.current_pitch <= PITCH_UPHILL_THRESHOLD:
-            desired_dist = get_safe_obstacle_distance(v_ego, t_follow)
-            lead_obstacle_dist = lead.dRel + get_stopped_equivalence_factor(lead.vLead)
-
-            if desired_dist < 0.1:
-                ratio = 10.0
-            else:
-                ratio = lead_obstacle_dist / desired_dist
-
-            distance_factor = 1.0 
-
-            # [修改] 若距離進入比例範圍內，且 TTC 小於等於門檻值 (2.0) 才允許觸發
             if SOFT_HOLD_RANGE_MIN < ratio < SOFT_HOLD_RANGE_MAX and current_ttc <= SOFT_HOLD_TTC_THRESHOLD:
                 distance_factor = 0.0
 
-            v_rel_factor = np.interp(lead.vRel, [-2.5, -0.5], [0.0, 1.0])
-            target_factor = max(distance_factor, v_rel_factor)
+        v_rel_factor = np.interp(lead.vRel, [-2.0, 0.5], [0.0, 1.0])
+        target_factor = max(distance_factor, v_rel_factor)
 
-    if target_factor > self._soft_hold_factor:
-        alpha = 0.10
-    else:
-        alpha = 0.20
+        if SOFT_HOLD_RANGE_MIN < ratio < SOFT_HOLD_RANGE_MAX:
+            if is_lead_braking_strict:
+                if self.current_pitch > PITCH_UPHILL_THRESHOLD:
+                    target_factor = 0.7  
+                    current_soft_hold_accel = current_soft_hold_accel * 0.7 
+                else:
+                    current_soft_hold_accel = 0.0
+                    target_factor = 0.0 
+
+        if target_factor > self._soft_hold_factor:
+            alpha = 0.10 
+        else:
+            alpha = 0.20 
 
     self._soft_hold_factor = (1.0 - alpha) * self._soft_hold_factor + alpha * target_factor
 
@@ -201,7 +232,8 @@ class ACM:
     return a_desired_trajectory
 
   def update_a_desired_trajectory(self, a_desired_trajectory, v_ego=0.0, lead=None, t_follow=None):
-    if getattr(self, '_dtsc_is_active', False):
+    if getattr(self, '_dtsc_is_active', False) or \
+       not getattr(self, '_is_normal_mode', True):
         return a_desired_trajectory
 
     traj = a_desired_trajectory
