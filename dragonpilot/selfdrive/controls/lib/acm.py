@@ -49,8 +49,16 @@ SOFT_HOLD_RANGE_MAX = 0.99
 SOFT_HOLD_TTC_THRESHOLD = 2.5          
 VREL_DEBOUNCE_TIME = 0.6               
 
-SOFT_HOLD_SPEED_BP = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
-SOFT_HOLD_ACCEL_V  = [1.1,  0.90,  0.70,  0.50,  0.30,  0.10, 0.0] # 使用你微調後的數值
+SOFT_HOLD_SPEED_BP = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]
+SOFT_HOLD_ACCEL_V  = [1.1,  0.90,  0.70,  0.50,  0.30,  0.10]
+
+# =========================================================
+# 新增：防震盪參數
+# =========================================================
+RATIO_ENTER_THRESHOLD = 1.08     # 距離比率進入閾值（觸發取消Soft Hold）
+RATIO_EXIT_THRESHOLD = 1.02      # 距離比率退出閾值（恢復Soft Hold，更保守）
+TARGET_FACTOR_FILTER_ALPHA = 0.3 # 目標因子平滑濾波係數
+SOFT_HOLD_HYSTERESIS_TIME = 1.0  # Soft Hold開關滯後時間（秒）
 
 # =========================================================
 # 邏輯模組 1：純滑行控制器
@@ -123,14 +131,15 @@ class CoastingLogic:
         self.active = False
       else:
         if not (lead is not None and lead.status):
+          # 【修復異常 3】：線性平滑過渡，取代斷崖式歸零，徹底解決「微點頭」頓挫
           for i in range(len(traj)):
-            if -0.3 < traj[i] < 0:
-              traj[i] = 0.0
+            if -0.15 < traj[i] < 0:  
+              traj[i] = traj[i] * (abs(traj[i]) / 0.15)
     return traj
 
 
 # =========================================================
-# 邏輯模組 2：柔和跟車控制器 (整合第二份檔案的加速意圖)
+# 邏輯模組 2：增強版柔和跟車控制器（徹底除錯版）
 # =========================================================
 class SoftHoldLogic:
   def __init__(self):
@@ -143,23 +152,33 @@ class SoftHoldLogic:
     self._last_target_factor = 1.0        
     self._last_soft_hold_accel = 0.0      
 
-    # [移植] 加速意圖計數器與狀態
+    # 加速意圖計數器與狀態
     self.accel_intent_counter = 0
     self.intent_accelerating = False
+    self._accel_intent_strength = 0.0     
+    
+    # 防震盪與平滑狀態
+    self._ratio_hysteresis_state = False  
+    self._cancel_filter = 0.0             
+    self._target_factor_smooth = 1.0      
+    
+    # 【修復異常 2】：標準防震盪狀態追蹤器
+    self._last_stable_cancel_state = False
+    self._state_change_time = 0.0
 
   def process_trajectory(self, a_desired_trajectory, v_ego, lead, current_pitch, t_follow):
     should_cancel_soft_hold = False
     current_time = time.monotonic()
     
-    # [移植] 軌跡與意圖分析
+    # 軌跡與意圖分析
     recent_trajectory = a_desired_trajectory[:TRAJECTORY_HORIZON]
     has_valid_lead = lead is not None and lead.status
 
-    # 1. 依據車速計算動態所需的偵測幀數 (0~80 km/h -> 1~20 幀)
+    # 1. 動態計算所需的偵測幀數
     v_ratio = max(0.0, min((v_ego - INTENT_V_LOW) / (INTENT_V_HIGH - INTENT_V_LOW), 1.0))
     dynamic_intent_frames = int(round(INTENT_FRAMES_LOW + v_ratio * (INTENT_FRAMES_HIGH - INTENT_FRAMES_LOW)))
 
-    # 2. 判斷當下是否具備加速跡象 (MPC欲加速 > 0.05 且 前車正在遠離)
+    # 2. 判斷當下是否具備加速跡象
     moment_accel = sum(1 for a in recent_trajectory if a > 0.05) >= INTENT_LOOKAHEAD and (lead.vRel > 0.05 if has_valid_lead else True)
 
     target_factor = 1.0   
@@ -168,11 +187,16 @@ class SoftHoldLogic:
     is_lead_braking_strict = False
     skip_state_2 = False
 
-    # 狀態機 1：雷達防閃爍與【加速意圖判斷】
+    # 狀態機 1：雷達防閃爍與加速意圖判斷
     if not has_valid_lead:
         self._vrel_high_active = False
-        self.intent_accelerating = False
-        self.accel_intent_counter = 0
+        
+        # 【修復異常 4】：使用與增加率相同的對稱衰減，避免一幀雜訊秒殺意圖
+        decrement = 1.0 / max(dynamic_intent_frames, 1)
+        self._accel_intent_strength = max(0.0, self._accel_intent_strength - decrement)
+        if self._accel_intent_strength < 0.1:
+            self.intent_accelerating = False
+            self.accel_intent_counter = 0
 
         if (current_time - self._last_lead_time) < 0.5:
             if self._last_soft_hold_accel >= 0.0:
@@ -189,22 +213,28 @@ class SoftHoldLogic:
     else:
         self._last_lead_time = current_time 
         
-        # [移植] 更新加速意圖計數
         if moment_accel:
+            increment = 1.0 / max(dynamic_intent_frames, 1)
+            self._accel_intent_strength = min(1.0, self._accel_intent_strength + increment)
             self.accel_intent_counter += 1
         else:
+            # 【修復異常 4】：使用對稱衰減
+            decrement = 1.0 / max(dynamic_intent_frames, 1)
+            self._accel_intent_strength = max(0.0, self._accel_intent_strength - decrement)
             self.accel_intent_counter = 0
-            self.intent_accelerating = False
 
         # 觸發加速意圖狀態鎖定
-        if self.accel_intent_counter >= dynamic_intent_frames:
+        if self._accel_intent_strength > 0.7:  
             self.intent_accelerating = True
+        elif self._accel_intent_strength < 0.3:  
+            self.intent_accelerating = False
 
-        # 如果鎖定在加速意圖，立刻解除 Soft Hold
         if self.intent_accelerating:
-            should_cancel_soft_hold = True
+            cancel_probability = min(1.0, self._accel_intent_strength * 1.5) 
+            self._cancel_filter = 0.8 * self._cancel_filter + 0.2 * cancel_probability
+            if self._cancel_filter > 0.5:
+                should_cancel_soft_hold = True
 
-        # 原有退出條件維持
         if lead.vRel > 1.0:
             if not self._vrel_high_active:
                 self._vrel_high_active = True
@@ -237,14 +267,36 @@ class SoftHoldLogic:
 
         ratio = 10.0 if desired_dist < 0.1 else (lead_obstacle_dist / desired_dist)
         
-        # [優化] 距離比率超過 1.0 即開始傾向於退出，減少歇菜感
-        if ratio > 1.05:
+        if ratio > RATIO_ENTER_THRESHOLD:
+            self._ratio_hysteresis_state = True
+        elif ratio < RATIO_EXIT_THRESHOLD:
+            self._ratio_hysteresis_state = False
+        
+        if self._ratio_hysteresis_state:
             should_cancel_soft_hold = True
+
+    # 【修復異常 2】：使用正確且標準的防震盪(Debounce)計時器邏輯
+    if should_cancel_soft_hold != self._last_stable_cancel_state:
+        if self._state_change_time == 0.0:
+            # 狀態剛發生改變，開始計時
+            self._state_change_time = current_time
+        elif (current_time - self._state_change_time) > (SOFT_HOLD_HYSTERESIS_TIME / 2):
+            # 狀態維持超過半個滯後時間，正式接受改變
+            self._last_stable_cancel_state = should_cancel_soft_hold
+            self._state_change_time = 0.0
+    else:
+        # 狀態無變化，歸零計時器
+        self._state_change_time = 0.0
+
+    # 覆寫為濾波後的最終決策
+    should_cancel_soft_hold = self._last_stable_cancel_state
 
     # === 最終結算 ===
     if should_cancel_soft_hold:
-        target_factor = 1.0 
-        alpha = 0.40        
+        # 【終極保證】：只要決定放手，目標因子絕對鎖死在 1.0 (100% 還原動力)
+        target_factor = 1.0  
+        alpha = 0.60 if self.intent_accelerating else 0.30 
+        
     elif not skip_state_2: 
         distance_factor = 1.0 
         if current_pitch <= SOFT_HOLD_PITCH_MAX:
@@ -278,12 +330,22 @@ class SoftHoldLogic:
 
     self._last_target_factor = target_factor
     self._last_soft_hold_accel = current_soft_hold_accel
+    
+    # 低通濾波
     self._soft_hold_factor = (1.0 - alpha) * self._soft_hold_factor + alpha * target_factor
+    self._target_factor_smooth = (1.0 - TARGET_FACTOR_FILTER_ALPHA) * self._target_factor_smooth + TARGET_FACTOR_FILTER_ALPHA * self._soft_hold_factor
 
     traj = np.copy(a_desired_trajectory)
-    if self._soft_hold_factor < 0.99:
-        dynamic_limit = np.maximum(traj, 0.0) * self._soft_hold_factor + current_soft_hold_accel * (1.0 - self._soft_hold_factor)
-        traj = np.minimum(traj, dynamic_limit)
+    if self._target_factor_smooth < 0.99: 
+        hold_strength = 1.0 - self._target_factor_smooth
+        dynamic_limit = np.maximum(traj, 0.0) * self._target_factor_smooth + current_soft_hold_accel * hold_strength
+        
+        # 【修復異常 1】：移除了原本會抹殺平滑效果的 np.minimum
+        for i in range(len(traj)):
+            if traj[i] > dynamic_limit[i]:
+                # 真正的平滑過渡到限制值，不再有突兀的階躍
+                blend_factor = 0.7  
+                traj[i] = dynamic_limit[i] * blend_factor + traj[i] * (1.0 - blend_factor)
 
     return traj
 
