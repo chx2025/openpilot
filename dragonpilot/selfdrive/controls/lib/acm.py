@@ -49,7 +49,7 @@ SOFT_HOLD_RANGE_MAX = 0.99
 SOFT_HOLD_TTC_THRESHOLD = 2.5          
 VREL_DEBOUNCE_TIME = 0.6               
 
-SOFT_HOLD_SPEED_BP = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0,   60.0]
+SOFT_HOLD_SPEED_BP = [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
 SOFT_HOLD_ACCEL_V  = [1.1,  0.90,  0.70,  0.50,  0.30,  0.10, 0.0] # 使用你微調後的數值
 
 # =========================================================
