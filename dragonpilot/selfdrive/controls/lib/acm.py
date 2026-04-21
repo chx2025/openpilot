@@ -258,7 +258,7 @@ class SoftHoldLogic:
     # 狀態機 2：精細計算
     if not skip_state_2:
         # [融合克勞德優化] 前車正在遠離（vRel > 0）時不應判定為停止
-        is_lead_stopped = (lead.vLead < 1.0) and (lead.vRel <= 0.0)
+        is_lead_stopped = (lead.vLead < 1.0) and (lead.vRel <= 0.3)
         
         if v_ego_kph <= 10.0:
             is_lead_braking_strict = (lead.aLeadK < -0.1 or is_lead_stopped) and (lead.vRel < 0.5)
