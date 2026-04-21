@@ -131,7 +131,7 @@ class CoastingLogic:
         self.active = False
       else:
         if not (lead is not None and lead.status):
-          # 【修復異常 3】：線性平滑過渡，取代斷崖式歸零，徹底解決「微點頭」頓挫
+          # 線性平滑過渡，取代斷崖式歸零，徹底解決「微點頭」頓挫
           for i in range(len(traj)):
             if -0.15 < traj[i] < 0:  
               traj[i] = traj[i] * (abs(traj[i]) / 0.15)
@@ -162,7 +162,7 @@ class SoftHoldLogic:
     self._cancel_filter = 0.0             
     self._target_factor_smooth = 1.0      
     
-    # 【修復異常 2】：標準防震盪狀態追蹤器
+    # 標準防震盪狀態追蹤器
     self._last_stable_cancel_state = False
     self._state_change_time = 0.0
 
@@ -191,7 +191,7 @@ class SoftHoldLogic:
     if not has_valid_lead:
         self._vrel_high_active = False
         
-        # 【修復異常 4】：使用與增加率相同的對稱衰減，避免一幀雜訊秒殺意圖
+        # 使用與增加率相同的對稱衰減，避免一幀雜訊秒殺意圖
         decrement = 1.0 / max(dynamic_intent_frames, 1)
         self._accel_intent_strength = max(0.0, self._accel_intent_strength - decrement)
         if self._accel_intent_strength < 0.1:
@@ -218,7 +218,6 @@ class SoftHoldLogic:
             self._accel_intent_strength = min(1.0, self._accel_intent_strength + increment)
             self.accel_intent_counter += 1
         else:
-            # 【修復異常 4】：使用對稱衰減
             decrement = 1.0 / max(dynamic_intent_frames, 1)
             self._accel_intent_strength = max(0.0, self._accel_intent_strength - decrement)
             self.accel_intent_counter = 0
@@ -248,7 +247,7 @@ class SoftHoldLogic:
             should_cancel_soft_hold = True
 
     # 狀態機 2：精細計算
-    if not should_cancel_soft_hold and not skip_state_2:
+    if not skip_state_2:
         is_lead_stopped = (lead.vLead < 1.0) and (lead.vRel <= 0.3)  
         
         if v_ego_kph <= 10.0:
@@ -267,15 +266,16 @@ class SoftHoldLogic:
 
         ratio = 10.0 if desired_dist < 0.1 else (lead_obstacle_dist / desired_dist)
         
-        if ratio > RATIO_ENTER_THRESHOLD:
-            self._ratio_hysteresis_state = True
-        elif ratio < RATIO_EXIT_THRESHOLD:
-            self._ratio_hysteresis_state = False
-        
-        if self._ratio_hysteresis_state:
-            should_cancel_soft_hold = True
+        if not should_cancel_soft_hold:
+            if ratio > RATIO_ENTER_THRESHOLD:
+                self._ratio_hysteresis_state = True
+            elif ratio < RATIO_EXIT_THRESHOLD:
+                self._ratio_hysteresis_state = False
+            
+            if self._ratio_hysteresis_state:
+                should_cancel_soft_hold = True
 
-    # 【修復異常 2】：使用正確且標準的防震盪(Debounce)計時器邏輯
+    # 使用正確且標準的防震盪(Debounce)計時器邏輯
     if should_cancel_soft_hold != self._last_stable_cancel_state:
         if self._state_change_time == 0.0:
             # 狀態剛發生改變，開始計時
@@ -340,10 +340,9 @@ class SoftHoldLogic:
         hold_strength = 1.0 - self._target_factor_smooth
         dynamic_limit = np.maximum(traj, 0.0) * self._target_factor_smooth + current_soft_hold_accel * hold_strength
         
-        # 【修復異常 1】：移除了原本會抹殺平滑效果的 np.minimum
+        # 真正的平滑過渡到限制值，不再有突兀的階躍
         for i in range(len(traj)):
             if traj[i] > dynamic_limit[i]:
-                # 真正的平滑過渡到限制值，不再有突兀的階躍
                 blend_factor = 0.7  
                 traj[i] = dynamic_limit[i] * blend_factor + traj[i] * (1.0 - blend_factor)
 
