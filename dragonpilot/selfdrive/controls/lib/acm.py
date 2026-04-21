@@ -74,9 +74,14 @@ class CoastingLogic:
   def check_emergency(self, lead, v_ego, current_time):
     if not lead or not lead.status:
       return False
-    closing_speed = max(v_ego - lead.vLead, 0.1)
-    lead_ttc = lead.dRel / closing_speed 
-    relative_speed = v_ego - lead.vLead         
+
+    # [融合克勞德優化] 前車比自車快或等速時，不需要緊急煞車，直接返回 False
+    closing_speed = v_ego - lead.vLead
+    if closing_speed <= 0:
+      return False
+    lead_ttc = lead.dRel / closing_speed
+
+    relative_speed = v_ego - lead.vLead
     min_dist_for_speed = np.interp(v_ego, SPEED_BP, MIN_DIST_V)
 
     if (lead_ttc < EMERGENCY_TTC) or \
@@ -88,7 +93,11 @@ class CoastingLogic:
 
   def update_lead_status(self, lead, v_ego, current_time):
     if lead and lead.status:
-      closing_speed = max(v_ego - lead.vLead, 0.1)
+      # [融合克勞德優化] 修正 closing_speed 邏輯，前車更快時不計算 TTC
+      closing_speed = v_ego - lead.vLead
+      if closing_speed <= 0:
+        self._has_lead = False
+        return
       lead_ttc = lead.dRel / closing_speed
       current_ttc_threshold = np.interp(v_ego, TTC_BP, TTC_V) 
       if lead_ttc < current_ttc_threshold:
@@ -131,10 +140,10 @@ class CoastingLogic:
         self.active = False
       else:
         if not (lead is not None and lead.status):
-          # 線性平滑過渡，取代斷崖式歸零，徹底解決「微點頭」頓挫
-          for i in range(len(traj)):
-            if -0.15 < traj[i] < 0:  
-              traj[i] = traj[i] * (abs(traj[i]) / 0.15)
+          # [融合與修復] 使用 Numpy 矩陣運算，搭配拋物線衰減公式
+          # 讓 -0.15 的微煞車平滑過渡到 0.0，徹底消除微點頭
+          mask = (traj > -0.15) & (traj < 0.0)
+          traj[mask] = traj[mask] * (np.abs(traj[mask]) / 0.15)
     return traj
 
 
@@ -248,7 +257,8 @@ class SoftHoldLogic:
 
     # 狀態機 2：精細計算
     if not skip_state_2:
-        is_lead_stopped = (lead.vLead < 1.0) and (lead.vRel <= 0.3)  
+        # [融合克勞德優化] 前車正在遠離（vRel > 0）時不應判定為停止
+        is_lead_stopped = (lead.vLead < 1.0) and (lead.vRel <= 0.0)
         
         if v_ego_kph <= 10.0:
             is_lead_braking_strict = (lead.aLeadK < -0.1 or is_lead_stopped) and (lead.vRel < 0.5)
@@ -340,11 +350,14 @@ class SoftHoldLogic:
         hold_strength = 1.0 - self._target_factor_smooth
         dynamic_limit = np.maximum(traj, 0.0) * self._target_factor_smooth + current_soft_hold_accel * hold_strength
         
-        # 真正的平滑過渡到限制值，不再有突兀的階躍
-        for i in range(len(traj)):
-            if traj[i] > dynamic_limit[i]:
-                blend_factor = 0.7  
-                traj[i] = dynamic_limit[i] * blend_factor + traj[i] * (1.0 - blend_factor)
+        # [融合克勞德優化] 向量化取代 for 迴圈，消除逐元素迭代的潛在 bug 並提升效能
+        blend_factor = 0.7
+        exceeds_mask = traj > dynamic_limit
+        traj = np.where(
+            exceeds_mask,
+            dynamic_limit * blend_factor + traj * (1.0 - blend_factor),
+            traj
+        )
 
     return traj
 
