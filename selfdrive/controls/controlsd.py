@@ -73,7 +73,6 @@ class Controls:
       if len(self.CP.lateralTuning.torque.as_builder().to_dict()) > 0:
         # ⚠️ 確保 latcontrol_dynamic.py 放在正確的路徑
         # 由於 DP 沒有 CP_SP，因此直接傳入 (self.CP, self.CI, DT_CTRL)
-        # 前面我們改寫的 latcontrol_dynamic.py 已經用 *args, **kwargs 做好兼容，不會報錯
         from openpilot.selfdrive.controls.lib.latcontrol_dynamic import LatControlDynamic
         self.LaC = LatControlDynamic(self.CP, self.CI, DT_CTRL)
         cloudlog.info("LatControlDynamic successfully initialized for TSS2_CAR.")
@@ -180,10 +179,13 @@ class Controls:
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
     actuators.curvature = self.desired_curvature
-    # 如果 LaC 是動態控制器，lac_log 會自動根據當下主控者回傳對應的 log
+    
+    # ==============================================================
+    # 🌟 修改重點：同步補上 self.calibrated_pose 傳遞給 LaC.update
+    # ==============================================================
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                        self.steer_limited_by_safety, self.desired_curvature,
-                                                       curvature_limited, lat_delay)
+                                                       self.calibrated_pose, curvature_limited, lat_delay)
 
     # --- 讀取大腦內部決定並寫入 Enum ---
     if hasattr(self.LaC, 'use_angle'):
