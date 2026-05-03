@@ -6,7 +6,7 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 class LatControlDynamic(LatControl):
   def __init__(self, CP, CI, dt):
     super().__init__(CP, CI, dt)
-    # 同時初始化兩個控制器
+    # 同時初始化兩個控制器 (DP版不傳入 CP_SP)
     self.angle_ctrl = LatControlAngle(CP, CI, dt)
     self.torque_ctrl = LatControlTorque(CP, CI, dt)
 
@@ -14,7 +14,7 @@ class LatControlDynamic(LatControl):
     self.use_angle = (CP.steerControlType == car.CarParams.SteerControlType.angle)
 
   # ==========================================
-  # 🌟 新增：Sunnypilot Torque 專屬代理轉發 (Proxy)
+  # 🌟 新增：Torque 專屬代理轉發 (Proxy)
   # ==========================================
   @property
   def extension(self):
@@ -27,28 +27,28 @@ class LatControlDynamic(LatControl):
       self.torque_ctrl.update_live_torque_params(latAccelFactor, latAccelOffset, frictionCoefficient)
   # ==========================================
 
-  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay):
-    # 定義「安全直行狀態」：方向盤打角小於 10 度，且轉動速率小於 5 度/秒
-    #is_safe_to_switch = abs(CS.steeringAngleDeg) < 10.0 and abs(CS.steeringRateDeg) < 5.0
-    is_safe_to_switch = True
+  # 修正 2：補上 calibrated_pose 引數
+  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
+    # 修正 3：恢復「安全直行狀態」的保護機制，防止過彎中硬切換
+    is_safe_to_switch = abs(CS.steeringAngleDeg) < 10.0 and abs(CS.steeringRateDeg) < 5.0
 
-    # 1. 判斷主控權與遲滯區間，並且鎖死過彎時的切換 預設22.0
+    # 1. 判斷主控權與遲滯區間，並且鎖死過彎時的切換 (維持 DP 原版的 8.33 / 5.56 m/s 設定)
     if CS.vEgo > 8.33 and not self.use_angle and is_safe_to_switch:
       self.use_angle = True
       self.angle_ctrl.reset()  # 確保角度控制器狀態乾淨
-    #預設16.0
+      
     elif CS.vEgo < 5.56 and self.use_angle and is_safe_to_switch:
       self.use_angle = False
       self.torque_ctrl.reset() # 確保扭矩控制器狀態乾淨
       if hasattr(self.torque_ctrl, 'pid'):
         self.torque_ctrl.pid.reset() # 徹底清除積分
 
-    # 2. Angle 控制器永遠運算 (幾何計算，無風險)
-    _, a_steer, a_log = self.angle_ctrl.update(active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay)
+    # 2. Angle 控制器永遠運算 (幾何計算，無風險) - 同步傳遞 calibrated_pose
+    _, a_steer, a_log = self.angle_ctrl.update(active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay)
 
-    # 3. Torque 控制器永遠運算 (熱備援)
+    # 3. Torque 控制器永遠運算 (熱備援) - 同步傳遞 calibrated_pose
     torque_is_frozen = True if self.use_angle else steer_limited_by_safety
-    t_steer, _, t_log = self.torque_ctrl.update(active, CS, VM, params, torque_is_frozen, desired_curvature, curvature_limited, lat_delay)
+    t_steer, _, t_log = self.torque_ctrl.update(active, CS, VM, params, torque_is_frozen, desired_curvature, calibrated_pose, curvature_limited, lat_delay)
 
     # 4. 雙輸出合併：回傳 (扭矩輸出, 角度輸出, 當前主控的Log)
     if self.use_angle:
