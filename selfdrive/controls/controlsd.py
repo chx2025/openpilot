@@ -180,12 +180,10 @@ class Controls:
 
     actuators.curvature = self.desired_curvature
     
-    # ==============================================================
-    # 🌟 修改重點：同步補上 self.calibrated_pose 傳遞給 LaC.update
-    # ==============================================================
+    # ⚠️ 修正重點：回復為 8 個參數，移除 self.calibrated_pose
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                        self.steer_limited_by_safety, self.desired_curvature,
-                                                       self.calibrated_pose, curvature_limited, lat_delay)
+                                                       curvature_limited, lat_delay)
 
     # --- 讀取大腦內部決定並寫入 Enum ---
     if hasattr(self.LaC, 'use_angle'):
