@@ -51,12 +51,6 @@ class LatControlDynamic(LatControl):
     t_steer, _, t_log = self.torque_ctrl.update(active, CS, VM, params, torque_is_frozen, desired_curvature, curvature_limited, lat_delay)
 
     # 4. 雙輸出合併：回傳 (扭矩輸出, 角度輸出, 當前主控的Log)
-    
-    # 🌟 新增安全限幅：防止 a_steer 超過豐田 EPS 極限導致儀表板報錯
-    # 將最大請求角度限制在正負 85 度內 (安全預留空間)
-    MAX_SAFE_ANGLE = 85.0
-    a_steer = max(-MAX_SAFE_ANGLE, min(MAX_SAFE_ANGLE, a_steer))
-
     if self.use_angle:
       return t_steer, a_steer, a_log
     else:
