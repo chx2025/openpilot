@@ -180,13 +180,7 @@ class CarController(CarControllerBase):
 
       # TORQUE_WIND_DOWN at 0 ramps down torque at roughly the max down rate of 1500 units/sec
       torque_wind_down = 100 if lta_active and full_torque_condition else 0
-      
-      # 🌟 豐田原廠 EPS 保護機制：強制鎖死送出的角度不超過 85 度
-      # 避免原地打方向盤或過大彎超過 90 度時，引發 PCS 故障報錯
-      MAX_SAFE_ANGLE = 85.0
-      safe_lta_angle = max(-MAX_SAFE_ANGLE, min(MAX_SAFE_ANGLE, self.last_angle))
-
-      can_sends.append(toyotacan.create_lta_steer_command(self.packer, self.steer_control_type, safe_lta_angle,
+      can_sends.append(toyotacan.create_lta_steer_command(self.packer, self.steer_control_type, self.last_angle,
                                                           lta_active, self.frame // 2, torque_wind_down))
 
       if self.CP.flags & ToyotaFlags.SECOC.value:
