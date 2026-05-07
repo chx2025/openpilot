@@ -35,7 +35,7 @@ class HumanTurnDetection:
 
         # --- 1. UI 控制參數 (從 Params 讀取) ---
         self._enabled = False                # [修正1] 預設 False，等第一次 _read_params() 從 Params 讀取
-        self._angle_threshold_deg = 90.0
+        self._angle_threshold_deg = 60.0
 
         # --- 2. 系統內建參數 (不從 Params 讀取) ---
         self._angle_release_deg = 20.0
@@ -67,7 +67,7 @@ class HumanTurnDetection:
             
         self._last_params_read = now
         self._enabled = self._params.get_bool("dp_htd_enabled")
-        self._angle_threshold_deg = self._get_float("dp_htd_turn_angle_threshold", 90.0)
+        self._angle_threshold_deg = self._get_float("dp_htd_turn_angle_threshold", 60.0)
 
     def _transition(self, new_state: HTDState, reason: str) -> None:
         """處理狀態切換並記錄 Log"""
