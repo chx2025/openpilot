@@ -58,7 +58,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"IsDriverViewEnabled", {CLEAR_ON_MANAGER_START, BOOL}},
     {"IsEngaged", {PERSISTENT, BOOL}},
     {"IsLdwEnabled", {PERSISTENT, BOOL}},
-    {"IsMetric", {PERSISTENT, BOOL}},
+    {"IsMetric", {PERSISTENT, BOOL, "1"}},  // 已修改：公制單位預設開啟
     {"IsOffroad", {CLEAR_ON_MANAGER_START, BOOL}},
     {"IsOnroad", {PERSISTENT, BOOL}},
     {"IsRhdDetected", {PERSISTENT, BOOL}},
@@ -107,7 +107,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"PrimeType", {PERSISTENT, INT}},
     {"RecordAudio", {PERSISTENT, BOOL}},
     {"RecordAudioFeedback", {PERSISTENT, BOOL, "0"}},
-    {"RecordFront", {PERSISTENT, BOOL}},
+    {"RecordFront", {PERSISTENT, BOOL, "0"}},  // 已修改：車內監控鏡頭預設關閉
     {"RecordFrontLock", {PERSISTENT, BOOL}},  // for the internal fleet
     {"SecOCKey", {PERSISTENT | DONT_LOG, STRING}},
     {"ShowDebugInfo", {PERSISTENT, BOOL}},
@@ -133,7 +133,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_dev_reset_conf", {CLEAR_ON_MANAGER_START, BOOL, "0"}},
     {"dp_dev_beep", {PERSISTENT, BOOL, "0"}},
     {"dp_dev_is_rhd", {PERSISTENT, BOOL, "0"}},
-    {"dp_lat_alka", {PERSISTENT, BOOL, "0"}},
+    {"dp_lat_alka", {PERSISTENT, BOOL, "1"}},  // 已修改：alka預設開啟
     {"dp_ui_display_mode", {PERSISTENT, INT, "0"}},
     {"dp_dev_model_selected", {PERSISTENT, STRING}},
     {"dp_dev_model_list", {PERSISTENT, STRING}},
@@ -174,3 +174,5 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AccelPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPlanDP::AccelerationPersonality::NORMAL))}},
     {"AccelPersonalityEnabled", {PERSISTENT, BOOL, "1"}},
 };
+
+}
