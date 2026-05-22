@@ -174,5 +174,3 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AccelPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPlanDP::AccelerationPersonality::NORMAL))}},
     {"AccelPersonalityEnabled", {PERSISTENT, BOOL, "1"}},
 };
-
-}
