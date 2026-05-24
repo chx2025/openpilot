@@ -36,8 +36,8 @@ ROAD_CAM_MIN_SPEED = 10  # m/s (25 mph)
 
 CAM_Y_OFFSET = 20
 
-# --- [新增] DP BSM & 方向燈常數 ---
-DP_INDICATOR_SIZE = 15
+# --- [修正] DP BSM & 方向燈常數 ---
+DP_INDICATOR_SIZE = 30  # 調整為 30，與 C3 版本的 UI_BORDER_SIZE 相近，使其更明顯
 DP_INDICATOR_BLINK_RATE_FAST = int(gui_app.target_fps * 0.25)
 DP_INDICATOR_BLINK_RATE_STD = int(gui_app.target_fps * 0.5)
 DP_INDICATOR_COLOR_BSM = rl.Color(255, 255, 0, 255)
@@ -249,30 +249,33 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer.set_can_draw_top_icons(alert_to_render is None)
     self._hud_renderer.set_wheel_critical_icon(alert_to_render is not None and not not_animating_out and
                                                alert_to_render.visual_alert == car.CarControl.HUDControl.VisualAlert.steerRequired)
-    # TODO: have alert renderer draw offroad mici label below
+    
     if ui_state.started:
       self._alert_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
 
-    # Draw fake rounded border
+    # Draw fake rounded border (注意此處的厚度為 50)
     rl.draw_rectangle_rounded_lines_ex(self._content_rect, 0.2 * 1.02, 10, 50, rl.BLACK)
 
-    # End clipping region
-    rl.end_scissor_mode()
-
-    # --- [新增] 繪製兩側 BSM 與 方向燈條 ---
+    # --- [修正] 繪製兩側 BSM 與 方向燈條 ---
+    # 移到 end_scissor_mode 之前，並往內縮 50 像素以完美避開上方的 fake rounded border
     if ui_state.started:
       indicator_y = int(self._content_rect.y + 4 * DP_INDICATOR_SIZE)
       indicator_height = int(self._content_rect.height - 8 * DP_INDICATOR_SIZE)
       
-      # 左側提示條 (貼著螢幕最左側)
+      # 左側提示條 (貼著黑色邊框內側)
       if self._dp_indicator_show_left:
-        rl.draw_rectangle(int(self._content_rect.x), indicator_y, DP_INDICATOR_SIZE, indicator_height, self._dp_indicator_color_left)
+        left_x = int(self._content_rect.x) + 50
+        rl.draw_rectangle(left_x, indicator_y, DP_INDICATOR_SIZE, indicator_height, self._dp_indicator_color_left)
       
-      # 右側提示條 (貼著相機畫面的最右側，避開 MICI 側邊欄)
+      # 右側提示條 (貼著黑色邊框內側)
       if self._dp_indicator_show_right:
-        rl.draw_rectangle(int(self._content_rect.x + self._content_rect.width - DP_INDICATOR_SIZE), indicator_y, DP_INDICATOR_SIZE, indicator_height, self._dp_indicator_color_right)
+        right_x = int(self._content_rect.x + self._content_rect.width) - 50 - DP_INDICATOR_SIZE
+        rl.draw_rectangle(right_x, indicator_y, DP_INDICATOR_SIZE, indicator_height, self._dp_indicator_color_right)
     # ------------------------------------
+
+    # End clipping region
+    rl.end_scissor_mode()
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
@@ -331,7 +334,6 @@ class AugmentedRoadView(CameraView):
 
   def _calc_frame_matrix(self, rect: rl.Rectangle) -> np.ndarray:
     # Get camera configuration
-    # TODO: cache with vEgo?
     calib_time = ui_state.sm.recv_frame['liveCalibration']
     current_dims = (self._content_rect.width, self._content_rect.height)
     device_camera = self.device_camera or DEFAULT_DEVICE_CAMERA
