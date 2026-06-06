@@ -5,6 +5,7 @@ Dynamic Turn Speed Controller (DTSC) - v27 物理重生版 (Golden Right Foot Hy
 2. 融合 Candy 版「老司機黃金右腳」：引進加速度低通濾波 (LPF) 與速度階梯爬升。
 3. 採用「出彎實體壓制」+「狀態死咬 (Hysteresis Recovery)」雙重出彎防護。
 4. 保留 v27 防變道急煞濾波參數，完美免疫高速公路變換車道的幽靈急煞。
+5. 移除 HTD，保留 0.95 靜態安全緩衝係數以優化休旅車高重心側傾體感。
 """
 
 import time
@@ -24,7 +25,7 @@ DT_MPC = 0.05
 FILE_LOG_ENABLED = False
 
 LAT_LIMIT_BP = [5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 25.0, 30.0]
-LAT_LIMIT_V  = [1.9, 1.9, 2.0,  2.0,  2.0,  2.3,  2.5,  2.7,  2.8]
+LAT_LIMIT_V  = [1.9, 1.9, 2.0,  2.0,  2.0,  2.3,  2.4,  2.5,  2.6]
 
 DECEL_BP = np.array([1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.3, 2.6, 3.0])
 DECEL_V  = np.array([0.0, -0.1, -0.3, -0.5, -0.8, -1.1, -1.4, -1.8, -2.3])
@@ -80,6 +81,9 @@ class DTSC:
         self.lpf_reset_timer = 0.0
         self.last_log_time = 0.0
         
+        # 補回靜態安全緩衝係數 (0.95 提供 5% 的體感降速緩衝)
+        self.safety_speed_factor = 0.95
+        
         # [Candy 融合] 黃金右腳狀態變數
         self.smoothed_a_target = 0.0  
         self.output_v_target = V_CRUISE_MAX
@@ -130,8 +134,8 @@ class DTSC:
         v_clip = np.clip(v_pred, 1.0, 100.0)
         curvatures = np.abs(yaw_rates / v_clip)
         
-        # 回歸純淨的物理極限計算
-        safe_speeds = np.sqrt(current_lat_limits / (curvatures + 1e-6))
+        # 套用 0.95 安全係數，讓彎道極限略微收斂
+        safe_speeds = np.sqrt(current_lat_limits / (curvatures + 1e-6)) * self.safety_speed_factor
         return safe_speeds, curvatures
 
     def _compute_sp_decel(self, predicted_lat_acc_max):
