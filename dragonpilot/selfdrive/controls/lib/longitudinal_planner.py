@@ -52,7 +52,7 @@ class LongitudinalPlannerDP:
     CS = sm['carState']
     CC = sm['carControl']
 
-    self.dtsc.update(sm, v_ego, a_ego, v_cruise)
+    # [修改] 已經移除 self.dtsc.update(...) 呼叫，因為 DTSC 已純淨化，不再依賴外部動態刷新
 
     # 控制參考來源
     # output_v_target = 目標巡航速度
