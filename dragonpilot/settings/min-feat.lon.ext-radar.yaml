@@ -1,8 +1,8 @@
 settings:
   - key: dp_lon_ext_radar
     type: toggle_item
-    title: "Use External Radar"
-    description: "See https://github.com/eFiniLan/openpilot-ext-radar-addon for more information."
+    title: "使用外部雷達"
+    description: "更多信息請參閱 https://github.com/eFiniLan/openpilot-ext-radar-addon"
     category: "Device"
     flags: PERSISTENT
     param_type: BOOL

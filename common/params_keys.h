@@ -155,7 +155,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_lat_lca_speed", {PERSISTENT, INT, "20"}},
     {"dp_lat_lca_auto_sec", {PERSISTENT, FLOAT, "0.0"}},
     {"dp_lat_road_edge_detection", {PERSISTENT, BOOL, "0"}},
-    {"dp_lon_acm", {PERSISTENT, BOOL, "0"}},
+    {"dp_lon_ocm", {PERSISTENT, BOOL, "0"}},
     {"dp_lon_aem", {PERSISTENT, BOOL, "0"}},
     {"dp_lon_apm", {PERSISTENT, BOOL, "0"}},
     {"dp_lon_ext_radar", {PERSISTENT, BOOL, "0"}},

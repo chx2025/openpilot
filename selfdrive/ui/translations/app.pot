@@ -820,4 +820,15 @@ msgstr ""
 #: openpilot/selfdrive/ui/onroad/alert_renderer.py
 msgid "Reboot Device"
 msgstr ""
+#: dragonpilot/settings.py:123
+#, python-format
+msgid "cm"
+msgstr ""
 
+#: dragonpilot/settings.py:84 dragonpilot/settings.py:101
+#: dragonpilot/settings.py:193 dragonpilot/settings.py:208
+#: dragonpilot/settings.py:255 dragonpilot/settings.py:269
+#: dragonpilot/settings.py:293
+#, python-format
+msgid "Off"
+msgstr ""

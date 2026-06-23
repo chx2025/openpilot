@@ -1,0 +1,28 @@
+settings:
+  - key: AccelPersonalityEnabled
+    type: toggle_item
+    title: "動態加速性格"
+    description: "動態加速度切換"
+    category: "Longitudinal"
+    #condition: "openpilotLongitudinalControl"
+    flags: PERSISTENT
+    param_type: BOOL
+    default: "0"
+    on_change:
+      - target: AccelPersonality
+        action: set_enabled
+        condition: "value"
+
+  - key: AccelPersonality
+    type: text_spin_button_item
+    title: "加速性格"
+    description: "動態加速度選擇模式"
+    category: "Longitudinal"
+    #condition: "openpilotLongitudinalControl"
+    flags: PERSISTENT
+    param_type: INT
+    default: "1"
+    options:
+      - "Sport"
+      - "Normal"
+      - "Eco"

@@ -1,10 +1,10 @@
 settings:
   - key: dp_lat_alka
     type: toggle_item
-    title: "Always-on Lane Keeping Assist (ALKA)"
-    description: "Enable lateral control even when ACC/cruise is disengaged, using ACC Main or LKAS button to toggle. Vehicle must be moving."
+    title: "全时车道保持辅助 (ALKA)"
+    description: "即使在 ACC/巡航未启用时也能启用横向控制，通过 ACC Main 或 LKAS 按钮切换。车辆必须在行驶中。"
     category: "Lateral"
-    brands: ["toyota", "hyundai", "honda", "volkswagen", "subaru", "mazda", "nissan", "ford"]
+    #brands: ["toyota", "hyundai", "honda", "volkswagen", "subaru", "mazda", "nissan", "ford"]
     flags: PERSISTENT
     param_type: BOOL
-    default: "0"
+    default: "1"

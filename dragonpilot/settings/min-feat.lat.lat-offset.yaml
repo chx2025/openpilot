@@ -1,8 +1,8 @@
 settings:
   - key: dp_lat_offset_cm
     type: spin_button_item
-    title: "Position Offset"
-    description: "Fine-tune where the car drives within the lane. Positive values move the car left, negative values move right.<br>Recommended to start with small values (±5cm) and adjust based on preference."
+    title: "位置偏移"
+    description: "微調車輛在車道內的行駛位置。正值向左偏移，負值向右偏移。<br>建議從較小的數值（±5cm）開始，根據偏好調整。"
     category: "Lateral"
     default: 0
     min_val: -15

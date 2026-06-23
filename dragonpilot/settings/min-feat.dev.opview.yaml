@@ -1,8 +1,8 @@
 settings:
   - key: dp_dev_opview
     type: toggle_item
-    title: "Enable opview"
-    description: "Broadcasts telemetry to the opview App (available on Android). Requires the companion App to be running on an external display."
+    title: "啟用 opview"
+    description: "向 opview App（Android 可用）廣播遙測數據。需要在外接顯示器上運行配套 App。"
     category: "Device"
     flags: PERSISTENT
     param_type: BOOL

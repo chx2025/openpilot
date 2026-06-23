@@ -1,3 +1,7 @@
+import math
+import shutil
+import threading
+import time
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
@@ -7,12 +11,20 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
-from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
+#from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
+#from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 
 # Constants
 SET_SPEED_NA = 255
 KM_TO_MILE = 0.621371
 CRUISE_DISABLED_CHAR = '–'
+
+# DP Perf Constants (字體恢復為 50)
+PERF_FONT_SIZE = 50
+PERF_PADDING = 14
+PERF_MARGIN_BOTTOM = 0   # 設定為 0 以貼齊底部
+PERF_ITEM_GAP = 50
+PERF_BG_COLOR = rl.Color(0, 0, 0, 160)
 
 
 @dataclass(frozen=True)
@@ -38,7 +50,7 @@ class FontSizes:
 class Colors:
   WHITE = rl.WHITE
   DISENGAGED = rl.Color(145, 155, 149, 255)
-  OVERRIDE = rl.Color(145, 155, 149, 255)  # Added
+  OVERRIDE = rl.Color(145, 155, 149, 255)
   ENGAGED = rl.Color(128, 216, 166, 255)
   DISENGAGED_BG = rl.Color(0, 0, 0, 153)
   OVERRIDE_BG = rl.Color(145, 155, 149, 204)
@@ -66,6 +78,10 @@ class HudRenderer(Widget):
     self.set_speed: float = SET_SPEED_NA
     self.speed: float = 0.0
     self.v_ego_cluster_seen: bool = False
+    
+    # 前車距離字串與數值變數
+    self.lead_dist: str = "-"
+    self.lead_dist_raw: float = 0.0
 
     self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
     self._font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
@@ -73,7 +89,15 @@ class HudRenderer(Widget):
 
     self._exp_button: ExpButton = ExpButton(UI_CONFIG.button_size, UI_CONFIG.wheel_icon_size)
 
-    self._torque_bar = TorqueBar(scale=4.0)
+    #self._torque_bar = TorqueBar(scale=4.0)
+
+    # Lincoln perf overlay init
+    self._perf_font = gui_app.font(FontWeight.MEDIUM)
+    self._perf_stats: dict[str, str] = {"cpu_temp": "-", "mem_usage": "-", "disk_free": "-"}
+    self._perf_lock = threading.Lock()
+    self._perf_running = True
+    self._perf_thread = threading.Thread(target=self._perf_update_loop, daemon=True)
+    self._perf_thread.start()
 
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
@@ -82,10 +106,21 @@ class HudRenderer(Widget):
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
       self.speed = 0.0
+      self.lead_dist = "-"
+      self.lead_dist_raw = 0.0
       return
 
     controls_state = sm['controlsState']
     car_state = sm['carState']
+    radar_state = sm['radarState']
+
+    # 紀錄真實距離並格式化字串
+    if radar_state.leadOne.status:
+      self.lead_dist_raw = radar_state.leadOne.dRel
+      self.lead_dist = f"{self.lead_dist_raw:.0f}m"
+    else:
+      self.lead_dist_raw = 0.0
+      self.lead_dist = "-"
 
     v_cruise_cluster = car_state.vCruiseCluster
     self.set_speed = (
@@ -124,8 +159,11 @@ class HudRenderer(Widget):
     button_y = rect.y + UI_CONFIG.border_size
     self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
 
-    if ui_state.sm['controlsState'].lateralControlState.which() != 'angleState':
-      self._torque_bar.render(rect)
+    #if ui_state.sm['controlsState'].lateralControlState.which() != 'angleState':
+      #self._torque_bar.render(rect)
+
+    # Draw performance info at bottom
+    self._draw_performance_info(rect)
 
   def user_interacting(self) -> bool:
     return self._exp_button.is_pressed
@@ -184,3 +222,134 @@ class HudRenderer(Widget):
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
+
+  # --------------------------------------------------------------------------
+  # DP Performance Info Methods
+  # --------------------------------------------------------------------------
+
+  def _draw_performance_info(self, rect: rl.Rectangle) -> None:
+    if rect.width <= 0 or rect.height <= 0:
+      return
+
+    stats = self._get_perf_stats()
+    control_text = self._get_control_state_text()
+
+    lead_dist = self.lead_dist
+    cpu_temp = stats.get("cpu_temp", "-")
+    mem_usage = stats.get("mem_usage", "-")
+    disk_free = stats.get("disk_free", "-")
+
+    # Order: Lead Dist -> CPU Temp -> Memory -> Disk Free -> Control
+    items = [
+      f"{tr('Lead Dist')} {lead_dist}",
+      f"{tr('CPU Temp')} {cpu_temp}",
+      f"{tr('Memory')} {mem_usage}",
+      f"{tr('Disk Free')} {disk_free}",
+      f"{control_text}",
+    ]
+
+    measurements = [measure_text_cached(self._perf_font, text, PERF_FONT_SIZE) for text in items]
+
+    # 設定整個狀態列的總寬度 (稍微留點邊距)
+    bar_width = max(rect.width - 20, 0)
+    bar_height = PERF_FONT_SIZE + 2 * PERF_PADDING
+
+    bar_x = rect.x + (rect.width - bar_width) / 2
+    # Apply 0 margin to stick to bottom
+    bar_y = rect.y + rect.height - bar_height - PERF_MARGIN_BOTTOM
+    minimum_y = rect.y + PERF_MARGIN_BOTTOM
+    if bar_y < minimum_y:
+      bar_y = minimum_y
+
+    rl.draw_rectangle_rounded(
+      rl.Rectangle(bar_x, bar_y, bar_width, bar_height),
+      0.2,
+      8,
+      PERF_BG_COLOR,
+    )
+
+    # 將總寬度均分為等寬的 5 個欄位 (slots)
+    slot_width = bar_width / len(items)
+    text_y = bar_y + PERF_PADDING
+
+    for i, (text, measurement) in enumerate(zip(items, measurements)):
+      # 精準置中演算法
+      cursor_x = bar_x + (i * slot_width) + (slot_width - measurement.x) / 2
+
+      text_color = rl.WHITE
+      # 動態決定前車距離的顏色 (小於 15 公尺時顯示橘色)
+      if i == 0 and self.lead_dist != "-" and self.lead_dist_raw < 15.0:
+        text_color = rl.Color(255, 188, 0, 200)
+      # 當控制狀態不為自動巡航時，文字改為黃色
+      elif i == 4 and ui_state.status != UIStatus.ENGAGED:
+        text_color = rl.YELLOW
+
+      rl.draw_text_ex(self._perf_font, text, rl.Vector2(cursor_x, text_y), PERF_FONT_SIZE, 0, text_color)
+
+  def _get_control_state_text(self) -> str:
+    status = ui_state.status
+    if status == UIStatus.ENGAGED:
+      return tr("Auto control")
+    return tr("Manual control")
+
+  def _get_perf_stats(self) -> dict[str, str]:
+    with self._perf_lock:
+      return dict(self._perf_stats)
+
+  def _perf_update_loop(self) -> None:
+    time.sleep(10)
+    while self._perf_running:
+      stats = {
+        "cpu_temp": self._read_cpu_temp(),
+        "mem_usage": self._read_mem_usage(),
+        "disk_free": self._read_disk_free(),
+      }
+      with self._perf_lock:
+        self._perf_stats.update(stats)
+      for _ in range(10):
+        if not self._perf_running:
+          return
+        time.sleep(0.1)
+
+  @staticmethod
+  def _read_cpu_temp() -> str:
+    path = "/sys/class/thermal/thermal_zone0/temp"
+    try:
+      with open(path) as f:
+        temp_c = int(f.read().strip()) / 1000.0
+        return f"{temp_c:.0f}°C"
+    except Exception:
+      return "-"
+
+  @staticmethod
+  def _read_mem_usage() -> str:
+    try:
+      total_kb = None
+      available_kb = None
+      with open("/proc/meminfo") as f:
+        for line in f:
+          if line.startswith("MemTotal:"):
+            total_kb = float(line.split()[1])
+          elif line.startswith("MemAvailable:"):
+            available_kb = float(line.split()[1])
+          if total_kb is not None and available_kb is not None:
+            break
+      if total_kb and available_kb:
+        used_pct = (total_kb - available_kb) / total_kb * 100.0
+        used_pct = min(max(used_pct, 0.0), 100.0)
+        return f"{used_pct:.0f}%"
+    except Exception:
+      pass
+    return "-"
+
+  @staticmethod
+  def _read_disk_free() -> str:
+    try:
+      usage = shutil.disk_usage("/data")
+      free_gb = usage.free / (1024 ** 3)
+      if free_gb >= 1.0:
+        return f"{free_gb:.1f}G" # GB 改為 G
+      free_mb = usage.free / (1024 ** 2)
+      return f"{free_mb:.0f}MB"   #
+    except Exception:
+      return "-"

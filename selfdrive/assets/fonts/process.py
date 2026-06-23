@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import gettext
 import json
 
 import pyray as rl
@@ -10,9 +9,9 @@ SELFDRIVE_DIR = FONT_DIR.parents[1]
 TRANSLATIONS_DIR = SELFDRIVE_DIR / "ui" / "translations"
 LANGUAGES_FILE = TRANSLATIONS_DIR / "languages.json"
 
-GLYPH_PADDING = 6
+GLYPH_PADDING = 2
 EXTRA_CHARS = "–‑✓×°§•X⚙✕◀▶✔⌫⇧␣○●↳çêüñ–‑✓×°§•€£¥"
-UNIFONT_LANGUAGES = {"th", "zh-CHT", "zh-CHS", "ko", "ja"}
+UNIFONT_LANGUAGES = {"zh-CHT", "zh-CHS"}
 
 
 def _languages():
@@ -22,37 +21,69 @@ def _languages():
     return json.load(f)
 
 
-def _dragonpilot_chars(code: str) -> set[str]:
-  """Characters used by dragonpilot's own translations (dragonpilot_{code}.mo).
-
-  dp settings translate via a separate catalog from openpilot's app_{code}.po,
-  so their glyphs must be baked too — otherwise translated dp settings render
-  as '?' (the catalog ships compiled, so we read the .mo, not a .po source)."""
-  mo_path = TRANSLATIONS_DIR / f"dragonpilot_{code}.mo"
-  if not mo_path.exists():
-    return set()
-  with mo_path.open("rb") as fh:
-    catalog = gettext.GNUTranslations(fh)._catalog
-  chars: set[str] = set()
-  for value in catalog.values():
-    if isinstance(value, str):
-      chars |= set(value)
-  return chars
-
-
 def _char_sets():
   base = set(map(chr, range(32, 127))) | set(EXTRA_CHARS)
+  
+  # === 保留 events.py 快取與掃描機制 (處理動態系統字元) ===
+  EVENTS_CACHE = FONT_DIR / "events_chars.cache"
+
+  if EVENTS_CACHE.exists():
+      print(f"INFO: Loading events.py characters from cache: {EVENTS_CACHE.name}")
+      try:
+          cached_chars = EVENTS_CACHE.read_text(encoding="utf-8")
+          base.update(set(cached_chars))
+      except Exception as e:
+          print(f"ERROR: Could not read events cache: {e}")
+  else:
+      possible_paths = [
+          Path("/data/openpilot/selfdrive/selfdrived/events.py"),
+      ]
+
+      found = False
+      print("\n--- Searching for events.py ---")
+      for events_path in possible_paths:
+          if events_path.exists():
+              print(f"SUCCESS: Found events.py at {events_path}")
+              try:
+                  content = events_path.read_text(encoding="utf-8")
+                  chars = set(content)
+                  base.update(chars)
+                  
+                  try:
+                      EVENTS_CACHE.write_text("".join(chars), encoding="utf-8")
+                      print(f"SUCCESS: Saved characters to cache at {EVENTS_CACHE.name}")
+                  except Exception as cache_err:
+                      print(f"WARNING: Could not write cache file: {cache_err}")
+                      
+                  print(f"SUCCESS: Added {len(chars)} characters from events.py")
+                  found = True
+                  break
+              except Exception as e:
+                  print(f"ERROR: Could not read file: {e}")
+
+      if not found:
+          print("WARNING: Could not find events.py! Chinese characters WILL BE MISSING in the output images.")
+      print("-------------------------------\n")
+  # === 快取機制結束 ===
+
   labels = set(base)
   per_lang: dict[str, tuple[int, ...]] = {}
 
   for language, code in _languages().items():
     labels.update(language)
+    chars = set()
+    
+    # 全部統一讀取 app_{code}.po
     po_path = TRANSLATIONS_DIR / f"app_{code}.po"
     try:
-      chars = set(po_path.read_text(encoding="utf-8"))
+      chars.update(po_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-      continue
-    chars |= _dragonpilot_chars(code)
+      pass 
+
+    # 如果該語言沒有對應的翻譯檔，跳過處理
+    if not chars:
+        continue
+
     if code in UNIFONT_LANGUAGES:
       lang_chars = set(base) | chars
       per_lang[code] = tuple(sorted(ord(c) for c in lang_chars))
@@ -95,7 +126,6 @@ def _glyph_metrics(glyphs, rects, glyph_count: int):
 
 
 def _write_bmfont(path: Path, font_size: int, face: str, atlas_name: str, line_height: int, base: int, atlas_size, entries):
-  # TODO: why doesn't raylib calculate these metrics correctly?
   if line_height != font_size:
     print("using font size for line height", atlas_name)
     line_height = font_size
@@ -115,7 +145,16 @@ def _write_bmfont(path: Path, font_size: int, face: str, atlas_name: str, line_h
 
 def _process_font(font_path: Path, codepoints: tuple[int, ...], output_name: str | None = None):
   stem = output_name or font_path.stem
-  font_size = 48 if font_path.stem.lower().startswith("opfont") else 200
+  
+  # 檢查圖集與字型設定檔是否已存在，存在則完全跳過以加快速度
+  atlas_name = f"{stem}.png"
+  atlas_path = FONT_DIR / atlas_name
+  fnt_path = FONT_DIR / f"{stem}.fnt"
+  if atlas_path.exists() and fnt_path.exists():
+      print(f"INFO: Skipping {stem}, atlas already exists at {atlas_name}.")
+      return
+
+  font_size = 48 if font_path.stem.lower().startswith("opfont") else 100
   print(f"Processing {font_path.name} -> {stem} ({len(codepoints)} glyphs @ {font_size}px)...")
 
   data = font_path.read_bytes()
@@ -136,14 +175,12 @@ def _process_font(font_path: Path, codepoints: tuple[int, ...], output_name: str
     raise RuntimeError("raylib returned an empty atlas")
 
   rects = rects_ptr[0]
-  atlas_name = f"{stem}.png"
-  atlas_path = FONT_DIR / atlas_name
   entries, line_height, base = _glyph_metrics(glyphs, rects, glyph_count[0])
 
   if not rl.export_image(image, atlas_path.as_posix()):
     raise RuntimeError("Failed to export atlas image")
 
-  _write_bmfont(FONT_DIR / f"{stem}.fnt", font_size, stem, atlas_name, line_height, base, (image.width, image.height), entries)
+  _write_bmfont(fnt_path, font_size, stem, atlas_name, line_height, base, (image.width, image.height), entries)
 
 
 def main():

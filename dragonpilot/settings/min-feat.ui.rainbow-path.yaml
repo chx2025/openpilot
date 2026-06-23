@@ -1,8 +1,8 @@
 settings:
   - key: dp_ui_rainbow
     type: toggle_item
-    title: "Rainbow Driving Path like Tesla"
-    description: "Why not?"
+    title: "特斯拉風格彩虹駕駛路徑"
+    description: "為什麼不呢？"
     category: "UI"
     condition: "not MICI"
     flags: PERSISTENT

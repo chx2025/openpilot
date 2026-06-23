@@ -1,0 +1,30 @@
+settings:
+  - key: dp_htd_enabled
+    type: toggle_item
+    title: "啟用人為轉向偵測 (HTD)"
+    description: "自動巡航時不可用。當車速35公里以下駕駛員大角度手動打方向時自動暫停橫向控制，鬆手後平滑恢復。"
+    category: "Lateral"
+    flags: PERSISTENT
+    param_type: BOOL
+    default: "0"
+    on_change:
+      - target: dp_htd_turn_angle_threshold
+        action: set_visible
+        condition: "value"
+
+  - key: dp_htd_turn_angle_threshold
+    type: spin_button_item
+    title: "觸發角度"
+    description: "觸發 HTD 功能的駕駛方向盤轉動角度 (度)。"
+    category: "Lateral"
+    flags: PERSISTENT
+    param_type: INT
+    default: "90"
+    min_val: 60
+    max_val: 120
+    step: 5
+    suffix: " °"
+    initially_visible_by:
+      param: dp_htd_enabled
+      condition: "value == True"
+      default: "0"

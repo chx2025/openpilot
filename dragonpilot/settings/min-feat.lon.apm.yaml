@@ -1,10 +1,10 @@
 settings:
   - key: dp_lon_apm
     type: toggle_item
-    title: "Adaptive Personality Mode (APM)"
-    description: "Automatically switches personality to \"Aggressive\" below 30 km/h and restores your selected personality above 40 km/h."
+    title: "自適應性能模式 (APM)"
+    description: "在 30 km/h 以下自動切換為「激進」模式，超過 40 km/h 後恢復您選擇的模式。"
     category: "Longitudinal"
-    condition: "openpilotLongitudinalControl"
+    #condition: "openpilotLongitudinalControl"
     flags: PERSISTENT
     param_type: BOOL
     default: "0"

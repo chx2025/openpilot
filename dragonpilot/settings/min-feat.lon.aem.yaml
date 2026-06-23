@@ -1,8 +1,8 @@
 settings:
   - key: dp_lon_aem
     type: toggle_item
-    title: "Adaptive Experimental Mode (AEM)"
-    description: "Adaptive mode switcher between ACC and Blended based on driving context."
+    title: "自適應實驗模式 (AEM)"
+    description: "根據駕駛場景在 ACC 和混合模式之間自適應切換。"
     category: "Longitudinal"
     condition: "openpilotLongitudinalControl"
     flags: PERSISTENT

@@ -1,11 +1,11 @@
 settings:
   - key: dp_ui_display_mode
     type: text_spin_button_item
-    title: "Display Mode"
-    description: "Std.: Stock behavior.<br>MAIN+: ACC MAIN on = Display ON.<br>OP+: OP enabled = Display ON.<br>MAIN-: ACC MAIN on = Display OFF<br>OP-: OP enabled = Display OFF."
+    title: "顯示模式"
+    description: "標準：默認行為。<br>MAIN+：ACC Main 開啟 = 顯示開啟。<br>OP+：OP 啟用 = 顯示開啟。<br>MAIN-：ACC Main 開啟 = 顯示關閉<br>OP-：OP 啟用 = 顯示關閉。"
     category: "UI"
     options:
-      - "Std."
+      - "標準"
       - "MAIN+"
       - "OP+"
       - "MAIN-"

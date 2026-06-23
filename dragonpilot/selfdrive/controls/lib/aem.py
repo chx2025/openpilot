@@ -16,28 +16,99 @@ for non-commercial purposes only, subject to the following conditions:
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
-# Adaptive Experimental Mode (AEM) picks the longitudinal mode from the model's
-# throttle intent (the predicted gas-press probability). experimentalMode sets the
-# default; the throttle intent only ever diverts away from it:
-#   * blended-first (experimental on):  use ACC when the model clearly wants throttle.
-#   * acc-first    (experimental off):  use BLENDED when the model clearly eases off.
-# The asymmetric thresholds leave a 0.4-0.6 deadband where each mode holds its default.
-THROTTLE_ACC_PROB     = 0.6  # gasPressProb >= this -> model wants throttle -> ACC
-THROTTLE_BLENDED_PROB = 0.4  # gasPressProb <= this -> model easing off     -> BLENDED
+import numpy as np
+
+# 車速閾值 (將 km/h 轉換為 m/s)
+SPEED_ENABLE_MS = 70.0 / 3.6   # 約 19.44 m/s (低於此速度允許啟用)
+SPEED_DISABLE_MS = 80.0 / 3.6  # 約 22.22 m/s (高於此速度強制關閉)
+
+# 動態車距參數 (保留作為緊急防護：應對前車急煞或機車切入)
+TIME_GAP = 1.5         # 秒 (緊急動態車距時間)
+MIN_DISTANCE = 8.0     # 公尺 (緊急最短觸發距離)
+
+# ==========================================
+# 新增：紅燈/路口提早預判參數 (用於平緩舒適煞停)
+# ==========================================
+EARLY_STOP_TIME_GAP = 3.5          # 秒 (提供更長的安全煞車緩衝時間)
+EARLY_STOP_MIN_DISTANCE = 30.0     # 公尺 (確保市區低速時也有 30 公尺的提早切換餘裕)
+
+# 綠燈起步/暢通判定參數
+GREEN_LIGHT_X_THRESHOLD = 20.0 # 公尺 (軌跡大於此值視為綠燈或路況暢通)
 
 
 class AEM:
   def __init__(self):
-    self._throttle_prob = 1.0
+    self._active = False
+    self._speed_condition_met = True
 
-  def update_states(self, model_msg, radar_msg, v_ego):
-    # Probability the model wants to be on throttle (same signal the planner uses
-    # for allow_throttle). High -> accelerate/cruise; low -> coast/slow.
-    probs = model_msg.meta.disengagePredictions.gasPressProbs
-    self._throttle_prob = probs[1] if len(probs) > 1 else 1.0
+  def update_states(self, v_ego, should_stop, a_target, trajectory_length):
+    """
+    更新 AEM 狀態 (專注於判定是否切換至實驗模式)
+    :param v_ego: 當前車速 (m/s)
+    :param should_stop: boolean, 模型判定是否該停 (紅綠燈/停止線)
+    :param a_target: float, 模型目標加速度 (m/s^2)
+    :param trajectory_length: float, 預測軌跡總長 (m)
+    """
 
-  def get_mode(self, mode):
-    if mode == 'blended':  # blended-first: borrow ACC only when clearly wanting throttle
-      return 'acc' if self._throttle_prob >= THROTTLE_ACC_PROB else 'blended'
-    # acc-first: borrow BLENDED only when clearly easing off
-    return 'blended' if self._throttle_prob <= THROTTLE_BLENDED_PROB else 'acc'
+    # ==========================================
+    # 新增：過濾遠距離的「幽靈煞車/誤判紅燈」訊號
+    # ==========================================
+    # 如果模型喊停，但其實距離還很遠(>40公尺)，而且車子只是在滑行(a_target > -0.3)
+    # 我們就判定這是 AI 的誤判，強制把 should_stop 轉為 False
+    if should_stop and trajectory_length > 40.0 and a_target > -0.3:
+      should_stop = False
+    
+    # 1. 處理車速遲滯區間
+    if v_ego < SPEED_ENABLE_MS:
+      self._speed_condition_met = True
+    elif v_ego > SPEED_DISABLE_MS:
+      self._speed_condition_met = False
+
+    # 若車速大於 80km/h，強制維持 ACC 不允許切換 (保留高速公路舒適度)
+    if not self._speed_condition_met:
+      self._active = False
+      return
+
+    # ==========================================
+    # 2. 加速意圖優先判定 (新增：模型一加速就交給原廠 ACC)
+    # ==========================================
+    # 只要模型有明確的加速意圖 (大於 0.1)，立刻切換為 ACC
+    if a_target > 0.1:
+      self._active = False
+      return
+
+    # 3. 綠燈起步 / 前方暢通優先判定
+    # 必須在模型沒有要停，且沒有減速意圖 (a_target > -0.3) 的前提下，才視為暢通並切回 ACC
+    if not should_stop and a_target > -0.3 and trajectory_length > GREEN_LIGHT_X_THRESHOLD:
+      self._active = False
+      return
+
+    # 4. 計算動態觸發距離閾值
+    urgent_trigger_threshold = max(MIN_DISTANCE, v_ego * TIME_GAP)
+    early_stop_threshold = max(EARLY_STOP_MIN_DISTANCE, v_ego * EARLY_STOP_TIME_GAP)
+
+    # 5. 模式切換核心邏輯
+    if should_stop:
+      # 【情況 A：遇到紅綠燈或停止線】
+      self._active = True
+
+    elif a_target < -0.5 and trajectory_length <= early_stop_threshold:
+      # 【情況 B：紅燈 / 遠處靜止車輛提早預判】
+      self._active = True
+
+    elif a_target < -1.0 and trajectory_length <= urgent_trigger_threshold:
+      # 【情況 C：遇到動態障礙物 / 前車急煞】
+      self._active = True
+        
+    else:
+      # 無需煞停或減速，保持一般 ACC 模式
+      self._active = False
+
+  def get_mode(self, current_mode):
+    """
+    獲取當前應使用的模式
+    """
+    if self._active:
+      return 'blended'  
+    else:
+      return 'acc'

@@ -198,8 +198,16 @@ class CarState(CarStateBase):
     ret.espDisabled = cp.vl["ESP_CONTROL"]["TC_DISABLED"] != 0
 
     if self.CP.enableBsm:
-      ret.leftBlindspot = (cp.vl["BSM"]["L_ADJACENT"] == 1) or (cp.vl["BSM"]["L_APPROACHING"] == 1)
-      ret.rightBlindspot = (cp.vl["BSM"]["R_ADJACENT"] == 1) or (cp.vl["BSM"]["R_APPROACHING"] == 1)
+      # --- 新增的盲點偵測邏輯開始 ---
+      # 嘗試使用 BSM (後視鏡盲點指示燈) 燈光作為觸發參考，提供更準確的盲點警示
+      if self.CP.flags & ToyotaFlags.SECOC.value:
+        ret.leftBlindspot = (cp.vl["BSM"]["L_ADJACENT"] == 1) or (cp.vl["BSM"]["L_APPROACHING"] == 1)
+        ret.rightBlindspot = (cp.vl["BSM"]["R_ADJACENT"] == 1) or (cp.vl["BSM"]["R_APPROACHING"] == 1)
+      else:
+        # 如果非 SECOC 車款，將盲點燈號 (L_LIGHT / R_LIGHT > 0) 加入判斷條件
+        ret.leftBlindspot = (cp.vl["BSM"]["L_ADJACENT"] == 1) or (cp.vl["BSM"]["L_APPROACHING"] == 1) or (cp.vl["BSM"]["L_LIGHT"] > 0)
+        ret.rightBlindspot = (cp.vl["BSM"]["R_ADJACENT"] == 1) or (cp.vl["BSM"]["R_APPROACHING"] == 1) or (cp.vl["BSM"]["R_LIGHT"] > 0)
+      # --- 新增的盲點偵測邏輯結束 ---
 
     if self.CP.carFingerprint != CAR.TOYOTA_PRIUS_V:
       self.lkas_hud = copy.copy(cp_cam.vl["LKAS_HUD"])

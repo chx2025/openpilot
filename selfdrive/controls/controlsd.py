@@ -21,6 +21,9 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
+# 導入 DP 的 HTD (人工轉向偵測) 模組
+from dragonpilot.selfdrive.controls.lib.human_turn_detection import HumanTurnDetection, HTDState
+
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
@@ -62,6 +65,10 @@ class Controls:
     # dp - ALKA: cache enabled state (CP doesn't change after init)
     self.alka_enabled = bool(self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA)
     self.alka_active = False
+
+    # 初始化 HTD
+    self.htd = HumanTurnDetection()
+    self.htd_state = HTDState.INACTIVE
 
   def update(self):
     self.sm.update(15)
@@ -106,7 +113,26 @@ class Controls:
       calibrated = self.sm['liveCalibration'].calStatus == log.LiveCalibrationData.Status.calibrated
       gear_ok = CS.gearShifter not in (car.CarState.GearShifter.park, car.CarState.GearShifter.neutral, car.CarState.GearShifter.reverse)
       self.alka_active = lkas_on and gear_ok and calibrated and not CS.seatbeltUnlatched and not CS.doorOpen
-    CC.latActive = (self.sm['selfdriveState'].active or self.alka_active) and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
+
+    # 取出橫向控制啟用的初始狀態
+    lat_active = self.sm['selfdriveState'].active or self.alka_active
+
+    # --- 防呆開關判斷 (HTD) ---
+    htd_allowed, self.htd_state = self.htd.update(
+        lat_active,
+        CS.cruiseState.enabled,
+        CS.steeringAngleDeg,
+        CS.steeringTorque,
+        CS.vEgo,
+        CS.steeringPressed
+    )
+
+    # 只有當車主在介面開啟 HTD 功能時，才真正允許 HTD 切斷自動轉向
+    if self.htd._enabled:
+        lat_active = lat_active and htd_allowed
+    # ---------------------------
+
+    CC.latActive = lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
 
@@ -189,9 +215,6 @@ class Controls:
                                               STEER_ANGLE_SATURATION_THRESHOLD
       else:
         self.steer_limited_by_safety = abs(CC.actuators.torque - CO.actuatorsOutput.torque) > 1e-2
-
-    # TODO: both controlsState and carControl valids should be set by
-    #       sm.all_checks(), but this creates a circular dependency
 
     # controlsState
     dat = messaging.new_message('controlsState')

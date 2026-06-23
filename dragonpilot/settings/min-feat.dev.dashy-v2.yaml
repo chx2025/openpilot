@@ -1,8 +1,8 @@
 settings:
   - key: dp_dev_dashy
     type: toggle_item
-    title: "dashy HUD"
-    description: "dashy - dragonpilot's all-in-one system hub for you.<br><br>Visit http://<device_ip>:5088 to access.<br><br>Enable this to use Tesla HUD."
+    title: "dashy HUD 儀表盤"
+    description: "dashy - dragonpilot 的一體化系統中心。<br><br>訪問 http://<設備IP>:5088 打開。<br><br>啟用此選項以使用特斯拉風格 HUD。"
     category: "Device"
     flags: PERSISTENT
     param_type: BOOL

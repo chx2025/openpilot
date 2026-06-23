@@ -1,8 +1,8 @@
 settings:
   - key: dp_dev_is_rhd
     type: toggle_item
-    title: "Enable Right-Hand Drive Mode"
-    description: "Allow openpilot to obey right-hand traffic conventions on right driver seat."
+    title: "啟用右舵駕駛模式"
+    description: "允許 openpilot 在右駕駛座位上遵守右側交通規則。"
     category: "Device"
     condition: "LITE"
     flags: PERSISTENT
@@ -11,8 +11,8 @@ settings:
 
   - key: dp_dev_beep
     type: toggle_item
-    title: "Enable Beep (Warning)"
-    description: "Use Buzzer for audiable alerts."
+    title: "啟用蜂鳴器 (警告)"
+    description: "使用蜂鳴器進行聲音提示。"
     category: "Device"
     condition: "LITE"
     flags: PERSISTENT

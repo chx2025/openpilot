@@ -273,6 +273,10 @@ def main() -> None:
   sm = messaging.SubMaster(['modelV2', 'carState', 'liveTracks'], poll='modelV2')
   pm = messaging.PubMaster(['radarState'])
 
+  # ==============================================================================
+  # 🎛️ 專屬 DP 擴充引入點：動態替換並生成帶有提早鎖定邏輯的實例
+  # ==============================================================================
+  from dragonpilot.selfdrive.controls.radard_ext import RadarDExt as RadarD
   RD = RadarD(CP.radarDelay)
 
   while 1:

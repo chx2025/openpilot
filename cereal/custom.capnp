@@ -29,8 +29,33 @@ struct DashyState @0xda96579883444c35 {
   # Aggregates all topics needed by dashy into single message
   json @0 :Data;
 }
+struct LongitudinalPlanDP @0x80ae746ee2596b11 {
+  accelPersonality @0 :AccelerationPersonality;
+  longitudinalPlanSource @1 :LongitudinalPlanSource;
+  vTarget @2 :Float32;
+  aTarget @3 :Float32;
+  targets @4 :List(Target);
 
-struct CustomReserved4 @0x80ae746ee2596b11 {
+  struct Target {
+    available @0: Bool;
+    enable @1: Bool;
+    action @2: Bool;
+    braking @3: Bool;
+    vTarget @4 :Float32;
+    aTarget @5 :Float32;
+    outputVtarget @6 :Float32;
+    outputAtarget @7 :Float32;
+  }
+
+  enum LongitudinalPlanSource {
+    cruise @0;
+    dtsc @1;
+  }
+  enum AccelerationPersonality {
+    sport @0;
+    normal @1;
+    eco @2;
+  }
 }
 
 struct CustomReserved5 @0xa5cd762cd951a455 {

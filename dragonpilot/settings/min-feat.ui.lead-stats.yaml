@@ -1,15 +1,15 @@
 settings:
   - key: dp_ui_lead
     type: text_spin_button_item
-    title: "Display Lead Stats"
-    description: "Display the statistics of lead car and/or radar tracking points.<br>Lead: Lead stats only<br>Radar: Radar tracking point stats only<br>All: Lead and Radar stats<br>NOTE: Radar option only works on certain vehicle models."
+    title: "顯示前車統計"
+    description: "顯示前車和/或雷達追蹤點的統計數據。<br>前車：僅顯示前車統計<br>雷達：僅顯示雷達追蹤點統計<br>全部：顯示前車和雷達統計<br>注意：雷達選項僅適用於特定車型。"
     category: "UI"
     condition: "not MICI"
     default: 0
     options:
-      - "Off"
-      - "Lead"
-      - "Radar"
-      - "All"
+      - "關閉"
+      - "前車"
+      - "雷達"
+      - "全部"
     flags: PERSISTENT
     param_type: INT

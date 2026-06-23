@@ -18,19 +18,33 @@ def main():
 
   ldw = LaneDepartureWarning()
   longitudinal_planner = LongitudinalPlanner(CP)
-  pm = messaging.PubMaster(['longitudinalPlan', 'driverAssistance'])
-  sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'liveParameters', 'radarState', 'modelV2', 'selfdriveState'],
-                           poll='modelV2')
+  
+  # 保留發布頻道，解決 KeyError
+  pm = messaging.PubMaster(['longitudinalPlan', 'longitudinalPlanDP', 'driverAssistance'])
+  
+  # 保留訂閱頻道，確保 DP 資料接收
+  sm = messaging.SubMaster([
+    'carControl', 
+    'carState', 
+    'controlsState', 
+    'liveParameters', 
+    'radarState', 
+    'modelV2', 
+    'selfdriveState',
+    'controlsStateExt'
+  ], poll='modelV2')
 
   dp_flags = 0
 
-  if params.get_bool("dp_lon_acm"):
-    dp_flags |= DPFlags.ACM
-  if params.get_bool("dp_lon_aem"):
+  # 僅保留新版中確實存在的參數，避免 UnknownKeyName 報錯
+  if params.get_bool("dp_lon_ocm") and hasattr(DPFlags, 'OCM'):
+    dp_flags |= DPFlags.OCM
+  if params.get_bool("dp_lon_aem") and hasattr(DPFlags, 'AEM'):
     dp_flags |= DPFlags.AEM
-  if params.get_bool("dp_lon_apm"):
+  if params.get_bool("dp_lon_apm") and hasattr(DPFlags, 'APM'):
     dp_flags |= DPFlags.APM
-
+  if params.get_bool("dp_lon_dtsc") and hasattr(DPFlags, 'DTSC'):
+    dp_flags |= DPFlags.DTSC
   while True:
     sm.update()
     if sm.updated['modelV2']:

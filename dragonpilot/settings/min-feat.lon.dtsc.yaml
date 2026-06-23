@@ -1,0 +1,10 @@
+settings:
+  - key: dp_lon_dtsc
+    type: toggle_item
+    title: "動態彎道速度控制 (DTSC)"
+    description: "DTSC 會根據前方的道路曲率和抓地力情況，自動調整車輛的預測速度。<br>源自 openpilot TACO 分支。"
+    category: "Longitudinal"
+    #condition: "openpilotLongitudinalControl"
+    flags: PERSISTENT
+    param_type: BOOL
+    default: "0"
