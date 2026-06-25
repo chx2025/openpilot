@@ -93,10 +93,10 @@ msgstr "自動關機延遲"
 #: dragonpilot/settings/min-feat.lon.apm.py:9
 #, python-format
 msgid ""
-"Automatically switches personality to \"Aggressive\" below 30 km/h and "
-"restores your selected personality above 40 km/h."
+"Automatically switches personality to \"Aggressive\" below 0 km/h and "
+"restores your selected personality above 5 km/h."
 msgstr ""
-"當車速低於 30 km/h 時，自動切換至「積極」模式；當車速高於 40 km/h 時，恢復成"
+"當車速低於 0 km/h 時，自動切換至「積極」模式；當車速高於 5 km/h 時，恢復成"
 "您原先選擇的模式。"
 
 #: dragonpilot/settings/brand-vag-avoid-eps-lockout.py:8

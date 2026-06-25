@@ -2,7 +2,7 @@ settings:
   - key: dp_lon_apm
     type: toggle_item
     title: "自適應性能模式 (APM)"
-    description: "在 30 km/h 以下自動切換為「激進」模式，超過 40 km/h 後恢復您選擇的模式。"
+    description: "在 0 km/h 以下自動切換為「激進」模式，超過 5 km/h 後恢復您選擇的模式。"
     category: "Longitudinal"
     #condition: "openpilotLongitudinalControl"
     flags: PERSISTENT

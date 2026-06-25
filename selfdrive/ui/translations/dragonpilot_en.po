@@ -94,8 +94,8 @@ msgstr ""
 #: dragonpilot/settings/min-feat.lon.apm.py:9
 #, python-format
 msgid ""
-"Automatically switches personality to \"Aggressive\" below 30 km/h and "
-"restores your selected personality above 40 km/h."
+"Automatically switches personality to \"Aggressive\" below 0 km/h and "
+"restores your selected personality above 5 km/h."
 msgstr ""
 
 #: dragonpilot/settings/brand-vag-avoid-eps-lockout.py:8
