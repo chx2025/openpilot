@@ -138,6 +138,7 @@ procs = [
   # dashy
   PythonProcess("serverd", "dragonpilot.dashy.serverd", always_run),
   PythonProcess("dashyd", "dragonpilot.dashy.dashyd", and_(dashy, only_onroad)),
+  PythonProcess("gpsd", "dragonpilot.dashy.gpsd", and_(dashy, only_onroad)),
 ]
 
 managed_processes = {p.name: p for p in procs}
