@@ -57,8 +57,36 @@ struct LongitudinalPlanDP @0x80ae746ee2596b11 {
     eco @2;
   }
 }
+struct LiveGPS @0xa5cd762cd951a455 {
+  # Position
+  latitude @0 :Float64;                # degrees
+  longitude @1 :Float64;               # degrees
+  altitude @2 :Float64;                # meters (WGS84)
 
-struct CustomReserved5 @0xa5cd762cd951a455 {
+  # Motion
+  speed @3 :Float32;                   # m/s (horizontal speed)
+  bearingDeg @4 :Float32;              # degrees (heading)
+
+  # Accuracy
+  horizontalAccuracy @5 :Float32;      # meters
+  verticalAccuracy @6 :Float32;        # meters
+
+  # Status
+  gpsOK @7 :Bool;                      # livePose valid + GPS fresh
+  status @8 :Status;
+
+  enum Status {
+    uninitialized @0;    # no GPS data yet
+    uncalibrated @1;     # has GPS but fusion not ready (raw passthrough)
+    valid @2;            # fusion active with calibrated bearing
+  }
+
+  # Metadata
+  unixTimestampMillis @9 :Int64;
+  lastGpsTimestamp @10 :UInt64;        # logMonoTime of last GPS
+
+  # livePose health (for debugging fusion issues)
+  livePoseOk @11 :Bool;                # livePose valid and providing orientation/velocity
 }
 
 struct CustomReserved6 @0xf98d843bfd7004a3 {
