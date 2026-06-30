@@ -9,7 +9,7 @@ SELFDRIVE_DIR = FONT_DIR.parents[1]
 TRANSLATIONS_DIR = SELFDRIVE_DIR / "ui" / "translations"
 LANGUAGES_FILE = TRANSLATIONS_DIR / "languages.json"
 
-GLYPH_PADDING = 2
+GLYPH_PADDING = 1
 EXTRA_CHARS = "–‑✓×°§•X⚙✕◀▶✔⌫⇧␣○●↳çêüñ–‑✓×°§•€£¥"
 UNIFONT_LANGUAGES = {"zh-CHT"}
 
@@ -154,7 +154,7 @@ def _process_font(font_path: Path, codepoints: tuple[int, ...], output_name: str
       print(f"INFO: Skipping {stem}, atlas already exists at {atlas_name}.")
       return
 
-  font_size = 48 if font_path.stem.lower().startswith("opfont") else 100
+  font_size = 48 if font_path.stem.lower().startswith("opfont") else 80
   print(f"Processing {font_path.name} -> {stem} ({len(codepoints)} glyphs @ {font_size}px)...")
 
   data = font_path.read_bytes()
