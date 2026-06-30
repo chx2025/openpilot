@@ -12,7 +12,6 @@ from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 #from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
-#from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 
 # Constants
 SET_SPEED_NA = 255
@@ -114,6 +113,12 @@ class HudRenderer(Widget):
       self.speed = 0.0
       self.lead_dist = "-"
       self.lead_dist_raw = 0.0
+      
+      # 重置 TDX 變數，避免殘留上次熄火前的資料
+      self.tdx_speed = -1
+      self.tdx_status = "UNKNOWN"
+      self.tdx_event_active = False
+      self.tdx_event_desc = ""
       return
 
     controls_state = sm['controlsState']
