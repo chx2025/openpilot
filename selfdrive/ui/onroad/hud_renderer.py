@@ -83,6 +83,12 @@ class HudRenderer(Widget):
     self.lead_dist: str = "-"
     self.lead_dist_raw: float = 0.0
 
+    # --- TDX 路況預警變數 ---
+    self.tdx_speed: int = -1
+    self.tdx_status: str = "UNKNOWN"
+    self.tdx_event_active: bool = False
+    self.tdx_event_desc: str = ""
+
     self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
     self._font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
     self._font_medium: rl.Font = gui_app.font(FontWeight.MEDIUM)
@@ -122,6 +128,16 @@ class HudRenderer(Widget):
       self.lead_dist_raw = 0.0
       self.lead_dist = "-"
 
+    # --- 讀取 TDX 狀態 (使用 try 保護，避免未訂閱時報錯) ---
+    try:
+      tdx = sm['tdx']
+      self.tdx_speed = tdx.trafficStatus.speed
+      self.tdx_status = str(tdx.trafficStatus.status)
+      self.tdx_event_active = tdx.roadEvent.isActive
+      self.tdx_event_desc = str(tdx.roadEvent.description)
+    except Exception:
+      pass # 如果系統還沒有發布 tdx 訊息，就靜默略過
+
     v_cruise_cluster = car_state.vCruiseCluster
     self.set_speed = (
       controls_state.deprecated.vCruise if v_cruise_cluster == 0.0 else v_cruise_cluster
@@ -155,6 +171,9 @@ class HudRenderer(Widget):
 
     self._draw_current_speed(rect)
 
+    # --- 繪製 TDX 雙行顯示資訊 ---
+    self._draw_tdx_info(rect)
+
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
     self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
@@ -167,6 +186,111 @@ class HudRenderer(Widget):
 
   def user_interacting(self) -> bool:
     return self._exp_button.is_pressed
+
+  def _wrap_text(self, text: str, font: rl.Font, font_size: int, max_width: float) -> list[str]:
+    """計算中英文自動換行，回傳字串陣列"""
+    if not text:
+      return []
+
+    lines = []
+    current_line = ""
+
+    for char in text:
+      test_line = current_line + char
+      test_width = measure_text_cached(font, test_line, font_size).x
+      
+      # 如果加上這個字會超過最大寬度，且目前行已經有字，就斷行
+      if test_width > max_width and current_line != "":
+        lines.append(current_line)
+        current_line = char
+      else:
+        current_line = test_line
+
+    if current_line:
+      lines.append(current_line)
+
+    return lines
+
+  # --------------------------------------------------------------------------
+  # TDX 雙行顯示繪製邏輯 (支援事件自動換行)
+  # --------------------------------------------------------------------------
+  def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
+    """繪製高公局即時路況與事件"""
+    if self.tdx_speed == -1 and not self.tdx_event_active:
+      return
+
+    # 1. 決定車速的文字顏色
+    if self.tdx_status == "GREEN":
+      speed_color = rl.Color(128, 216, 166, 255)  # 順暢綠
+    elif self.tdx_status == "YELLOW":
+      speed_color = rl.Color(255, 204, 0, 255)    # 壅塞黃
+    elif self.tdx_status == "RED":
+      speed_color = rl.Color(255, 100, 100, 255)  # 塞車紅
+    else:
+      speed_color = rl.WHITE
+
+    bg_padding_x = 45
+    bg_padding_y = 20
+    current_y = rect.y + UI_CONFIG.header_height + 25
+
+    # ==========================================
+    # 第一行: 車速 (Traffic Speed)
+    # ==========================================
+    if self.tdx_speed != -1:
+      speed_text = f"前方車速: {self.tdx_speed} km/h"
+      tdx_speed_font_size = 90
+      speed_size = measure_text_cached(self._font_semi_bold, speed_text, tdx_speed_font_size)
+      speed_x = rect.x + rect.width / 2 - speed_size.x / 2
+      
+      # 繪製半透明黑底
+      bg_rect = rl.Rectangle(speed_x - bg_padding_x, current_y - bg_padding_y, speed_size.x + bg_padding_x * 2, speed_size.y + bg_padding_y * 2)
+      rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(0, 0, 0, 160))
+      
+      # 繪製文字
+      rl.draw_text_ex(self._font_semi_bold, speed_text, rl.Vector2(speed_x, current_y), tdx_speed_font_size, 0, speed_color)
+      
+      current_y += speed_size.y + bg_padding_y * 2 + 25
+
+    # ==========================================
+    # 第二行: 事件 (Road Event - 支援自動換行)
+    # ==========================================
+    if self.tdx_event_active and self.tdx_event_desc:
+      tdx_event_font_size = 75
+      
+      # 計算最大允許寬度 (螢幕寬度扣除左右各 100px 安全距離)
+      max_text_width = rect.width - 200 
+      
+      # 將長字串切割成多行陣列
+      lines = self._wrap_text(self.tdx_event_desc, self._font_semi_bold, tdx_event_font_size, max_text_width)
+      
+      if lines:
+        # 計算單行高度與行距
+        line_height = measure_text_cached(self._font_semi_bold, "測試", tdx_event_font_size).y
+        line_spacing = 15
+        
+        # 計算多行文字的總高度與實際最大寬度
+        total_text_height = len(lines) * line_height + (len(lines) - 1) * line_spacing
+        actual_max_width = max([measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x for line in lines])
+        
+        event_x = rect.x + rect.width / 2 - actual_max_width / 2
+        event_bg_rect = rl.Rectangle(
+            event_x - bg_padding_x, 
+            current_y - bg_padding_y, 
+            actual_max_width + bg_padding_x * 2, 
+            total_text_height + bg_padding_y * 2
+        )
+        
+        # [特效] 呼吸燈閃爍警告背景
+        alpha = 130 + int(50 * math.sin(time.time() * 5)) 
+        rl.draw_rectangle_rounded(event_bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
+        
+        # 逐行繪製置中文字
+        draw_y = current_y
+        for line in lines:
+          line_width = measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x
+          line_x = rect.x + rect.width / 2 - line_width / 2
+          rl.draw_text_ex(self._font_semi_bold, line, rl.Vector2(line_x, draw_y), tdx_event_font_size, 0, rl.WHITE)
+          draw_y += line_height + line_spacing
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
