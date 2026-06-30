@@ -11,7 +11,7 @@ LANGUAGES_FILE = TRANSLATIONS_DIR / "languages.json"
 
 GLYPH_PADDING = 2
 EXTRA_CHARS = "–‑✓×°§•X⚙✕◀▶✔⌫⇧␣○●↳çêüñ–‑✓×°§•€£¥"
-UNIFONT_LANGUAGES = {"zh-CHT", "zh-CHS"}
+UNIFONT_LANGUAGES = {"zh-CHT"}
 
 
 def _languages():
