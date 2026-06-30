@@ -229,9 +229,11 @@ def main():
     JSON_PATH = os.path.join(BASE_DIR, "freeway_shapes.json")
     matcher = LocalMapMatcher(JSON_PATH)
     client = FreewayDataClient()
-    # 改用 gpsd 融合後的 liveGPS(Kalman 融合 + bearing 校正),取代原始 gpsLocationExternal,
-    # 並加上 ignore_alive,避免 liveGPS 服務暫時無資料時整個卡住判斷邏輯
-    sm = messaging.SubMaster(['liveGPS'], ignore_alive=['liveGPS'])
+    # 主要來源：gpsd 融合後的 liveGPS（Kalman 融合 + bearing 校正）
+    # 備援來源：原始 gpsLocationExternal，當 liveGPS 暫時收不到資料時自動切換
+    # 兩者都加 ignore_alive，避免任一服務沒在跑時卡住整體判斷邏輯
+    sm = messaging.SubMaster(['liveGPS', 'gpsLocationExternal'],
+                              ignore_alive=['liveGPS', 'gpsLocationExternal'])
 
     # liveGPS 精度/新鮮度過濾門檻(對應 gpsd.py 內部邏輯,避免拿不可靠定位去比對路段)
     MAX_HORIZONTAL_ACCURACY = 50.0  # 公尺,與 gpsd.py GPS_MAX_ACCURACY 一致
@@ -260,27 +262,41 @@ def main():
             client.update_data(matcher)
             last_api_call = current_time
 
+        gps_source = None  # 紀錄這次用的是哪個來源，方便 log 觀察
+
         if TEST_MODE:
             is_gps_ready = True
         else:
-            is_gps_ready = sm.updated.get('liveGPS', False)
-            if is_gps_ready:
+            is_gps_ready = False
+
+            # 1) 優先用 liveGPS（Kalman 融合 + bearing 校正）
+            if sm.updated.get('liveGPS', False):
                 live_gps = sm['liveGPS']
-                # 過濾掉尚未初始化、或精度太差的定位,避免拿不可靠的點去比對路段
-                if not live_gps.gpsOK:
-                    is_gps_ready = False
-                elif live_gps.horizontalAccuracy > 0 and live_gps.horizontalAccuracy > MAX_HORIZONTAL_ACCURACY:
-                    is_gps_ready = False
+                if live_gps.gpsOK and (live_gps.horizontalAccuracy <= 0 or
+                                        live_gps.horizontalAccuracy <= MAX_HORIZONTAL_ACCURACY):
+                    lat = live_gps.latitude
+                    lon = live_gps.longitude
+                    bearing = live_gps.bearingDeg
+                    is_gps_ready = True
+                    gps_source = 'liveGPS'
+
+            # 2) liveGPS 這一輪沒有可用資料時，退回原始 gpsLocationExternal
+            if not is_gps_ready and sm.updated.get('gpsLocationExternal', False):
+                raw_gps = sm['gpsLocationExternal']
+                acc = getattr(raw_gps, 'horizontalAccuracy', 0.0)
+                if acc <= 0 or acc <= MAX_HORIZONTAL_ACCURACY:
+                    lat = raw_gps.latitude
+                    lon = raw_gps.longitude
+                    bearing = raw_gps.bearingDeg
+                    is_gps_ready = True
+                    gps_source = 'gpsLocationExternal(備援)'
 
         if is_gps_ready:
             if TEST_MODE:
                 lat = TEST_LAT
                 lon = TEST_LON
                 bearing = TEST_BEARING
-            else:
-                lat = live_gps.latitude
-                lon = live_gps.longitude
-                bearing = live_gps.bearingDeg
+                gps_source = 'TEST_MODE'
 
             my_direction = bearing_to_direction(bearing)
 
@@ -361,7 +377,7 @@ def main():
             # 移除 has_warning_data 的 if 判斷，強制每次都發送
             pm.send('tdx', msg) 
 
-            print(f"航向: {bearing:.1f}°({my_direction}) | 當下: {current_section or '無'} | 前方: {ahead_section or '無'}")
+            print(f"GPS來源: {gps_source} | 航向: {bearing:.1f}°({my_direction}) | 當下: {current_section or '無'} | 前方: {ahead_section or '無'}")
             
             if traffic.speed > 0:
                 print(f" => 車速顯示: {traffic.speed} km/h")
