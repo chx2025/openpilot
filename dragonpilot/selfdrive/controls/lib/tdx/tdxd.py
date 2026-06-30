@@ -229,7 +229,12 @@ def main():
     JSON_PATH = os.path.join(BASE_DIR, "freeway_shapes.json")
     matcher = LocalMapMatcher(JSON_PATH)
     client = FreewayDataClient()
-    sm = messaging.SubMaster(['gpsLocationExternal'])
+    # 改用 gpsd 融合後的 liveGPS(Kalman 融合 + bearing 校正),取代原始 gpsLocationExternal,
+    # 並加上 ignore_alive,避免 liveGPS 服務暫時無資料時整個卡住判斷邏輯
+    sm = messaging.SubMaster(['liveGPS'], ignore_alive=['liveGPS'])
+
+    # liveGPS 精度/新鮮度過濾門檻(對應 gpsd.py 內部邏輯,避免拿不可靠定位去比對路段)
+    MAX_HORIZONTAL_ACCURACY = 50.0  # 公尺,與 gpsd.py GPS_MAX_ACCURACY 一致
 
     last_api_call = 0
     UPDATE_INTERVAL = 60
@@ -255,7 +260,17 @@ def main():
             client.update_data(matcher)
             last_api_call = current_time
 
-        is_gps_ready = True if TEST_MODE else sm.updated.get('gpsLocationExternal', False)
+        if TEST_MODE:
+            is_gps_ready = True
+        else:
+            is_gps_ready = sm.updated.get('liveGPS', False)
+            if is_gps_ready:
+                live_gps = sm['liveGPS']
+                # 過濾掉尚未初始化、或精度太差的定位,避免拿不可靠的點去比對路段
+                if not live_gps.gpsOK:
+                    is_gps_ready = False
+                elif live_gps.horizontalAccuracy > 0 and live_gps.horizontalAccuracy > MAX_HORIZONTAL_ACCURACY:
+                    is_gps_ready = False
 
         if is_gps_ready:
             if TEST_MODE:
@@ -263,10 +278,9 @@ def main():
                 lon = TEST_LON
                 bearing = TEST_BEARING
             else:
-                gps = sm['gpsLocationExternal']
-                lat = gps.latitude
-                lon = gps.longitude
-                bearing = gps.bearingDeg
+                lat = live_gps.latitude
+                lon = live_gps.longitude
+                bearing = live_gps.bearingDeg
 
             my_direction = bearing_to_direction(bearing)
 
