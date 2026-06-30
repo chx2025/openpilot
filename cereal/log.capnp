@@ -2553,7 +2553,6 @@ struct Event {
     modelExt @109 :Custom.ModelExt;
     dashyState @110 :Custom.DashyState;
     longitudinalPlanDP @111 :Custom.LongitudinalPlanDP;
-    maaControl @111 :Custom.MaaControl;
     liveGPS @112 :Custom.LiveGPS;
     tdx @113 :Custom.Tdx;
     customReserved7 @114 :Custom.CustomReserved7;
