@@ -61,6 +61,7 @@ class UIState:
         "rawAudioData",
         "controlsStateExt",
         "liveTracks", # dp - for dp_ui_lead
+        "tdx",
       ]
     )
 
