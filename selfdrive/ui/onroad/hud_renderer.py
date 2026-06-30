@@ -221,7 +221,7 @@ class HudRenderer(Widget):
   # --------------------------------------------------------------------------
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
     """繪製高公局即時路況與事件"""
-    if self.tdx_speed == -1 and not self.tdx_event_active:
+    if self.tdx_speed <= 0 and not self.tdx_event_active:
       return
 
     # 1. 決定車速的文字顏色
@@ -241,7 +241,7 @@ class HudRenderer(Widget):
     # ==========================================
     # 第一行: 車速 (Traffic Speed)
     # ==========================================
-    if self.tdx_speed != -1:
+    if self.tdx_speed > 0:
       speed_text = f"前方車速: {self.tdx_speed} km/h"
       tdx_speed_font_size = 90
       speed_size = measure_text_cached(self._font_semi_bold, speed_text, tdx_speed_font_size)
