@@ -88,9 +88,29 @@ struct LiveGPS @0xa5cd762cd951a455 {
   # livePose health (for debugging fusion issues)
   livePoseOk @11 :Bool;                # livePose valid and providing orientation/velocity
 }
-
-struct CustomReserved6 @0xf98d843bfd7004a3 {
+# ==========================================
+# TDX 高公局路況預警系統資料結構
+# ==========================================
+struct TdxTrafficStatus @0xaa44ffe4db2f8247 {
+  sectionId @0 :Text;
+  speed @1 :Int32;
+  nextSectionId @2 :Text;
+  nextSpeed @3 :Int32;
+  status @4 :Text;
 }
+
+struct TdxRoadEvent @0xe079369bb181a0ac {
+  sectionId @0 :Text;
+  description @1 :Text;
+  distance @2 :Float32;
+  isActive @3 :Bool;
+}
+
+struct Tdx @0xf98d843bfd7004a3 {
+  trafficStatus @0 :TdxTrafficStatus;
+  roadEvent @1 :TdxRoadEvent;
+}
+# ==========================================
 
 struct CustomReserved7 @0xb86e6369214c01c8 {
 }
