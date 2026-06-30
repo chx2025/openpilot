@@ -9,10 +9,42 @@ import requests
 import xml.etree.ElementTree as ET
 import urllib3
 
+# 忽略因為 verify=False 產生的 SSL 警告，適合 C3X 嵌入式環境
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# 依據你的檔案位置，設定正確的 openpilot 路徑以載入 messaging
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), "../../../../"))
 import cereal.messaging as messaging
+
+# ==========================================
+# 工具函數：開機自動下載 TDX 線形圖資 (針對 Comma 3X 網路延遲最佳化)
+# ==========================================
+def download_freeway_shapes_guest(filepath):
+    print(f"[系統] 偵測到開機啟動，準備透過訪客額度下載最新 TDX 圖資...")
+    url = "https://tdx.transportdata.tw/api/basic/v2/Road/Traffic/SectionShape/Freeway?$format=JSON"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) openpilot/tdxd'}
+    
+    # C3X 開機時網路連線需要時間，給予 5 次重試機會 (共約 100 秒緩衝)
+    for attempt in range(5):
+        try:
+            print(f"[系統] 第 {attempt+1}/5 次嘗試連線 TDX...")
+            response = requests.get(url, headers=headers, timeout=15, verify=False)
+            response.raise_for_status()
+            data = response.json()
+            
+            # 存檔覆蓋舊圖資 (請確保腳本放在 /data 目錄下才有寫入權限)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                
+            print(f"[系統] ✅ 圖資下載成功！已更新 {filepath} (共 {len(data)} 筆路段)")
+            return # 下載成功就跳出函數，繼續執行主程式
+            
+        except Exception as e:
+            print(f"[警告] ⚠️ 嘗試失敗 ({e})。可能是 C3X 網路尚未就緒，20秒後重試...")
+            time.sleep(20)
+            
+    print(f"[警告] ❌ 網路連線逾時，放棄下載，將沿用本地舊有圖資檔案。")
+
 
 # ==========================================
 # 工具函數：WKT 解析 & 點到線段距離
@@ -79,67 +111,75 @@ def bearing_to_direction(bearing_deg):
         return '西向'
 
 # ==========================================
-# 1. 核心圖資配對引擎
+# 1. 核心圖資配對引擎 (記憶體預先解析極速版)
 # ==========================================
 class LocalMapMatcher:
     def __init__(self, filepath):
-        self.shapes_data = []
+        self.processed_shapes = []
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                self.shapes_data = data.get("SectionShapes", data) if isinstance(data, dict) else data
+                raw_shapes = data.get("SectionShapes", data) if isinstance(data, dict) else data
+                
+                print("[系統] 正在預先解析圖資進記憶體 (徹底降低 CPU 負擔)...")
+                # 開機時只做一次：把字串全部轉成數字 list，並算好航向角
+                for item in raw_shapes:
+                    geom_wkt = item.get('Geometry')
+                    sec_id = item.get('SectionID')
+                    if geom_wkt and sec_id:
+                        try:
+                            coords = _parse_wkt_linestring(geom_wkt)
+                            self.processed_shapes.append({
+                                'id': sec_id,
+                                'coords': coords,
+                                'bearing': _linestring_bearing(coords)
+                            })
+                        except:
+                            continue
+                print(f"[系統] 圖資載入完成！共 {len(self.processed_shapes)} 筆路段準備就緒。")
         except Exception as e:
             print(f"[圖資] 讀取 freeway_shapes.json 失敗: {e}")
 
     def find_current_section(self, lat, lon, threshold_meters=3000, bearing_deg=None):
-        if not self.shapes_data:
+        if not self.processed_shapes:
             return None
+        
         best_match = None
         min_dist = float('inf')
-        for item in self.shapes_data:
-            geom_wkt = item.get('Geometry')
-            sec_id = item.get('SectionID')
-            if not geom_wkt or not sec_id:
-                continue
-            try:
-                coords = _parse_wkt_linestring(geom_wkt)
-                if bearing_deg is not None:
-                    seg_bearing = _linestring_bearing(coords)
-                    if _angle_diff(bearing_deg, seg_bearing) > 90:
-                        continue
-                dist_meters = _point_to_linestring_dist(lon, lat, coords) * 111000
-                if dist_meters < min_dist:
-                    min_dist = dist_meters
-                    best_match = sec_id
-            except:
-                continue
+        
+        for item in self.processed_shapes:
+            if bearing_deg is not None:
+                if _angle_diff(bearing_deg, item['bearing']) > 90:
+                    continue
+                    
+            # 單純做數學距離運算，不碰字串解析，速度極快
+            dist_meters = _point_to_linestring_dist(lon, lat, item['coords']) * 111000
+            if dist_meters < min_dist:
+                min_dist = dist_meters
+                best_match = item['id']
+                
         if best_match and min_dist < threshold_meters:
             return best_match
         return None
 
     def find_ahead_section(self, lat, lon, bearing_deg, total_m=3000, step_m=250, threshold_meters=500):
-        if not self.shapes_data:
+        if not self.processed_shapes:
             return None
+            
         points = get_ahead_points(lat, lon, bearing_deg, total_m, step_m)
         for (la, lo) in points:
             best_match = None
             min_dist = float('inf')
-            for item in self.shapes_data:
-                geom_wkt = item.get('Geometry')
-                sec_id = item.get('SectionID')
-                if not geom_wkt or not sec_id:
+            
+            for item in self.processed_shapes:
+                if _angle_diff(bearing_deg, item['bearing']) > 90:
                     continue
-                try:
-                    coords = _parse_wkt_linestring(geom_wkt)
-                    seg_bearing = _linestring_bearing(coords)
-                    if _angle_diff(bearing_deg, seg_bearing) > 90:
-                        continue
-                    dist_meters = _point_to_linestring_dist(lo, la, coords) * 111000
-                    if dist_meters < min_dist:
-                        min_dist = dist_meters
-                        best_match = sec_id
-                except:
-                    continue
+                    
+                dist_meters = _point_to_linestring_dist(lo, la, item['coords']) * 111000
+                if dist_meters < min_dist:
+                    min_dist = dist_meters
+                    best_match = item['id']
+                    
             if best_match and min_dist < threshold_meters:
                 return best_match
         return None
@@ -180,6 +220,7 @@ class FreewayDataClient:
                     coords_str = positions.replace('POINT(', '').replace(')', '').strip().split()
                     if len(coords_str) == 2:
                         evt_lon, evt_lat = float(coords_str[0]), float(coords_str[1])
+                        # 利用預先解析好的 matcher 加速找尋事件路段
                         sec_id = matcher.find_current_section(evt_lat, evt_lon, threshold_meters=2000)
                         if sec_id:
                             new_events.append({
@@ -213,11 +254,18 @@ class FreewayDataClient:
 # 3. 主循環
 # ==========================================
 def main():
-    print("🚀 啟動 tdxd 路況發布系統...")
+    print("🚀 啟動 tdxd 路況發布系統 (C3X 終極最佳化版)...")
     pm = messaging.PubMaster(['tdx'])
 
     BASE_DIR = os.path.dirname(os.path.realpath(__file__))
     JSON_PATH = os.path.join(BASE_DIR, "freeway_shapes.json")
+    
+    # ----------------------------------------------------
+    # 開機網路緩衝與圖資下載
+    # ----------------------------------------------------
+    download_freeway_shapes_guest(JSON_PATH)
+
+    # 讀取並預先解析圖資
     matcher = LocalMapMatcher(JSON_PATH)
     client = FreewayDataClient()
     sm = messaging.SubMaster(['liveGPS', 'gpsLocationExternal'],
@@ -226,9 +274,10 @@ def main():
     MAX_HORIZONTAL_ACCURACY = 50.0
 
     last_api_call = 0
-    UPDATE_INTERVAL = 60
+    # 修改：網路更新頻率調整為 30 秒一次
+    UPDATE_INTERVAL = 30 
 
-    # --- 新增：平滑與效能控制變數 ---
+    # --- 平滑與效能控制變數 ---
     last_calc_time = 0           # 控制 GPS 運算頻率
     CALC_INTERVAL = 1.0          # 降頻：每 1.0 秒才做一次圖資比對
     
@@ -244,13 +293,13 @@ def main():
 
     while True:
         if TEST_MODE:
-            time.sleep(0.1) # 讓測試模式也能模擬高頻率迴圈
+            time.sleep(0.1) 
         else:
             sm.update()
             
         current_time = time.time()
 
-        # 1. 網路資料更新 (60秒一次)
+        # 1. 網路資料更新 (30秒一次)
         if current_time - last_api_call >= UPDATE_INTERVAL:
             client.update_data(matcher)
             last_api_call = current_time
@@ -288,31 +337,24 @@ def main():
             last_calc_time = current_time
             my_direction = bearing_to_direction(bearing)
 
-            # 進行耗資源的圖資比對
+            # 進行圖資比對 (現在是極速的記憶體運算)
             raw_current_section = matcher.find_current_section(lat, lon, threshold_meters=300, bearing_deg=bearing)
             raw_ahead_section = matcher.find_ahead_section(lat, lon, bearing, total_m=3000, step_m=250, threshold_meters=500)
 
             # --- 平滑過濾機制 (Debouncing) ---
-            # 當下路段通常比較穩定，直接更新
             stable_current_section = raw_current_section 
             
-            # 前方路段容易跳動，存入歷史陣列
             ahead_section_history.append(raw_ahead_section)
-            
-            # 保持陣列長度不超過設定的平滑次數 (3次)
             if len(ahead_section_history) > SMOOTH_COUNT:
                 ahead_section_history.pop(0)
 
-            # 只有當陣列存滿 3 次，而且這 3 次的結果完全相同時，才更新 stable_ahead_section
             if len(ahead_section_history) == SMOOTH_COUNT and len(set(ahead_section_history)) == 1:
                 stable_ahead_section = ahead_section_history[0]
-            # 如果沒有連續 3 次相同，stable_ahead_section 就會維持上一次成功配對的舊值，避免畫面閃爍
 
-            # 3. 打包與發布訊息 (每秒與運算同步發布一次即可)
+            # 3. 打包與發布訊息
             msg = messaging.new_message('tdx')
             traffic = msg.tdx.init('trafficStatus')
             
-            # 使用經過平滑處理的 stable_ahead_section 來抓車速
             ahead_speed = client.cached_speeds.get(str(stable_ahead_section).strip(), -1) if stable_ahead_section else -1
             display_speed = ahead_speed
 
@@ -330,7 +372,7 @@ def main():
                 traffic.speed = -1
                 traffic.status = "GREEN"
 
-            # 事件設定 (使用 stable 的路段來判斷)
+            # 事件設定 
             current_event = None
             ahead_event = None
 
@@ -341,6 +383,7 @@ def main():
 
                 if evt_dir:
                     OPPOSITE = {'南向': '北向', '北向': '南向', '東向': '西向', '西向': '東向'}
+                    # 若事件方向剛好是我目前方向的反向，則忽略
                     if OPPOSITE.get(my_direction) == evt_dir:
                         continue
 
@@ -350,6 +393,7 @@ def main():
                 if stable_ahead_section and evt_sid == str(stable_ahead_section).strip():
                     ahead_event = (ahead_event + " / " + evt_desc) if ahead_event else evt_desc
 
+            # 使用目前時間每 30 秒切換顯示「當下路段」與「前方路段」的事件
             cycle_state = int(current_time // 30) % 2
             event = msg.tdx.init('roadEvent')
             event.isActive = False
