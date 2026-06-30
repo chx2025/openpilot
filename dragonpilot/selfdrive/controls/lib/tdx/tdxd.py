@@ -41,7 +41,6 @@ def _point_to_linestring_dist(lon, lat, coords):
     return math.sqrt(min_dist_sq)
 
 def _linestring_bearing(coords):
-    """計算 WKT 折線的整體走向角度（度），取首尾兩點"""
     if len(coords) < 2:
         return 0.0
     lon1, lat1 = coords[0]
@@ -51,15 +50,13 @@ def _linestring_bearing(coords):
     return math.degrees(math.atan2(dx, dy)) % 360
 
 def _angle_diff(a, b):
-    """兩個角度之間的最小差值（0~180）"""
     diff = abs(a - b) % 360
     return diff if diff <= 180 else 360 - diff
 
 # ==========================================
-# 修正 2：分段直線投射（每 500m 一段）
+# 分段直線投射（每 250m 一段）
 # ==========================================
-def get_ahead_points(lat, lon, bearing_deg, total_m=3000, step_m=500):
-    """沿車頭方向每 step_m 投射一個點，回傳所有中繼點（含終點）"""
+def get_ahead_points(lat, lon, bearing_deg, total_m=3000, step_m=250):
     R = 6378137.0
     bearing_rad = math.radians(bearing_deg)
     lat_rad = math.radians(lat)
@@ -70,9 +67,6 @@ def get_ahead_points(lat, lon, bearing_deg, total_m=3000, step_m=500):
         points.append((la, lo))
     return points
 
-# ==========================================
-# 修正 1：bearing 轉行駛方向文字
-# ==========================================
 def bearing_to_direction(bearing_deg):
     b = bearing_deg % 360
     if b < 45 or b >= 315:
@@ -123,7 +117,7 @@ class LocalMapMatcher:
             return best_match
         return None
 
-    def find_ahead_section(self, lat, lon, bearing_deg, total_m=3000, step_m=500, threshold_meters=500):
+    def find_ahead_section(self, lat, lon, bearing_deg, total_m=3000, step_m=250, threshold_meters=500):
         if not self.shapes_data:
             return None
         points = get_ahead_points(lat, lon, bearing_deg, total_m, step_m)
@@ -169,7 +163,6 @@ class FreewayDataClient:
     def update_data(self, matcher):
         print("[網路] 🔄 背景更新高公局 LiveEvents & LiveTraffic...")
         try:
-            # --- 事件 ---
             res_evt = requests.get(self.events_url, headers=self.headers, timeout=5, verify=False)
             res_evt.encoding = 'utf-8'
             xml_evt = re.sub(r'\sxmlns="[^"]+"', '', res_evt.text, count=1)
@@ -196,7 +189,6 @@ class FreewayDataClient:
                             })
             self.cached_events = new_events
 
-            # --- 車速 ---
             res_spd = requests.get(self.traffic_url, headers=self.headers, timeout=5, verify=False)
             res_spd.encoding = 'utf-8'
             xml_spd = re.sub(r' xmlns="[^"]+"', '', res_spd.text, count=1)
@@ -210,7 +202,6 @@ class FreewayDataClient:
                 speed_str = (traffic.findtext('TravelSpeed') or '').strip()
                 if link_id and speed_str:
                     spd = int(speed_str)
-                    # 嚴格過濾：小於等於 0 視為無效資料，不寫入快取
                     if spd > 0:
                         new_speeds[link_id] = spd
             self.cached_speeds = new_speeds
@@ -229,47 +220,49 @@ def main():
     JSON_PATH = os.path.join(BASE_DIR, "freeway_shapes.json")
     matcher = LocalMapMatcher(JSON_PATH)
     client = FreewayDataClient()
-    # 主要來源：gpsd 融合後的 liveGPS（Kalman 融合 + bearing 校正）
-    # 備援來源：原始 gpsLocationExternal，當 liveGPS 暫時收不到資料時自動切換
-    # 兩者都加 ignore_alive，避免任一服務沒在跑時卡住整體判斷邏輯
     sm = messaging.SubMaster(['liveGPS', 'gpsLocationExternal'],
                               ignore_alive=['liveGPS', 'gpsLocationExternal'])
 
-    # liveGPS 精度/新鮮度過濾門檻(對應 gpsd.py 內部邏輯,避免拿不可靠定位去比對路段)
-    MAX_HORIZONTAL_ACCURACY = 50.0  # 公尺,與 gpsd.py GPS_MAX_ACCURACY 一致
+    MAX_HORIZONTAL_ACCURACY = 50.0
 
     last_api_call = 0
     UPDATE_INTERVAL = 60
 
-    # ==========================================
-    # 測試點設定 (可自行開關) 切換回真實的車輛 GPS，只要把 TEST_MODE = True 改成 TEST_MODE = False
-    # ==========================================
+    # --- 新增：平滑與效能控制變數 ---
+    last_calc_time = 0           # 控制 GPS 運算頻率
+    CALC_INTERVAL = 1.0          # 降頻：每 1.0 秒才做一次圖資比對
+    
+    ahead_section_history = []   # 暫存陣列，用來儲存最近幾次的運算結果
+    SMOOTH_COUNT = 3             # 平滑門檻：連續 3 次一樣才信任
+    stable_ahead_section = None  # 最終決定發布給 UI 的前方路段
+    stable_current_section = None# 最終決定發布給 UI 的當下路段
+
     TEST_MODE = False
     TEST_LAT = 23.089022
     TEST_LON = 120.250816
     TEST_BEARING = 0.0
-    # ==========================================
 
     while True:
         if TEST_MODE:
-            time.sleep(1)
+            time.sleep(0.1) # 讓測試模式也能模擬高頻率迴圈
         else:
             sm.update()
             
         current_time = time.time()
 
+        # 1. 網路資料更新 (60秒一次)
         if current_time - last_api_call >= UPDATE_INTERVAL:
             client.update_data(matcher)
             last_api_call = current_time
 
-        gps_source = None  # 紀錄這次用的是哪個來源，方便 log 觀察
+        gps_source = None
+        is_gps_ready = False
 
         if TEST_MODE:
             is_gps_ready = True
+            lat, lon, bearing = TEST_LAT, TEST_LON, TEST_BEARING
+            gps_source = 'TEST_MODE'
         else:
-            is_gps_ready = False
-
-            # 1) 優先用 liveGPS（Kalman 融合 + bearing 校正）
             if sm.updated.get('liveGPS', False):
                 live_gps = sm['liveGPS']
                 if live_gps.gpsOK and (live_gps.horizontalAccuracy <= 0 or
@@ -280,7 +273,6 @@ def main():
                     is_gps_ready = True
                     gps_source = 'liveGPS'
 
-            # 2) liveGPS 這一輪沒有可用資料時，退回原始 gpsLocationExternal
             if not is_gps_ready and sm.updated.get('gpsLocationExternal', False):
                 raw_gps = sm['gpsLocationExternal']
                 acc = getattr(raw_gps, 'horizontalAccuracy', 0.0)
@@ -291,36 +283,42 @@ def main():
                     is_gps_ready = True
                     gps_source = 'gpsLocationExternal(備援)'
 
-        if is_gps_ready:
-            if TEST_MODE:
-                lat = TEST_LAT
-                lon = TEST_LON
-                bearing = TEST_BEARING
-                gps_source = 'TEST_MODE'
-
+        # 2. 核心運算：加上 1 秒鐘的時間限制 (降頻)
+        if is_gps_ready and (current_time - last_calc_time >= CALC_INTERVAL):
+            last_calc_time = current_time
             my_direction = bearing_to_direction(bearing)
 
-            current_section = matcher.find_current_section(lat, lon, threshold_meters=300, bearing_deg=bearing)
-            ahead_section = matcher.find_ahead_section(lat, lon, bearing,
-                                                        total_m=3000, step_m=500,
-                                                        threshold_meters=500)
+            # 進行耗資源的圖資比對
+            raw_current_section = matcher.find_current_section(lat, lon, threshold_meters=300, bearing_deg=bearing)
+            raw_ahead_section = matcher.find_ahead_section(lat, lon, bearing, total_m=3000, step_m=250, threshold_meters=500)
 
-            msg = messaging.new_message('tdx')
-
-            # --- 車速設定 ---
-            traffic = msg.tdx.init('trafficStatus')
-            ahead_speed = client.cached_speeds.get(str(ahead_section).strip(), -1) if ahead_section else -1
-            current_speed = client.cached_speeds.get(str(current_section).strip(), -1) if current_section else -1
+            # --- 平滑過濾機制 (Debouncing) ---
+            # 當下路段通常比較穩定，直接更新
+            stable_current_section = raw_current_section 
             
-            # 優先採用前方車速，沒有才拿當下車速
-            display_speed = ahead_speed if ahead_speed > 0 else current_speed
+            # 前方路段容易跳動，存入歷史陣列
+            ahead_section_history.append(raw_ahead_section)
+            
+            # 保持陣列長度不超過設定的平滑次數 (3次)
+            if len(ahead_section_history) > SMOOTH_COUNT:
+                ahead_section_history.pop(0)
 
-            # 車速大於 0 才視為需要發布的有效資料 (已取消 < 70 的限制)
+            # 只有當陣列存滿 3 次，而且這 3 次的結果完全相同時，才更新 stable_ahead_section
+            if len(ahead_section_history) == SMOOTH_COUNT and len(set(ahead_section_history)) == 1:
+                stable_ahead_section = ahead_section_history[0]
+            # 如果沒有連續 3 次相同，stable_ahead_section 就會維持上一次成功配對的舊值，避免畫面閃爍
+
+            # 3. 打包與發布訊息 (每秒與運算同步發布一次即可)
+            msg = messaging.new_message('tdx')
+            traffic = msg.tdx.init('trafficStatus')
+            
+            # 使用經過平滑處理的 stable_ahead_section 來抓車速
+            ahead_speed = client.cached_speeds.get(str(stable_ahead_section).strip(), -1) if stable_ahead_section else -1
+            display_speed = ahead_speed
+
             if display_speed > 0:
-                traffic.sectionId = str(ahead_section) if ahead_speed > 0 else str(current_section)
+                traffic.sectionId = str(stable_ahead_section)
                 traffic.speed = int(display_speed)
-                
-                # 配合全速域顯示，新增 80 以上為綠燈的判斷
                 if display_speed >= 80:
                     traffic.status = "GREEN"
                 elif display_speed >= 40:
@@ -332,7 +330,7 @@ def main():
                 traffic.speed = -1
                 traffic.status = "GREEN"
 
-            # --- 事件設定 ---
+            # 事件設定 (使用 stable 的路段來判斷)
             current_event = None
             ahead_event = None
 
@@ -346,10 +344,10 @@ def main():
                     if OPPOSITE.get(my_direction) == evt_dir:
                         continue
 
-                if current_section and evt_sid == str(current_section).strip():
+                if stable_current_section and evt_sid == str(stable_current_section).strip():
                     current_event = (current_event + " / " + evt_desc) if current_event else evt_desc
 
-                if ahead_section and evt_sid == str(ahead_section).strip():
+                if stable_ahead_section and evt_sid == str(stable_ahead_section).strip():
                     ahead_event = (ahead_event + " / " + evt_desc) if ahead_event else evt_desc
 
             cycle_state = int(current_time // 30) % 2
@@ -373,19 +371,16 @@ def main():
                     event.description = f"當下:{current_event}"
                     event.isActive = True
 
-            # --- 決定是否傳送資料 ---
-            # 移除 has_warning_data 的 if 判斷，強制每次都發送
             pm.send('tdx', msg) 
 
-            print(f"GPS來源: {gps_source} | 航向: {bearing:.1f}°({my_direction}) | 當下: {current_section or '無'} | 前方: {ahead_section or '無'}")
+            # Console Log
+            print(f"GPS: {gps_source} | 航向: {bearing:.1f}°({my_direction})")
+            print(f"路段判定 -> 當下: {stable_current_section or '無'} | 前方(過濾後): {stable_ahead_section or '無'} | 前方(原始): {raw_ahead_section or '無'}")
             
             if traffic.speed > 0:
-                print(f" => 車速顯示: {traffic.speed} km/h")
+                print(f" => 前方車速顯示: {traffic.speed} km/h")
             if event.isActive:
                 print(f" => 事件警告: {event.description}")
-            
-            if traffic.speed <= 0 and not event.isActive and TEST_MODE:
-                print(f"[TEST DEBUG] lat={lat}, lon={lon} | 無事件或車速為0，已發送空狀態洗掉 UI。")
             print("-" * 40)
 
 if __name__ == "__main__":
