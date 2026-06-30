@@ -98,6 +98,8 @@ _services: dict[str, tuple] = {
   "carStateExt": (True, 100.),
   "modelExt": (True, 20.),
   "dashyState": (True, 0.),    # Aggregated dashy UI state (optional)
+  "liveGPS": (True, 0.),       # GPS fusion from gpsd (optional)
+  "tdx": (True, 1., 1),
 }
 SERVICE_LIST = {name: Service(*vals) for
                 idx, (name, vals) in enumerate(_services.items())}
