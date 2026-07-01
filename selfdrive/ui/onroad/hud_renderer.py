@@ -133,15 +133,29 @@ class HudRenderer(Widget):
       self.lead_dist_raw = 0.0
       self.lead_dist = "-"
 
-    # --- 讀取 TDX 狀態 (使用 try 保護，避免未訂閱時報錯) ---
+    # --- 讀取 TDX 狀態 ---
     try:
       tdx = sm['tdx']
       self.tdx_speed = tdx.trafficStatus.speed
       self.tdx_status = str(tdx.trafficStatus.status)
       self.tdx_event_active = tdx.roadEvent.isActive
-      self.tdx_event_desc = str(tdx.roadEvent.description)
+      
+      raw_desc = str(tdx.roadEvent.description)
+      # 解碼並只取純文字
+      if raw_desc and ":" in raw_desc:
+          loc_part, events_part = raw_desc.split(":", 1)
+          clean_events = []
+          for evt in events_part.split("/"):
+              parts = evt.split("|")
+              # 如果有代碼，就只取 | 後面的文字；否則保留原樣
+              clean_events.append(parts[1] if len(parts) > 1 else evt)
+          # 重新組裝為純文字供畫面繪製
+          self.tdx_event_desc = f"{loc_part}: {' / '.join(clean_events)}"
+      else:
+          self.tdx_event_desc = raw_desc
+
     except Exception:
-      pass # 如果系統還沒有發布 tdx 訊息，就靜默略過
+      pass
 
     v_cruise_cluster = car_state.vCruiseCluster
     self.set_speed = (
@@ -204,7 +218,6 @@ class HudRenderer(Widget):
       test_line = current_line + char
       test_width = measure_text_cached(font, test_line, font_size).x
       
-      # 如果加上這個字會超過最大寬度，且目前行已經有字，就斷行
       if test_width > max_width and current_line != "":
         lines.append(current_line)
         current_line = char
@@ -216,9 +229,6 @@ class HudRenderer(Widget):
 
     return lines
 
-  # --------------------------------------------------------------------------
-  # TDX 雙行顯示繪製邏輯 (支援事件自動換行、貼齊底部)
-  # --------------------------------------------------------------------------
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
     """繪製高公局即時路況與事件 (修正為貼齊下方，最多顯示兩行)"""
     if self.tdx_speed <= 0 and not self.tdx_event_active:
@@ -241,14 +251,13 @@ class HudRenderer(Widget):
     else:
       speed_color = rl.WHITE
 
-    # 2. 處理第二行: 事件 (限制最多兩行，且向上堆疊)
-    current_y = perf_bar_y - 15  # 從 Performance 列上方開始向上算
+    # 2. 處理第二行: 事件
+    current_y = perf_bar_y - 15
 
     if self.tdx_event_active and self.tdx_event_desc:
       tdx_event_font_size = 75
       max_text_width = rect.width - 200 
       
-      # 將字串切分，並強制只取前兩行
       all_lines = self._wrap_text(self.tdx_event_desc, self._font_semi_bold, tdx_event_font_size, max_text_width)
       lines = all_lines[:2] 
       
@@ -258,9 +267,8 @@ class HudRenderer(Widget):
       total_text_height = len(lines) * line_height + (len(lines) - 1) * line_spacing
       actual_max_width = max([measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x for line in lines])
       
-      # 計算背景高度與 Y 軸起始點
       event_bg_height = total_text_height + bg_padding_y * 2
-      current_y -= event_bg_height # 向上推
+      current_y -= event_bg_height 
       
       event_x = rect.x + rect.width / 2 - actual_max_width / 2
       event_bg_rect = rl.Rectangle(
@@ -288,7 +296,7 @@ class HudRenderer(Widget):
       tdx_speed_font_size = 90
       speed_size = measure_text_cached(self._font_semi_bold, speed_text, tdx_speed_font_size)
       
-      speed_y = current_y - speed_size.y - bg_padding_y * 2 - 15 # 在事件框上方
+      speed_y = current_y - speed_size.y - bg_padding_y * 2 - 15 
       speed_x = rect.x + rect.width / 2 - speed_size.x / 2
       
       bg_rect = rl.Rectangle(speed_x - bg_padding_x, speed_y - bg_padding_y, speed_size.x + bg_padding_x * 2, speed_size.y + bg_padding_y * 2)
@@ -297,7 +305,6 @@ class HudRenderer(Widget):
       rl.draw_text_ex(self._font_semi_bold, speed_text, rl.Vector2(speed_x, speed_y), tdx_speed_font_size, 0, speed_color)
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
-    """Draw the MAX speed indicator box."""
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
     x = rect.x + 60 + (UI_CONFIG.set_speed_width_imperial - set_speed_width) // 2
     y = rect.y + 45
@@ -340,7 +347,6 @@ class HudRenderer(Widget):
     )
 
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
-    """Draw the current vehicle speed and unit."""
     speed_text = str(round(self.speed))
     speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
     speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
@@ -350,10 +356,6 @@ class HudRenderer(Widget):
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
     unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
     rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
-
-  # --------------------------------------------------------------------------
-  # DP Performance Info Methods
-  # --------------------------------------------------------------------------
 
   def _draw_performance_info(self, rect: rl.Rectangle) -> None:
     if rect.width <= 0 or rect.height <= 0:
@@ -367,7 +369,6 @@ class HudRenderer(Widget):
     mem_usage = stats.get("mem_usage", "-")
     disk_free = stats.get("disk_free", "-")
 
-    # Order: Lead Dist -> CPU Temp -> Memory -> Disk Free -> Control
     items = [
       f"{tr('Lead Dist')} {lead_dist}",
       f"{tr('CPU Temp')} {cpu_temp}",
@@ -378,12 +379,10 @@ class HudRenderer(Widget):
 
     measurements = [measure_text_cached(self._perf_font, text, PERF_FONT_SIZE) for text in items]
 
-    # 設定整個狀態列的總寬度 (稍微留點邊距)
     bar_width = max(rect.width - 20, 0)
     bar_height = PERF_FONT_SIZE + 2 * PERF_PADDING
 
     bar_x = rect.x + (rect.width - bar_width) / 2
-    # Apply 0 margin to stick to bottom
     bar_y = rect.y + rect.height - bar_height - PERF_MARGIN_BOTTOM
     minimum_y = rect.y + PERF_MARGIN_BOTTOM
     if bar_y < minimum_y:
@@ -396,19 +395,14 @@ class HudRenderer(Widget):
       PERF_BG_COLOR,
     )
 
-    # 將總寬度均分為等寬的 5 個欄位 (slots)
     slot_width = bar_width / len(items)
     text_y = bar_y + PERF_PADDING
 
     for i, (text, measurement) in enumerate(zip(items, measurements)):
-      # 精準置中演算法
       cursor_x = bar_x + (i * slot_width) + (slot_width - measurement.x) / 2
-
       text_color = rl.WHITE
-      # 動態決定前車距離的顏色 (小於 15 公尺時顯示橘色)
       if i == 0 and self.lead_dist != "-" and self.lead_dist_raw < 15.0:
         text_color = rl.Color(255, 188, 0, 200)
-      # 當控制狀態不為自動巡航時，文字改為黃色
       elif i == 4 and ui_state.status != UIStatus.ENGAGED:
         text_color = rl.YELLOW
 
@@ -476,8 +470,8 @@ class HudRenderer(Widget):
       usage = shutil.disk_usage("/data")
       free_gb = usage.free / (1024 ** 3)
       if free_gb >= 1.0:
-        return f"{free_gb:.1f}G" # GB 改為 G
+        return f"{free_gb:.1f}G" 
       free_mb = usage.free / (1024 ** 2)
-      return f"{free_mb:.0f}MB"   #
+      return f"{free_mb:.0f}MB"  
     except Exception:
       return "-"
