@@ -286,6 +286,12 @@ def main():
     stable_ahead_section = None  # 最終決定發布給 UI 的前方路段
     stable_current_section = None# 最終決定發布給 UI 的當下路段
 
+    # --- 當下路段去抖動 (簡單版) ---
+    # 進入路段：判定到就立刻採信（換路段不delay）
+    # 離開路段：要連續 MISS 到達門檻次數才真的判定「不在高速公路上」
+    CURRENT_SECTION_MISS_LIMIT = 2   # 連續 2 次 (約 2 秒，CALC_INTERVAL=1.0) 判定不在路段上才真正判定離開
+    current_section_miss_count = 0
+
     TEST_MODE = False
     TEST_LAT = 23.089022
     TEST_LON = 120.250816
@@ -339,7 +345,18 @@ def main():
 
             # 進行圖資比對 (現在是極速的記憶體運算)
             raw_current_section = matcher.find_current_section(lat, lon, threshold_meters=300, bearing_deg=bearing)
-            stable_current_section = raw_current_section
+
+            # --- 當下路段去抖動判定 ---
+            if raw_current_section is not None:
+                # 判定到路段：立刻採信，換路段/剛上匝道不會有 delay
+                stable_current_section = raw_current_section
+                current_section_miss_count = 0
+            else:
+                # 判定不到路段：先累計 miss 次數，連續達到門檻才真的判定離開
+                current_section_miss_count += 1
+                if current_section_miss_count >= CURRENT_SECTION_MISS_LIMIT:
+                    stable_current_section = None
+                # 未達門檻前，stable_current_section 維持上一次的有效值，避免單次雜訊造成閃爍
 
             # ==========================================
             # 新增邏輯：當前座標必須在圖資路段上，才會啟動車速與事件判定
@@ -429,7 +446,7 @@ def main():
 
             # Console Log
             print(f"GPS: {gps_source} | 航向: {bearing:.1f}°({my_direction})")
-            print(f"路段判定 -> 當下: {stable_current_section or '無'} | 前方(過濾後): {stable_ahead_section or '無'} | 前方(原始): {raw_ahead_section or '無'}")
+            print(f"路段判定 -> 當下(去抖動後): {stable_current_section or '無'} | 當下(原始): {raw_current_section or '無'} | miss:{current_section_miss_count} | 前方(過濾後): {stable_ahead_section or '無'} | 前方(原始): {raw_ahead_section or '無'}")
             
             if traffic.speed > 0:
                 print(f" => 前方車速顯示: {traffic.speed} km/h")
