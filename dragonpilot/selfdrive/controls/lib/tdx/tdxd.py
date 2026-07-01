@@ -187,11 +187,6 @@ class LocalMapMatcher:
 # ==========================================
 # 2. 高公局 XML 雙核心抓取器
 # ==========================================
-EVENT_TYPE_LABEL = {
-    '1': '事故', '2': '施工', '3': '壅塞',
-    '4': '管制', '5': '天氣', '8': '異常'
-}
-
 class FreewayDataClient:
     def __init__(self):
         self.events_url = "https://tisvcloud.freeway.gov.tw/history/motc20/LiveEvents.xml"
@@ -210,8 +205,7 @@ class FreewayDataClient:
 
             new_events = []
             for event in root_evt.findall('.//LiveEvent'):
-                event_type = (event.findtext('EventType') or '').strip()
-                label = EVENT_TYPE_LABEL.get(event_type, '通知')
+                event_type = (event.findtext('EventType') or '0').strip()
                 desc = event.findtext('Description', '未知事件')
                 positions = event.findtext('Positions')
                 direction = (event.findtext('.//Direction') or '').strip()
@@ -224,7 +218,8 @@ class FreewayDataClient:
                         sec_id = matcher.find_current_section(evt_lat, evt_lon, threshold_meters=2000)
                         if sec_id:
                             new_events.append({
-                                'Description': f"{label} {desc}",
+                                'EventType': event_type,
+                                'Description': desc,
                                 'SectionID': str(sec_id).strip(),
                                 'Direction': direction,
                             })
@@ -287,9 +282,7 @@ def main():
     stable_current_section = None# 最終決定發布給 UI 的當下路段
 
     # --- 當下路段去抖動 (簡單版) ---
-    # 進入路段：判定到就立刻採信（換路段不delay）
-    # 離開路段：要連續 MISS 到達門檻次數才真的判定「不在高速公路上」
-    CURRENT_SECTION_MISS_LIMIT = 2   # 連續 2 次 (約 2 秒，CALC_INTERVAL=1.0) 判定不在路段上才真正判定離開
+    CURRENT_SECTION_MISS_LIMIT = 2   # 連續 2 次才真正判定離開
     current_section_miss_count = 0
 
     TEST_MODE = False
@@ -338,35 +331,27 @@ def main():
                     is_gps_ready = True
                     gps_source = 'gpsLocationExternal(備援)'
 
-        # 2. 核心運算：加上 1 秒鐘的時間限制 (降頻)
+        # 2. 核心運算：降頻
         if is_gps_ready and (current_time - last_calc_time >= CALC_INTERVAL):
             last_calc_time = current_time
             my_direction = bearing_to_direction(bearing)
 
-            # 進行圖資比對 (現在是極速的記憶體運算)
+            # 進行圖資比對 (記憶體運算)
             raw_current_section = matcher.find_current_section(lat, lon, threshold_meters=300, bearing_deg=bearing)
 
             # --- 當下路段去抖動判定 ---
             if raw_current_section is not None:
-                # 判定到路段：立刻採信，換路段/剛上匝道不會有 delay
                 stable_current_section = raw_current_section
                 current_section_miss_count = 0
             else:
-                # 判定不到路段：先累計 miss 次數，連續達到門檻才真的判定離開
                 current_section_miss_count += 1
                 if current_section_miss_count >= CURRENT_SECTION_MISS_LIMIT:
                     stable_current_section = None
-                # 未達門檻前，stable_current_section 維持上一次的有效值，避免單次雜訊造成閃爍
 
-            # ==========================================
-            # 新增邏輯：當前座標必須在圖資路段上，才會啟動車速與事件判定
-            # ==========================================
             raw_ahead_section = None
             if stable_current_section is not None:
-                # 若確實在高快速公路上，才向前方探測
                 raw_ahead_section = matcher.find_ahead_section(lat, lon, bearing, total_m=3000, step_m=250, threshold_meters=500)
                 
-                # --- 平滑過濾機制 (Debouncing) ---
                 ahead_section_history.append(raw_ahead_section)
                 if len(ahead_section_history) > SMOOTH_COUNT:
                     ahead_section_history.pop(0)
@@ -374,7 +359,6 @@ def main():
                 if len(ahead_section_history) == SMOOTH_COUNT and len(set(ahead_section_history)) == 1:
                     stable_ahead_section = ahead_section_history[0]
             else:
-                # 離開高快速公路：清空平滑陣列與前方狀態，停止判定
                 ahead_section_history.clear()
                 stable_ahead_section = None
 
@@ -407,18 +391,22 @@ def main():
                 evt_sid = evt['SectionID']
                 evt_dir = evt['Direction']
                 evt_desc = evt['Description']
+                evt_type = evt.get('EventType', '0')
 
                 if evt_dir:
                     OPPOSITE = {'南向': '北向', '北向': '南向', '東向': '西向', '西向': '東向'}
                     # 若事件方向剛好是我目前方向的反向，則忽略
                     if OPPOSITE.get(my_direction) == evt_dir:
                         continue
+                
+                # 將代碼與描述打包，格式: "1|前方有散落物"
+                formatted_evt = f"{evt_type}|{evt_desc}"
 
                 if stable_current_section and evt_sid == str(stable_current_section).strip():
-                    current_event = (current_event + " / " + evt_desc) if current_event else evt_desc
+                    current_event = (current_event + "/" + formatted_evt) if current_event else formatted_evt
 
                 if stable_ahead_section and evt_sid == str(stable_ahead_section).strip():
-                    ahead_event = (ahead_event + " / " + evt_desc) if ahead_event else evt_desc
+                    ahead_event = (ahead_event + "/" + formatted_evt) if ahead_event else formatted_evt
 
             # 使用目前時間每 30 秒切換顯示「當下路段」與「前方路段」的事件
             cycle_state = int(current_time // 30) % 2
@@ -446,7 +434,7 @@ def main():
 
             # Console Log
             print(f"GPS: {gps_source} | 航向: {bearing:.1f}°({my_direction})")
-            print(f"路段判定 -> 當下(去抖動後): {stable_current_section or '無'} | 當下(原始): {raw_current_section or '無'} | miss:{current_section_miss_count} | 前方(過濾後): {stable_ahead_section or '無'} | 前方(原始): {raw_ahead_section or '無'}")
+            print(f"路段判定 -> 當下: {stable_current_section or '無'} | 前方: {stable_ahead_section or '無'}")
             
             if traffic.speed > 0:
                 print(f" => 前方車速顯示: {traffic.speed} km/h")
