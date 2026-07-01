@@ -343,7 +343,7 @@ def main():
     # 測試點設定：國道三號北向 (高原-大溪段)
     # 請將 TEST_BEARING 設為 65.0 以模擬真實車輛羅盤走向
     # ==========================================
-    TEST_MODE = True
+    TEST_MODE = False
     TEST_LAT = 24.860332
     TEST_LON = 121.218465
     TEST_BEARING = 65.0   
