@@ -279,22 +279,18 @@ def main():
     ahead_section_history = []   # 暫存陣列，用來儲存最近幾次的運算結果
     SMOOTH_COUNT = 3             # 平滑門檻：連續 3 次一樣才信任
     stable_ahead_section = None  # 最終決定發布給 UI 的前方路段
-    stable_current_section = None# 最終決定發布給 UI 的當下路段
+    stable_current_section = None# 最終決定發布給 UI 的目前路段
 
-    # --- 當下路段去抖動 (簡單版) ---
+    # --- 目前路段去抖動 (簡單版) ---
     CURRENT_SECTION_MISS_LIMIT = 2   # 連續 2 次才真正判定離開
     current_section_miss_count = 0
-
     # ==========================================
     # 測試點設定 (可自行開關) 切換回真實的車輛 GPS，只要把 TEST_MODE = True 改成 TEST_MODE = False
     # ==========================================
     TEST_MODE = False
-    TEST_LAT = 23.089022
-  # 測試緯度
-    TEST_LON = 120.250816
-  # 測試經度
+    TEST_LAT = 24.860332
+    TEST_LON = 121.218465
     TEST_BEARING = 0.0
-  # 測試車頭朝向 (0=北向, 90=東向, 180=南向, 270=西向
     # ==========================================
 
     while True:
@@ -346,7 +342,7 @@ def main():
             # 進行圖資比對 (記憶體運算)
             raw_current_section = matcher.find_current_section(lat, lon, threshold_meters=300, bearing_deg=bearing)
 
-            # --- 當下路段去抖動判定 ---
+            # --- 目前路段去抖動判定 ---
             if raw_current_section is not None:
                 stable_current_section = raw_current_section
                 current_section_miss_count = 0
@@ -415,7 +411,7 @@ def main():
                 if stable_ahead_section and evt_sid == str(stable_ahead_section).strip():
                     ahead_event = (ahead_event + "/" + formatted_evt) if ahead_event else formatted_evt
 
-            # 使用目前時間每 30 秒切換顯示「當下路段」與「前方路段」的事件
+            # 使用目前時間每 30 秒切換顯示「目前路段」與「前方路段」的事件
             cycle_state = int(current_time // 30) % 2
             event = msg.tdx.init('roadEvent')
             event.isActive = False
@@ -424,7 +420,7 @@ def main():
 
             if cycle_state == 0:
                 if current_event:
-                    event.description = f"當下:{current_event}"
+                    event.description = f"目前:{current_event}"
                     event.isActive = True
                 elif ahead_event:
                     event.description = f"前方:{ahead_event}"
@@ -434,14 +430,14 @@ def main():
                     event.description = f"前方:{ahead_event}"
                     event.isActive = True
                 elif current_event:
-                    event.description = f"當下:{current_event}"
+                    event.description = f"目前:{current_event}"
                     event.isActive = True
 
             pm.send('tdx', msg) 
 
             # Console Log
             print(f"GPS: {gps_source} | 航向: {bearing:.1f}°({my_direction})")
-            print(f"路段判定 -> 當下: {stable_current_section or '無'} | 前方: {stable_ahead_section or '無'}")
+            print(f"路段判定 -> 目前: {stable_current_section or '無'} | 前方: {stable_ahead_section or '無'}")
             
             if traffic.speed > 0:
                 print(f" => 前方車速顯示: {traffic.speed} km/h")
