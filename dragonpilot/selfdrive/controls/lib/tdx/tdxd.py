@@ -339,17 +339,27 @@ def main():
 
             # 進行圖資比對 (現在是極速的記憶體運算)
             raw_current_section = matcher.find_current_section(lat, lon, threshold_meters=300, bearing_deg=bearing)
-            raw_ahead_section = matcher.find_ahead_section(lat, lon, bearing, total_m=3000, step_m=250, threshold_meters=500)
+            stable_current_section = raw_current_section
 
-            # --- 平滑過濾機制 (Debouncing) ---
-            stable_current_section = raw_current_section 
-            
-            ahead_section_history.append(raw_ahead_section)
-            if len(ahead_section_history) > SMOOTH_COUNT:
-                ahead_section_history.pop(0)
+            # ==========================================
+            # 新增邏輯：當前座標必須在圖資路段上，才會啟動車速與事件判定
+            # ==========================================
+            raw_ahead_section = None
+            if stable_current_section is not None:
+                # 若確實在高快速公路上，才向前方探測
+                raw_ahead_section = matcher.find_ahead_section(lat, lon, bearing, total_m=3000, step_m=250, threshold_meters=500)
+                
+                # --- 平滑過濾機制 (Debouncing) ---
+                ahead_section_history.append(raw_ahead_section)
+                if len(ahead_section_history) > SMOOTH_COUNT:
+                    ahead_section_history.pop(0)
 
-            if len(ahead_section_history) == SMOOTH_COUNT and len(set(ahead_section_history)) == 1:
-                stable_ahead_section = ahead_section_history[0]
+                if len(ahead_section_history) == SMOOTH_COUNT and len(set(ahead_section_history)) == 1:
+                    stable_ahead_section = ahead_section_history[0]
+            else:
+                # 離開高快速公路：清空平滑陣列與前方狀態，停止判定
+                ahead_section_history.clear()
+                stable_ahead_section = None
 
             # 3. 打包與發布訊息
             msg = messaging.new_message('tdx')
