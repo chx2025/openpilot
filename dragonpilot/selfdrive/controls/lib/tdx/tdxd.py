@@ -340,8 +340,7 @@ def main():
     current_section_miss_count = 0
     
     # ==========================================
-    # 測試點設定：國道三號北向 (高原-大溪段)
-    # 請將 TEST_BEARING 設為 65.0 以模擬真實車輛羅盤走向
+    # 測試點設定 (可自行開關) 切換回真實的車輛 GPS，只要把 TEST_MODE = True 改成 TEST_MODE = False
     # ==========================================
     TEST_MODE = False
     TEST_LAT = 24.860332
