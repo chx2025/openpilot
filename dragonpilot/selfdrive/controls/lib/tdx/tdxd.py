@@ -24,7 +24,6 @@ def download_freeway_shapes_guest(filepath):
     url = "https://tdx.transportdata.tw/api/basic/v2/Road/Traffic/SectionShape/Freeway?$format=JSON"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) openpilot/tdxd'}
     
-    # C3X 開機時網路連線需要時間，給予 5 次重試機會 (共約 100 秒緩衝)
     for attempt in range(5):
         try:
             print(f"[系統] 第 {attempt+1}/5 次嘗試連線 TDX...")
@@ -32,12 +31,11 @@ def download_freeway_shapes_guest(filepath):
             response.raise_for_status()
             data = response.json()
             
-            # 存檔覆蓋舊圖資 (請確保腳本放在 /data 目錄下才有寫入權限)
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 
             print(f"[系統] ✅ 圖資下載成功！已更新 {filepath} (共 {len(data)} 筆路段)")
-            return # 下載成功就跳出函數，繼續執行主程式
+            return 
             
         except Exception as e:
             print(f"[警告] ⚠️ 嘗試失敗 ({e})。可能是 C3X 網路尚未就緒，20秒後重試...")
@@ -47,23 +45,20 @@ def download_freeway_shapes_guest(filepath):
 
 
 # ==========================================
-# 工具函數：WKT 解析、距離與方位角運算 (升級版)
+# 工具函數：WKT 解析、距離與方位角運算
 # ==========================================
 def _parse_wkt_linestring(wkt_str):
     inner = re.search(r'LINESTRING\s*\((.+)\)', wkt_str, re.IGNORECASE)
-    if not inner:
-        return []
+    if not inner: return []
     pairs = inner.group(1).split(',')
     return [tuple(map(float, p.strip().split())) for p in pairs]
 
 def _segment_bearing(lon1, lat1, lon2, lat2):
-    # 計算兩點間的局部航向角
     dy = lat2 - lat1
     dx = (lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
     return math.degrees(math.atan2(dx, dy)) % 360
 
 def _point_to_segment_dist_sq_and_bearing(px, py, ax, ay, bx, by):
-    # 回傳：點到線段的最短距離平方, 該線段的方位角
     dx, dy = bx - ax, by - ay
     seg_len_sq = dx * dx + dy * dy
     if seg_len_sq == 0:
@@ -81,40 +76,33 @@ def _angle_diff(a, b):
     return diff if diff <= 180 else 360 - diff
 
 def _get_distance_meters(lon1, lat1, lon2, lat2):
-    # 簡單的經緯度轉公尺 (適用於短距離)
     dx = (lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2)) * 111320.0
     dy = (lat2 - lat1) * 111320.0
     return math.sqrt(dx*dx + dy*dy)
 
 def bearing_to_direction(bearing_deg):
     b = bearing_deg % 360
-    if b < 45 or b >= 315:
-        return '北向'
-    elif b < 135:
-        return '東向'
-    elif b < 225:
-        return '南向'
-    else:
-        return '西向'
+    if b < 45 or b >= 315: return '北向'
+    elif b < 135: return '東向'
+    elif b < 225: return '南向'
+    else: return '西向'
 
 # ==========================================
-# 1. 核心圖資配對引擎 (網格索引 + 局部切線 + 拓樸推演)
+# 1. 核心圖資配對引擎 (向量內積防護版)
 # ==========================================
 class LocalMapMatcher:
     def __init__(self, filepath):
-        self.sections = {}          # sec_id -> dict
-        self.spatial_grid = {}      # (lat_idx, lon_idx) -> list of sec_ids
-        self.grid_size = 0.01       # 約 1.1 公里一個網格
-        self.topology_next = {}     # sec_id -> next_sec_id (連接圖資)
+        self.sections = {}          
+        self.spatial_grid = {}      
+        self.grid_size = 0.01       
+        self.topology_next = {}     
         
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 raw_shapes = data.get("SectionShapes", data) if isinstance(data, dict) else data
+                print("[圖資] 正在建立空間網格與幾何拓樸...")
                 
-                print("[圖資] 正在建立空間網格與幾何拓樸 (純 Python 最佳化)...")
-                
-                # 第一階段：解析與網格化
                 for item in raw_shapes:
                     geom_wkt = item.get('Geometry')
                     sec_id = item.get('SectionID')
@@ -123,7 +111,6 @@ class LocalMapMatcher:
                     coords = _parse_wkt_linestring(geom_wkt)
                     if len(coords) < 2: continue
                         
-                    # 計算總長度與局部線段
                     segments = []
                     total_length = 0.0
                     for i in range(len(coords) - 1):
@@ -141,7 +128,6 @@ class LocalMapMatcher:
                         'end_pt': coords[-1]
                     }
                     
-                    # 放入空間網格 (Bounding Box)
                     min_lon = min(p[0] for p in coords)
                     max_lon = max(p[0] for p in coords)
                     min_lat = min(p[1] for p in coords)
@@ -157,7 +143,7 @@ class LocalMapMatcher:
                                 self.spatial_grid[grid_key] = []
                             self.spatial_grid[grid_key].append(sec_id)
                 
-                # 第二階段：建立道路連通拓樸 (Topology) - 尋找下一段路
+                # 建立拓樸
                 for sec_a, data_a in self.sections.items():
                     end_pt = data_a['end_pt']
                     end_bearing = _segment_bearing(data_a['segments'][-1]['p1'][0], data_a['segments'][-1]['p1'][1], 
@@ -170,10 +156,10 @@ class LocalMapMatcher:
                         start_pt = data_b['start_pt']
                         gap = _get_distance_meters(end_pt[0], end_pt[1], start_pt[0], start_pt[1])
                         
-                        if gap < 50.0 and gap < min_gap: # 容許 50 公尺圖資斷點
+                        if gap < 50.0 and gap < min_gap:
                             start_bearing = _segment_bearing(data_b['segments'][0]['p1'][0], data_b['segments'][0]['p1'][1], 
                                                              data_b['segments'][0]['p2'][0], data_b['segments'][0]['p2'][1])
-                            if _angle_diff(end_bearing, start_bearing) < 45: # 確保沒有接錯到迴轉道
+                            if _angle_diff(end_bearing, start_bearing) < 45: 
                                 best_next = sec_b
                                 min_gap = gap
                                 
@@ -194,16 +180,34 @@ class LocalMapMatcher:
                 candidates.update(self.spatial_grid.get((gy, gx), []))
         return candidates
 
-    def find_current_section(self, lat, lon, threshold_meters=300, bearing_deg=None):
+    def find_current_section(self, lat, lon, threshold_meters=300, bearing_deg=None, direction_text=None):
         candidates = self._get_candidates_from_grid(lat, lon, radius_km=2)
         if not candidates:
             return None
         
         best_match = None
         min_dist = float('inf')
+
+        # 針對 XML 事件：建立文字方向向量
+        evt_vec = None
+        if direction_text:
+            if '北' in direction_text: evt_vec = (0, 1)
+            elif '南' in direction_text: evt_vec = (0, -1)
+            elif '東' in direction_text: evt_vec = (1, 0)
+            elif '西' in direction_text: evt_vec = (-1, 0)
         
         for sec_id in candidates:
             sec_data = self.sections[sec_id]
+            
+            # [核心修復] 利用向量內積，徹底解決錯綁對向車道的問題
+            if evt_vec:
+                start_pt = sec_data['start_pt']
+                end_pt = sec_data['end_pt']
+                sec_vec_x = end_pt[0] - start_pt[0]
+                sec_vec_y = end_pt[1] - start_pt[1]
+                dot_product = sec_vec_x * evt_vec[0] + sec_vec_y * evt_vec[1]
+                if dot_product < 0: # 內積為負，代表這是反向車道，直接剔除！
+                    continue
             
             for seg in sec_data['segments']:
                 dist_sq, local_bearing = _point_to_segment_dist_sq_and_bearing(
@@ -212,7 +216,7 @@ class LocalMapMatcher:
                 dist_meters = math.sqrt(dist_sq) * 111320.0
                 
                 if dist_meters < min_dist:
-                    # [修正] 將限制放寬至 90 度，確保彎曲路段不會被誤濾掉
+                    # [車輛防護] 嚴格維持 60 度，避免十字交流道上下層誤判
                     if bearing_deg is not None and _angle_diff(bearing_deg, local_bearing) > 60:
                         continue
                     
@@ -224,8 +228,7 @@ class LocalMapMatcher:
         return None
 
     def find_ahead_section(self, current_sec_id, target_distance_m=3000):
-        if current_sec_id not in self.sections:
-            return None
+        if current_sec_id not in self.sections: return None
             
         accumulated_dist = 0.0
         current = current_sec_id
@@ -236,7 +239,6 @@ class LocalMapMatcher:
                 return current
                 
             accumulated_dist += sec_len
-            
             if current in self.topology_next:
                 current = self.topology_next[current]
             else:
@@ -275,14 +277,13 @@ class FreewayDataClient:
                     coords_str = positions.replace('POINT(', '').replace(')', '').strip().split()
                     if len(coords_str) == 2:
                         evt_lon, evt_lat = float(coords_str[0]), float(coords_str[1])
-                        # [修正] 移除不合理的 pseudo_bearing，直接用座標尋找，後續再透過 UI 過濾反向事件
-                        sec_id = matcher.find_current_section(evt_lat, evt_lon, threshold_meters=1000)
+                        # 帶入 direction_text，讓內積演算法判斷對錯車道
+                        sec_id = matcher.find_current_section(evt_lat, evt_lon, threshold_meters=1000, direction_text=direction)
                         if sec_id:
                             new_events.append({
                                 'EventType': event_type,
                                 'Description': desc,
-                                'SectionID': str(sec_id).strip(),
-                                'Direction': direction,
+                                'SectionID': str(sec_id).strip()
                             })
             self.cached_events = new_events
 
@@ -310,48 +311,42 @@ class FreewayDataClient:
 # 3. 主循環
 # ==========================================
 def main():
-    print("🚀 啟動 tdxd 路況發布系統 (C3X 網格拓樸完美版)...")
+    print("🚀 啟動 tdxd 路況發布系統 (向量內積完美版)...")
     pm = messaging.PubMaster(['tdx'])
 
     BASE_DIR = os.path.dirname(os.path.realpath(__file__))
     JSON_PATH = os.path.join(BASE_DIR, "freeway_shapes.json")
     
-    # ----------------------------------------------------
-    # 開機網路緩衝與圖資下載
-    # ----------------------------------------------------
     download_freeway_shapes_guest(JSON_PATH)
 
-    # 讀取並預先解析圖資
     matcher = LocalMapMatcher(JSON_PATH)
     client = FreewayDataClient()
     sm = messaging.SubMaster(['liveGPS', 'gpsLocationExternal'],
                               ignore_alive=['liveGPS', 'gpsLocationExternal'])
 
     MAX_HORIZONTAL_ACCURACY = 50.0
-
     last_api_call = 0
-    UPDATE_INTERVAL = 30 # 網路更新頻率
+    UPDATE_INTERVAL = 30 
 
-    # --- 平滑與效能控制變數 ---
-    last_calc_time = 0           # 控制 GPS 運算頻率
-    CALC_INTERVAL = 1.0          # 降頻：每 1.0 秒才做一次圖資比對
+    last_calc_time = 0           
+    CALC_INTERVAL = 1.0          
     
-    ahead_section_history = []   # 暫存陣列，用來儲存最近幾次的運算結果
-    SMOOTH_COUNT = 3             # 平滑門檻：連續 3 次一樣才信任
-    stable_ahead_section = None  # 最終決定發布給 UI 的前方路段
-    stable_current_section = None# 最終決定發布給 UI 的目前路段
+    ahead_section_history = []   
+    SMOOTH_COUNT = 3             
+    stable_ahead_section = None  
+    stable_current_section = None
 
-    # --- 目前路段去抖動 (簡單版) ---
-    CURRENT_SECTION_MISS_LIMIT = 2   # 連續 2 次才真正判定離開
+    CURRENT_SECTION_MISS_LIMIT = 2   
     current_section_miss_count = 0
     
     # ==========================================
-    # 測試點設定 (可自行開關) 切換回真實的車輛 GPS，只要把 TEST_MODE = True 改成 TEST_MODE = False
+    # 測試點設定：國道三號北向 (高原-大溪段)
+    # 請將 TEST_BEARING 設為 65.0 以模擬真實車輛羅盤走向
     # ==========================================
-    TEST_MODE = False
+    TEST_MODE = True
     TEST_LAT = 24.860332
     TEST_LON = 121.218465
-    TEST_BEARING = 65.0   # [修正] 符合該地真實的道路傾角
+    TEST_BEARING = 65.0   
     # ==========================================
 
     while True:
@@ -362,7 +357,6 @@ def main():
             
         current_time = time.time()
 
-        # 1. 網路資料更新 (30秒一次)
         if current_time - last_api_call >= UPDATE_INTERVAL:
             client.update_data(matcher)
             last_api_call = current_time
@@ -395,15 +389,12 @@ def main():
                     is_gps_ready = True
                     gps_source = 'gpsLocationExternal(備援)'
 
-        # 2. 核心運算：降頻與圖資比對
         if is_gps_ready and (current_time - last_calc_time >= CALC_INTERVAL):
             last_calc_time = current_time
             my_direction = bearing_to_direction(bearing)
 
-            # 進行圖資比對
             raw_current_section = matcher.find_current_section(lat, lon, threshold_meters=300, bearing_deg=bearing)
 
-            # --- 目前路段去抖動判定 ---
             if raw_current_section is not None:
                 stable_current_section = raw_current_section
                 current_section_miss_count = 0
@@ -426,7 +417,6 @@ def main():
                 ahead_section_history.clear()
                 stable_ahead_section = None
 
-            # 3. 打包與發布訊息
             msg = messaging.new_message('tdx')
             traffic = msg.tdx.init('trafficStatus')
             
@@ -447,22 +437,15 @@ def main():
                 traffic.speed = -1
                 traffic.status = "GREEN"
 
-            # 事件設定 
             current_event = None
             ahead_event = None
 
+            # [清理] 移除了容易誤判的 OPPOSITE 反向檢查，完全交給精準的 SectionID 綁定
             for evt in client.cached_events:
                 evt_sid = evt['SectionID']
-                evt_dir = evt['Direction']
                 evt_desc = evt['Description']
                 evt_type = evt.get('EventType', '0')
 
-                if evt_dir:
-                    OPPOSITE = {'南向': '北向', '北向': '南向', '東向': '西向', '西向': '東向'}
-                    # 若事件方向剛好是我目前方向的反向，則忽略
-                    if OPPOSITE.get(my_direction) == evt_dir:
-                        continue
-                
                 formatted_evt = f"{evt_type}|{evt_desc}"
 
                 if stable_current_section and evt_sid == str(stable_current_section).strip():
@@ -471,7 +454,6 @@ def main():
                 if stable_ahead_section and evt_sid == str(stable_ahead_section).strip():
                     ahead_event = (ahead_event + "/" + formatted_evt) if ahead_event else formatted_evt
 
-            # 每 10 秒切換顯示「目前路段」與「前方路段」的事件
             cycle_state = int(current_time // 10) % 2
             event = msg.tdx.init('roadEvent')
             event.isActive = False
@@ -495,7 +477,6 @@ def main():
 
             pm.send('tdx', msg) 
 
-            # Console Log
             print(f"GPS: {gps_source} | 航向: {bearing:.1f}°({my_direction})")
             print(f"路段判定 -> 目前: {stable_current_section or '無'} | 前方: {stable_ahead_section or '無'}")
             
