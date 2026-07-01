@@ -285,10 +285,14 @@ def main():
     CURRENT_SECTION_MISS_LIMIT = 2   # 連續 2 次才真正判定離開
     current_section_miss_count = 0
 
+    # ==========================================
+    # 測試點設定 (可自行開關) 切換回真實的車輛 GPS，只要把 TEST_MODE = True 改成 TEST_MODE = False
+    # ==========================================
     TEST_MODE = False
     TEST_LAT = 23.089022
     TEST_LON = 120.250816
     TEST_BEARING = 0.0
+    # ==========================================
 
     while True:
         if TEST_MODE:
