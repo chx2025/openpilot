@@ -211,7 +211,7 @@ class FreewayDataClient:
             new_events = []
             for event in root_evt.findall('.//LiveEvent'):
                 event_type = (event.findtext('EventType') or '').strip()
-                label = EVENT_TYPE_LABEL.get(event_type, '📢')
+                label = EVENT_TYPE_LABEL.get(event_type, '通知')
                 desc = event.findtext('Description', '未知事件')
                 positions = event.findtext('Positions')
                 direction = (event.findtext('.//Direction') or '').strip()
