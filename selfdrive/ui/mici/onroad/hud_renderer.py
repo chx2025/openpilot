@@ -218,7 +218,7 @@ class HudRenderer(Widget):
     self._draw_steering_wheel(rect)
     self._draw_tdx_info(rect)
 
-def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
+  def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
     """TDX 路況警告：畫面絕對置中顯示"""
     if not self.tdx_event_active or not self.tdx_event_desc:
       return
