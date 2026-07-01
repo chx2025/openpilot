@@ -168,11 +168,18 @@ class HudRenderer(Widget):
 
       if raw_desc and ":" in raw_desc:
           loc_part, events_part = raw_desc.split(":", 1)
+          
+          # 將「目前」或「前方」替換成更明確的字眼
+          if "目前" in loc_part:
+              loc_part = "目前路段"
+          elif "前方" in loc_part:
+              loc_part = "前方路段"
+
           label_events = []
           for evt in events_part.split("/"):
               parts = evt.split("|")
               evt_type = parts[0] if len(parts) > 1 else '0'
-              label_events.append(EVENT_TYPE_LABEL.get(evt_type, '[通知]'))
+              label_events.append(EVENT_TYPE_LABEL.get(evt_type, '[其他]'))
 
           unique_labels = []
           for lbl in label_events:
@@ -219,23 +226,28 @@ class HudRenderer(Widget):
     self._draw_tdx_info(rect)
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """TDX 路況警告：畫面絕對置中顯示"""
+    """TDX 路況警告：畫面絕對置中顯示，字體放大"""
     if not self.tdx_event_active or not self.tdx_event_desc:
       return
 
-    # 縮小字體以適應 C4 螢幕的精緻度 (從 70 調整為 45)
-    font_size = 45
+    # 字體放大至 60
+    font_size = 60
     text_size = measure_text_cached(self._font_bold, self.tdx_event_desc, font_size)
     
-    # 畫面絕對置中顯示
-    pos_x = rect.x + rect.width / 2 - text_size.x / 2
-    # Y 軸往上偏移，若實車測試發現擋到前車模型，可以把 -150 改成 -200 (越負越上面)
-    pos_y = rect.y + rect.height / 2 - text_size.y / 2 - 150
-    
-    # 同步縮小背景紅框的邊距
+    # 邊距設定
     bg_padding_x = 25
     bg_padding_y = 15
-    bg_rect = rl.Rectangle(pos_x - bg_padding_x, pos_y - bg_padding_y, text_size.x + bg_padding_x * 2, text_size.y + bg_padding_y * 2)
+
+    # 畫面絕對置中：使用 rect 的中心點減去文字大小的一半
+    pos_x = rect.x + (rect.width - text_size.x) / 2
+    pos_y = rect.y + (rect.height - text_size.y) / 2
+    
+    bg_rect = rl.Rectangle(
+        pos_x - bg_padding_x, 
+        pos_y - bg_padding_y, 
+        text_size.x + bg_padding_x * 2, 
+        text_size.y + bg_padding_y * 2
+    )
     
     # 呼吸燈閃爍警告背景
     alpha = 150 + int(60 * math.sin(time.time() * 5))
