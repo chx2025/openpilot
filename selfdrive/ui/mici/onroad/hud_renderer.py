@@ -1,3 +1,5 @@
+import math
+import time
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
@@ -107,6 +109,9 @@ class HudRenderer(Widget):
     self.v_ego_cluster_seen: bool = False
     self._engaged: bool = False
 
+    self.tdx_event_active: bool = False
+    self.tdx_event_desc: str = ""
+
     self._can_draw_top_icons = True
     self._show_wheel_critical = False
 
@@ -146,7 +151,40 @@ class HudRenderer(Widget):
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
       self.speed = 0.0
+      self.tdx_event_active = False
+      self.tdx_event_desc = ""
       return
+
+    # 讀取 TDX 狀態 (解析標籤)
+    try:
+      tdx = sm['tdx']
+      self.tdx_event_active = tdx.roadEvent.isActive
+      raw_desc = str(tdx.roadEvent.description)
+
+      EVENT_TYPE_LABEL = {
+          '1': '[事故]', '2': '[施工]', '3': '[壅塞]',
+          '4': '[管制]', '5': '[天氣]', '8': '[異常]'
+      }
+
+      if raw_desc and ":" in raw_desc:
+          loc_part, events_part = raw_desc.split(":", 1)
+          label_events = []
+          for evt in events_part.split("/"):
+              parts = evt.split("|")
+              evt_type = parts[0] if len(parts) > 1 else '0'
+              label_events.append(EVENT_TYPE_LABEL.get(evt_type, '[通知]'))
+
+          unique_labels = []
+          for lbl in label_events:
+              if lbl not in unique_labels:
+                  unique_labels.append(lbl)
+
+          self.tdx_event_desc = f"{loc_part}:{ ''.join(unique_labels) }"
+      else:
+          self.tdx_event_desc = ""
+
+    except Exception:
+      pass
 
     controls_state = sm['controlsState']
     car_state = sm['carState']
@@ -178,6 +216,27 @@ class HudRenderer(Widget):
       self._draw_set_speed(rect)
 
     self._draw_steering_wheel(rect)
+    self._draw_tdx_info(rect)
+
+  def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
+    """TDX 路況警告：畫面絕對置中顯示"""
+    if not self.tdx_event_active or not self.tdx_event_desc:
+      return
+
+    font_size = 70
+    text_size = measure_text_cached(self._font_bold, self.tdx_event_desc, font_size)
+    
+    pos_x = rect.x + rect.width / 2 - text_size.x / 2
+    pos_y = rect.y + rect.height / 2 - text_size.y / 2 - 150
+    
+    bg_padding_x = 40
+    bg_padding_y = 20
+    bg_rect = rl.Rectangle(pos_x - bg_padding_x, pos_y - bg_padding_y, text_size.x + bg_padding_x * 2, text_size.y + bg_padding_y * 2)
+    
+    alpha = 150 + int(60 * math.sin(time.time() * 5))
+    rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
+    
+    rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(pos_x, pos_y), font_size, 0, rl.WHITE)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
@@ -186,7 +245,6 @@ class HudRenderer(Widget):
       self._wheel_alpha_filter.update(255)
       self._wheel_y_filter.update(0)
     else:
-      # dp - ALKA: show steering wheel when ALKA is active (even when disengaged)
       if ui_state.status == UIStatus.DISENGAGED and not ui_state.dp_alka_active:
         self._wheel_alpha_filter.update(0)
         self._wheel_y_filter.update(wheel_txt.height / 2)
@@ -194,7 +252,6 @@ class HudRenderer(Widget):
         self._wheel_alpha_filter.update(255 * 0.9)
         self._wheel_y_filter.update(0)
 
-    # pos
     pos_x = int(rect.x + 21 + wheel_txt.width / 2)
     pos_y = int(rect.y + rect.height - 14 - wheel_txt.height / 2 + self._wheel_y_filter.x)
     rotation = -ui_state.sm['carState'].steeringAngleDeg
@@ -211,19 +268,16 @@ class HudRenderer(Widget):
     dest_rect = rl.Rectangle(pos_x, pos_y, wheel_txt.width, wheel_txt.height)
     origin = (wheel_txt.width / 2, wheel_txt.height / 2)
 
-    # color and draw
     color = rl.Color(255, 255, 255, int(self._wheel_alpha_filter.x))
     rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, rotation, color)
 
     if self._show_wheel_critical:
-      # Draw exclamation point icon
       EXCLAMATION_POINT_SPACING = 10
       exclamation_pos_x = pos_x - self._txt_exclamation_point.width / 2 + wheel_txt.width / 2 + EXCLAMATION_POINT_SPACING
       exclamation_pos_y = pos_y - self._txt_exclamation_point.height / 2
       rl.draw_texture_ex(self._txt_exclamation_point, rl.Vector2(exclamation_pos_x, exclamation_pos_y), 0.0, 1.0, rl.WHITE)
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
-    """Draw the MAX speed indicator box."""
     alpha = self._set_speed_alpha_filter.update(0 < rl.get_time() - self._set_speed_changed_time < SET_SPEED_PERSISTENCE and
                                                 self._can_draw_top_icons and self._engaged)
     if alpha < 1e-2:
@@ -232,7 +286,6 @@ class HudRenderer(Widget):
     x = rect.x
     y = rect.y
 
-    # draw drop shadow
     circle_radius = 162 // 2
     rl.draw_circle_gradient(rl.Vector2(x + circle_radius, y + circle_radius), circle_radius,
                             rl.Color(0, 0, 0, int(255 / 2 * alpha)), rl.BLANK)
@@ -265,7 +318,6 @@ class HudRenderer(Widget):
     )
 
   def _draw_current_speed(self, rect: rl.Rectangle) -> None:
-    """Draw the current vehicle speed and unit."""
     speed_text = str(round(self.speed))
     speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
     speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
