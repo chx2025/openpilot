@@ -230,14 +230,10 @@ class HudRenderer(Widget):
     return lines
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """繪製高公局即時路況與事件 (修正為貼齊下方，最多顯示兩行)"""
+    """繪製高公局即時路況與事件 (車速維持原位，事件貼齊下方且最多顯示兩行)"""
     if self.tdx_speed <= 0 and not self.tdx_event_active:
       return
 
-    # 計算 Performance 列的位置 (基準線)
-    perf_bar_height = PERF_FONT_SIZE + 2 * PERF_PADDING
-    perf_bar_y = rect.y + rect.height - perf_bar_height - PERF_MARGIN_BOTTOM
-    
     bg_padding_x = 45
     bg_padding_y = 20
 
@@ -251,58 +247,68 @@ class HudRenderer(Widget):
     else:
       speed_color = rl.WHITE
 
-    # 2. 處理第二行: 事件
-    current_y = perf_bar_y - 15
-
-    if self.tdx_event_active and self.tdx_event_desc:
-      tdx_event_font_size = 75
-      max_text_width = rect.width - 200 
-      
-      all_lines = self._wrap_text(self.tdx_event_desc, self._font_semi_bold, tdx_event_font_size, max_text_width)
-      lines = all_lines[:2] 
-      
-      line_height = measure_text_cached(self._font_semi_bold, "測試", tdx_event_font_size).y
-      line_spacing = 15
-      
-      total_text_height = len(lines) * line_height + (len(lines) - 1) * line_spacing
-      actual_max_width = max([measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x for line in lines])
-      
-      event_bg_height = total_text_height + bg_padding_y * 2
-      current_y -= event_bg_height 
-      
-      event_x = rect.x + rect.width / 2 - actual_max_width / 2
-      event_bg_rect = rl.Rectangle(
-          event_x - bg_padding_x, 
-          current_y, 
-          actual_max_width + bg_padding_x * 2, 
-          event_bg_height
-      )
-      
-      # 呼吸燈閃爍警告背景
-      alpha = 130 + int(50 * math.sin(time.time() * 5)) 
-      rl.draw_rectangle_rounded(event_bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
-      
-      # 逐行繪製文字
-      draw_y = current_y + bg_padding_y
-      for line in lines:
-        line_width = measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x
-        line_x = rect.x + rect.width / 2 - line_width / 2
-        rl.draw_text_ex(self._font_semi_bold, line, rl.Vector2(line_x, draw_y), tdx_event_font_size, 0, rl.WHITE)
-        draw_y += line_height + line_spacing
-
-    # 3. 處理第一行: 車速 (繪製在事件框上方)
+    # ==========================================
+    # 第一行: 車速 (維持在原位：頂部列下方)
+    # ==========================================
     if self.tdx_speed > 0:
       speed_text = f"前方車速: {self.tdx_speed} km/h"
       tdx_speed_font_size = 90
       speed_size = measure_text_cached(self._font_semi_bold, speed_text, tdx_speed_font_size)
       
-      speed_y = current_y - speed_size.y - bg_padding_y * 2 - 15 
+      # 恢復原本的固定 Y 軸位置
+      top_y = rect.y + UI_CONFIG.header_height + 25 
       speed_x = rect.x + rect.width / 2 - speed_size.x / 2
       
-      bg_rect = rl.Rectangle(speed_x - bg_padding_x, speed_y - bg_padding_y, speed_size.x + bg_padding_x * 2, speed_size.y + bg_padding_y * 2)
+      bg_rect = rl.Rectangle(speed_x - bg_padding_x, top_y - bg_padding_y, speed_size.x + bg_padding_x * 2, speed_size.y + bg_padding_y * 2)
       rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(0, 0, 0, 160))
       
-      rl.draw_text_ex(self._font_semi_bold, speed_text, rl.Vector2(speed_x, speed_y), tdx_speed_font_size, 0, speed_color)
+      rl.draw_text_ex(self._font_semi_bold, speed_text, rl.Vector2(speed_x, top_y), tdx_speed_font_size, 0, speed_color)
+
+    # ==========================================
+    # 第二行: 事件 (貼齊下方 Performance 列，最多兩行)
+    # ==========================================
+    if self.tdx_event_active and self.tdx_event_desc:
+      # 計算 Performance 列的位置以決定事件區底部
+      perf_bar_height = PERF_FONT_SIZE + 2 * PERF_PADDING
+      perf_bar_y = rect.y + rect.height - perf_bar_height - PERF_MARGIN_BOTTOM
+      
+      tdx_event_font_size = 75
+      max_text_width = rect.width - 200 
+      
+      # 取得所有斷行，並強制限制只取前兩行
+      all_lines = self._wrap_text(self.tdx_event_desc, self._font_semi_bold, tdx_event_font_size, max_text_width)
+      lines = all_lines[:2] 
+      
+      if lines:
+        line_height = measure_text_cached(self._font_semi_bold, "測試", tdx_event_font_size).y
+        line_spacing = 15
+        
+        total_text_height = len(lines) * line_height + (len(lines) - 1) * line_spacing
+        actual_max_width = max([measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x for line in lines])
+        
+        # 計算背景高度，並向上推算起始位置
+        event_bg_height = total_text_height + bg_padding_y * 2
+        event_y = perf_bar_y - event_bg_height - 15  # 留 15px 間距避免太黏
+        
+        event_x = rect.x + rect.width / 2 - actual_max_width / 2
+        event_bg_rect = rl.Rectangle(
+            event_x - bg_padding_x, 
+            event_y, 
+            actual_max_width + bg_padding_x * 2, 
+            event_bg_height
+        )
+        
+        # 呼吸燈閃爍警告背景
+        alpha = 130 + int(50 * math.sin(time.time() * 5)) 
+        rl.draw_rectangle_rounded(event_bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
+        
+        # 逐行繪製
+        draw_y = event_y + bg_padding_y
+        for line in lines:
+          line_width = measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x
+          line_x = rect.x + rect.width / 2 - line_width / 2
+          rl.draw_text_ex(self._font_semi_bold, line, rl.Vector2(line_x, draw_y), tdx_event_font_size, 0, rl.WHITE)
+          draw_y += line_height + line_spacing
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
