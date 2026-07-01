@@ -216,19 +216,24 @@ class HudRenderer(Widget):
 
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
-
+    # 1. 先繪製一般行車狀態的 UI（底層）
     self._torque_bar.render(rect)
 
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
     self._draw_steering_wheel(rect)
+    
+    # 2. 最後繪製 TDX 警告（最上層、最高優先級）
     self._draw_tdx_info(rect)
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """TDX 路況警告：畫面絕對置中顯示，字體放大"""
+    """TDX 路況警告：畫面絕對置中顯示，字體放大，並具備最高視覺優先級"""
     if not self.tdx_event_active or not self.tdx_event_desc:
       return
+
+    # 【新增】繪製全區半透明黑色遮罩，壓暗背景其他 UI (如方向盤、速度等)，讓警告絕對突顯
+    rl.draw_rectangle(int(rect.x), int(rect.y), int(rect.width), int(rect.height), rl.Color(0, 0, 0, 120))
 
     # 字體放大至 60
     font_size = 60
@@ -253,6 +258,7 @@ class HudRenderer(Widget):
     alpha = 150 + int(60 * math.sin(time.time() * 5))
     rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
     
+    # 繪製文字
     rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(pos_x, pos_y), font_size, 0, rl.WHITE)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
