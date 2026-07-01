@@ -218,21 +218,26 @@ class HudRenderer(Widget):
     self._draw_steering_wheel(rect)
     self._draw_tdx_info(rect)
 
-  def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
+def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
     """TDX 路況警告：畫面絕對置中顯示"""
     if not self.tdx_event_active or not self.tdx_event_desc:
       return
 
-    font_size = 70
+    # 縮小字體以適應 C4 螢幕的精緻度 (從 70 調整為 45)
+    font_size = 45
     text_size = measure_text_cached(self._font_bold, self.tdx_event_desc, font_size)
     
+    # 畫面絕對置中顯示
     pos_x = rect.x + rect.width / 2 - text_size.x / 2
+    # Y 軸往上偏移，若實車測試發現擋到前車模型，可以把 -150 改成 -200 (越負越上面)
     pos_y = rect.y + rect.height / 2 - text_size.y / 2 - 150
     
-    bg_padding_x = 40
-    bg_padding_y = 20
+    # 同步縮小背景紅框的邊距
+    bg_padding_x = 25
+    bg_padding_y = 15
     bg_rect = rl.Rectangle(pos_x - bg_padding_x, pos_y - bg_padding_y, text_size.x + bg_padding_x * 2, text_size.y + bg_padding_y * 2)
     
+    # 呼吸燈閃爍警告背景
     alpha = 150 + int(60 * math.sin(time.time() * 5))
     rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
     
