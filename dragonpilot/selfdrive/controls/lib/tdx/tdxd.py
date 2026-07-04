@@ -279,12 +279,16 @@ class FreewayDataClient:
                         evt_lon, evt_lat = float(coords_str[0]), float(coords_str[1])
                         # 帶入 direction_text，讓內積演算法判斷對錯車道
                         sec_id = matcher.find_current_section(evt_lat, evt_lon, threshold_meters=1000, direction_text=direction)
-                        if sec_id:
-                            new_events.append({
-                                'EventType': event_type,
-                                'Description': desc,
-                                'SectionID': str(sec_id).strip()
-                            })
+                        
+                        # 【修改】加入 lat, lon, direction，且就算找不到完美的 SectionID 也存起來供雷達掃描用
+                        new_events.append({
+                            'EventType': event_type,
+                            'Description': desc,
+                            'SectionID': str(sec_id).strip() if sec_id else "",
+                            'lat': evt_lat,
+                            'lon': evt_lon,
+                            'direction': direction
+                        })
             self.cached_events = new_events
 
             res_spd = requests.get(self.traffic_url, headers=self.headers, timeout=5, verify=False)
@@ -311,7 +315,7 @@ class FreewayDataClient:
 # 3. 主循環
 # ==========================================
 def main():
-    print("🚀 啟動 tdxd 路況發布系統 (向量內積完美版)...")
+    print("🚀 啟動 tdxd 路況發布系統 (空間雷達掃描版)...")
     pm = messaging.PubMaster(['tdx'])
 
     BASE_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -439,18 +443,46 @@ def main():
             current_event = None
             ahead_event = None
 
-            # [清理] 移除了容易誤判的 OPPOSITE 反向檢查，完全交給精準的 SectionID 綁定
+            # 【全新邏輯】結合 SectionID 與「前方扇形半徑空間」比對，並嚴格檢查南北向
             for evt in client.cached_events:
-                evt_sid = evt['SectionID']
+                evt_sid = evt.get('SectionID', '')
                 evt_desc = evt['Description']
                 evt_type = evt.get('EventType', '0')
+                evt_lat = evt.get('lat')
+                evt_lon = evt.get('lon')
+                evt_dir = evt.get('direction', '')
 
                 formatted_evt = f"{evt_type}|{evt_desc}"
 
+                # 1. 目前路段比對 (維持原來的精準 SectionID 綁定)
                 if stable_current_section and evt_sid == str(stable_current_section).strip():
                     current_event = (current_event + "/" + formatted_evt) if current_event else formatted_evt
+                    continue  # 已經發生在目前路段，跳過前方計算
 
+                # 2. 前方路段比對：方法A (拓樸推導) 或 方法B (空間雷達)
+                is_ahead = False
+                
+                # 方法A：原本的拓樸推導 (對付主線事件最精準)
                 if stable_ahead_section and evt_sid == str(stable_ahead_section).strip():
+                    is_ahead = True
+                
+                # 方法B：空間半徑 + 車頭方位角 + 文字南北向防呆 (專抓匝道與未綁定事件)
+                elif evt_lat and evt_lon:
+                    # 計算絕對距離
+                    dist_m = _get_distance_meters(lon, lat, evt_lon, evt_lat)
+                    if dist_m <= 3000:  # 事件在 3 公里範圍內
+                        # 計算從車頭指向事件的方位角
+                        evt_bearing = _segment_bearing(lon, lat, evt_lon, evt_lat)
+                        # 如果夾角小於 60 度，代表事件在我們正前方的扇形視野內
+                        if _angle_diff(bearing, evt_bearing) <= 60:
+                            # 雙重防呆：用當前行駛方向 (例如 '南向')的第一個字去比對 XML 的方向文字 (例如 '南')
+                            if evt_dir and (my_direction[0] in evt_dir):
+                                is_ahead = True
+                            # 如果高公局 XML 剛好沒寫方向，但角度這麼完美落在正前方，也視為前方事件
+                            elif not evt_dir:
+                                is_ahead = True
+
+                if is_ahead:
                     ahead_event = (ahead_event + "/" + formatted_evt) if ahead_event else formatted_evt
 
             cycle_state = int(current_time // 10) % 2
