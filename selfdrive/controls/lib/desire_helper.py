@@ -4,7 +4,7 @@ from openpilot.common.realtime import DT_MDL
 import time
 
 # 引入低速轉彎控制器
-from openpilot.dragonpilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
+from dragonpilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
 
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
