@@ -3,13 +3,14 @@ from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 import time
 
-# 引入剛剛建立的低速轉彎控制器
+# 引入低速轉彎控制器
 from openpilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnController
 
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
-LANE_CHANGE_SPEED_MIN = 20 * CV.MPH_TO_MS
+# 最大值改為 35 km/h
+LANE_CHANGE_SPEED_MIN = 35 * CV.KPH_TO_MS
 LANE_CHANGE_TIME_MAX = 10.
 
 DESIRES = {
@@ -36,14 +37,14 @@ DESIRES = {
 
 class DesireHelper:
   def __init__(self, dp_lat_lca_speed=LANE_CHANGE_SPEED_MIN, dp_lat_lca_auto_sec=0.):
-    self.lane_change_state = LaneChangeState.off
-    self.lane_change_direction = LaneChangeDirection.none
+    self.lane_change_state = log.LaneChangeState.off
+    self.lane_change_direction = log.LaneChangeDirection.none
     self.lane_change_timer = 0.0
     self.lane_change_ll_prob = 1.0
     self.keep_pulse_timer = 0.0
     self.prev_one_blinker = False
     self.desire = log.Desire.none
-    self.dp_lat_lca_speed = float(dp_lat_lca_speed * CV.MPH_TO_MS)
+    self.dp_lat_lca_speed = float(dp_lat_lca_speed * CV.KPH_TO_MS)
     self.dp_lat_lca_auto_sec = dp_lat_lca_auto_sec
     self.dp_lat_lca_auto_sec_start = 0.
     
@@ -59,7 +60,7 @@ class DesireHelper:
     one_blinker = carstate.leftBlinker != carstate.rightBlinker
     below_lane_change_speed = True if self.dp_lat_lca_speed == 0. else v_ego < self.dp_lat_lca_speed
 
-    # 更新轉彎控制器參數與狀態偵測 (包含結合盲點與道路邊緣偵測)
+    # 更新轉彎控制器參數與狀態偵測
     self.lane_turn_controller.update_params()
     self.lane_turn_controller.update_lane_turn(
         blindspot_left=(carstate.leftBlindspot or left_edge_detected),
@@ -139,7 +140,7 @@ class DesireHelper:
 
     self.prev_one_blinker = one_blinker
 
-    # 輸出最終車輛意圖：若觸發低速轉彎意圖則優先採用，否則回歸標準換道邏輯
+    # 優先採用低速轉彎意圖
     if lane_turn_desire != log.Desire.none:
       self.desire = lane_turn_desire
     else:
