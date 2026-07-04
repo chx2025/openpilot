@@ -164,5 +164,5 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_ui_lead", {PERSISTENT, INT, "0"}},
     {"dp_ui_rainbow", {PERSISTENT, BOOL, "0"}},
     {"LaneTurnDesire", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"LaneTurnValue", {PERSISTENT | BACKUP, FLOAT, "19.0"}},
+    {"LaneTurnValue", {PERSISTENT | BACKUP, FLOAT, "20.0"}},
 };
