@@ -228,7 +228,7 @@ class HudRenderer(Widget):
     # 第一行: 車速 (維持在原位：頂部列下方)
     # 注意：依照你新檔案的邏輯，車速限制在 0 < 且 <= 70 才顯示
     # ==========================================
-    if 0 < self.tdx_speed <= 70:
+    if 0 < self.tdx_speed <= 100:
       speed_text = f"前方車速: {self.tdx_speed} km/h"
       tdx_speed_font_size = 90
       speed_size = measure_text_cached(self._font_semi_bold, speed_text, tdx_speed_font_size)
