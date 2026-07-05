@@ -190,7 +190,7 @@ class HudRenderer(Widget):
 
     self._draw_current_speed(rect)
 
-    # --- 繪製 TDX 雙行顯示資訊 ---
+    # --- 繪製 TDX 顯示資訊 ---
     self._draw_tdx_info(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
@@ -206,31 +206,8 @@ class HudRenderer(Widget):
   def user_interacting(self) -> bool:
     return self._exp_button.is_pressed
 
-  def _wrap_text(self, text: str, font: rl.Font, font_size: int, max_width: float) -> list[str]:
-    """計算中英文自動換行，回傳字串陣列"""
-    if not text:
-      return []
-
-    lines = []
-    current_line = ""
-
-    for char in text:
-      test_line = current_line + char
-      test_width = measure_text_cached(font, test_line, font_size).x
-      
-      if test_width > max_width and current_line != "":
-        lines.append(current_line)
-        current_line = char
-      else:
-        current_line = test_line
-
-    if current_line:
-      lines.append(current_line)
-
-    return lines
-
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """繪製高公局即時路況與事件 (車速維持原位，事件貼齊下方且最多顯示兩行)"""
+    """繪製高公局即時路況與事件 (車速維持原位，事件貼齊下方單行跑馬燈)"""
     if self.tdx_speed <= 0 and not self.tdx_event_active:
       return
 
@@ -249,8 +226,9 @@ class HudRenderer(Widget):
 
     # ==========================================
     # 第一行: 車速 (維持在原位：頂部列下方)
+    # 注意：依照你新檔案的邏輯，車速限制在 0 < 且 <= 70 才顯示
     # ==========================================
-    if 0 < self.tdx_speed <= 100:
+    if 0 < self.tdx_speed <= 70:
       speed_text = f"前方車速: {self.tdx_speed} km/h"
       tdx_speed_font_size = 90
       speed_size = measure_text_cached(self._font_semi_bold, speed_text, tdx_speed_font_size)
@@ -265,7 +243,7 @@ class HudRenderer(Widget):
       rl.draw_text_ex(self._font_semi_bold, speed_text, rl.Vector2(speed_x, top_y), tdx_speed_font_size, 0, speed_color)
 
     # ==========================================
-    # 第二行: 事件 (貼齊下方 Performance 列，最多兩行)
+    # 第二行: 事件 (貼齊下方 Performance 列，單行跑馬燈)
     # ==========================================
     if self.tdx_event_active and self.tdx_event_desc:
       # 計算 Performance 列的位置以決定事件區底部
@@ -275,40 +253,64 @@ class HudRenderer(Widget):
       tdx_event_font_size = 75
       max_text_width = rect.width - 200 
       
-      # 取得所有斷行，並強制限制只取前兩行
-      all_lines = self._wrap_text(self.tdx_event_desc, self._font_semi_bold, tdx_event_font_size, max_text_width)
-      lines = all_lines[:2] 
+      text = self.tdx_event_desc
+      # 計算完整單行文字的寬高
+      text_width = measure_text_cached(self._font_semi_bold, text, tdx_event_font_size).x
+      line_height = measure_text_cached(self._font_semi_bold, text, tdx_event_font_size).y
       
-      if lines:
-        line_height = measure_text_cached(self._font_semi_bold, "測試", tdx_event_font_size).y
-        line_spacing = 15
+      # 決定背景顯示寬度 (若文字過長，則限制為最大寬度)
+      display_width = min(text_width, max_text_width)
+      
+      # 計算背景高度，並向上推算起始位置
+      event_bg_height = line_height + bg_padding_y * 2
+      event_y = perf_bar_y - event_bg_height - 15  # 留 15px 間距避免太黏
+      
+      event_x = rect.x + rect.width / 2 - display_width / 2
+      event_bg_rect = rl.Rectangle(
+          event_x - bg_padding_x, 
+          event_y, 
+          display_width + bg_padding_x * 2, 
+          event_bg_height
+      )
+      
+      # 呼吸燈閃爍警告背景
+      alpha = 130 + int(50 * math.sin(time.time() * 5)) 
+      rl.draw_rectangle_rounded(event_bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
+      
+      draw_y = event_y + bg_padding_y
+      
+      # 若文字長度超過最大寬度，啟用跑馬燈 (平滑來回滾動)
+      if text_width > max_text_width:
+        # 開啟裁剪模式，避免文字繪製超出背景框的範圍
+        rl.begin_scissor_mode(int(event_bg_rect.x), int(event_bg_rect.y), int(event_bg_rect.width), int(event_bg_rect.height))
         
-        total_text_height = len(lines) * line_height + (len(lines) - 1) * line_spacing
-        actual_max_width = max([measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x for line in lines])
+        extra_width = text_width - max_text_width
+        scroll_speed = 80.0     # 跑馬燈捲動速度 (像素/秒)
+        scroll_duration = extra_width / scroll_speed
+        pause_duration = 2.0    # 在兩側邊界停留的時間 (秒)
         
-        # 計算背景高度，並向上推算起始位置
-        event_bg_height = total_text_height + bg_padding_y * 2
-        event_y = perf_bar_y - event_bg_height - 15  # 留 15px 間距避免太黏
-        
-        event_x = rect.x + rect.width / 2 - actual_max_width / 2
-        event_bg_rect = rl.Rectangle(
-            event_x - bg_padding_x, 
-            event_y, 
-            actual_max_width + bg_padding_x * 2, 
-            event_bg_height
-        )
-        
-        # 呼吸燈閃爍警告背景
-        alpha = 130 + int(50 * math.sin(time.time() * 5)) 
-        rl.draw_rectangle_rounded(event_bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
-        
-        # 逐行繪製
-        draw_y = event_y + bg_padding_y
-        for line in lines:
-          line_width = measure_text_cached(self._font_semi_bold, line, tdx_event_font_size).x
-          line_x = rect.x + rect.width / 2 - line_width / 2
-          rl.draw_text_ex(self._font_semi_bold, line, rl.Vector2(line_x, draw_y), tdx_event_font_size, 0, rl.WHITE)
-          draw_y += line_height + line_spacing
+        # 計算目前週期進度
+        cycle_time = time.time() % ((scroll_duration + pause_duration) * 2)
+
+        # 四階段: 左停 -> 往左捲 -> 右停 -> 往右捲回
+        if cycle_time < pause_duration:
+          offset = 0.0
+        elif cycle_time < pause_duration + scroll_duration:
+          progress = (cycle_time - pause_duration) / scroll_duration
+          offset = extra_width * progress
+        elif cycle_time < pause_duration * 2 + scroll_duration:
+          offset = extra_width
+        else:
+          progress = (cycle_time - pause_duration * 2 - scroll_duration) / scroll_duration
+          offset = extra_width * (1 - progress)
+
+        draw_x = event_x - offset
+        rl.draw_text_ex(self._font_semi_bold, text, rl.Vector2(draw_x, draw_y), tdx_event_font_size, 0, rl.WHITE)
+
+        rl.end_scissor_mode()
+      else:
+        # 文字沒超長 -> 直接單行置中顯示
+        rl.draw_text_ex(self._font_semi_bold, text, rl.Vector2(event_x, draw_y), tdx_event_font_size, 0, rl.WHITE)
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
