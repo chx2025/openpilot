@@ -112,6 +112,16 @@ class HudRenderer(Widget):
     self.tdx_event_active: bool = False
     self.tdx_event_desc: str = ""
 
+    # --- 前車距離變數 ---
+    self.lead_dist: str = "-"
+    self.lead_dist_raw: float = 0.0
+
+    # --- 新增方向燈與盲區狀態變數 ---
+    self.left_blinker: bool = False
+    self.right_blinker: bool = False
+    self.left_blindspot: bool = False
+    self.right_blindspot: bool = False
+
     self._can_draw_top_icons = True
     self._show_wheel_critical = False
 
@@ -153,9 +163,25 @@ class HudRenderer(Widget):
       self.speed = 0.0
       self.tdx_event_active = False
       self.tdx_event_desc = ""
+      self.lead_dist = "-"
+      self.lead_dist_raw = 0.0
+      
+      self.left_blinker = False
+      self.right_blinker = False
+      self.left_blindspot = False
+      self.right_blindspot = False
       return
 
-    # 讀取 TDX 狀態 (解析標籤)
+    # --- 讀取雷達狀態 ---
+    radar_state = sm['radarState']
+    if radar_state.leadOne.status:
+      self.lead_dist_raw = radar_state.leadOne.dRel
+      self.lead_dist = f"{self.lead_dist_raw:.0f}m"
+    else:
+      self.lead_dist_raw = 0.0
+      self.lead_dist = "-"
+
+    # --- 讀取 TDX 狀態 (僅保留前方路段) ---
     try:
       tdx = sm['tdx']
       self.tdx_event_active = tdx.roadEvent.isActive
@@ -169,24 +195,22 @@ class HudRenderer(Widget):
       if raw_desc and ":" in raw_desc:
           loc_part, events_part = raw_desc.split(":", 1)
           
-          # 將「目前」或「前方」替換成更明確的字眼
-          if "目前" in loc_part:
-              loc_part = "目前路段"
-          elif "前方" in loc_part:
+          if "前方" in loc_part:
               loc_part = "前方路段"
+              label_events = []
+              for evt in events_part.split("/"):
+                  parts = evt.split("|")
+                  evt_type = parts[0] if len(parts) > 1 else '0'
+                  label_events.append(EVENT_TYPE_LABEL.get(evt_type, '[其他]'))
 
-          label_events = []
-          for evt in events_part.split("/"):
-              parts = evt.split("|")
-              evt_type = parts[0] if len(parts) > 1 else '0'
-              label_events.append(EVENT_TYPE_LABEL.get(evt_type, '[其他]'))
+              unique_labels = []
+              for lbl in label_events:
+                  if lbl not in unique_labels:
+                      unique_labels.append(lbl)
 
-          unique_labels = []
-          for lbl in label_events:
-              if lbl not in unique_labels:
-                  unique_labels.append(lbl)
-
-          self.tdx_event_desc = f"{loc_part}:{ ''.join(unique_labels) }"
+              self.tdx_event_desc = f"{loc_part}:{ ''.join(unique_labels) }"
+          else:
+              self.tdx_event_desc = ""
       else:
           self.tdx_event_desc = ""
 
@@ -195,6 +219,35 @@ class HudRenderer(Widget):
 
     controls_state = sm['controlsState']
     car_state = sm['carState']
+
+    # =========================================================================
+    # --- 測試模式：模擬方向燈與盲區來回顯示 ---
+    # =========================================================================
+    t = time.time()
+    cycle = int(t / 2) % 6  # 每 2 秒切換一個情境
+
+    self.left_blinker = False
+    self.right_blinker = False
+    self.left_blindspot = False
+    self.right_blindspot = False
+
+    is_blinking = int(t * 2) % 2 == 0  # 每 0.5 秒閃爍
+
+    if cycle == 0:
+        self.left_blinker = is_blinking
+    elif cycle == 1:
+        self.right_blinker = is_blinking
+    elif cycle == 2:
+        self.left_blindspot = True
+    elif cycle == 3:
+        self.right_blindspot = True
+    elif cycle == 4:
+        self.left_blinker = is_blinking
+        self.left_blindspot = True
+    elif cycle == 5:
+        self.right_blinker = is_blinking
+        self.right_blindspot = True
+    # =========================================================================
 
     v_cruise_cluster = car_state.vCruiseCluster
     set_speed = (
@@ -216,50 +269,126 @@ class HudRenderer(Widget):
 
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
-    # 1. 先繪製一般行車狀態的 UI（底層）
-    self._torque_bar.render(rect)
-
+    
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
-    self._draw_steering_wheel(rect)
+    # 顯示動態球體與距離
+    self._draw_lead_info(rect)
     
-    # 2. 最後繪製 TDX 警告（最上層、最高優先級）
+    # 繪製 TDX 警告
     self._draw_tdx_info(rect)
 
+    # 繪製邊緣方向燈與盲區
+    self._draw_edge_warnings(rect)
+
+  def _draw_edge_warnings(self, rect: rl.Rectangle) -> None:
+    """繪製兩側方向燈與盲區警示 (寬度減半、高度設為 60%、靠上方對齊避開球體)"""
+    bar_width = 30  # 寬度從 60 減半為 30
+    bar_height = int(rect.height * 0.60) # 高度設為畫面 60%
+    y_pos = int(rect.y + 20) # 靠上方對齊，距離頂部留 20px 邊距
+
+    # 左側邊條
+    if self.left_blindspot:
+      rl.draw_rectangle(int(rect.x), y_pos, bar_width, bar_height, rl.Color(255, 204, 0, 220)) 
+    elif self.left_blinker:
+      rl.draw_rectangle(int(rect.x), y_pos, bar_width, bar_height, rl.Color(0, 255, 0, 220)) 
+
+    # 右側邊條
+    if self.right_blindspot:
+      rl.draw_rectangle(int(rect.x + rect.width - bar_width), y_pos, bar_width, bar_height, rl.Color(255, 204, 0, 220)) 
+    elif self.right_blinker:
+      rl.draw_rectangle(int(rect.x + rect.width - bar_width), y_pos, bar_width, bar_height, rl.Color(0, 255, 0, 220)) 
+
+  def _draw_lead_info(self, rect: rl.Rectangle) -> None:
+    """繪製球體與前車距離"""
+    pos_x = int(rect.x + 46)
+    pos_y = int(rect.y + rect.height - 39)
+    
+    ball_color = rl.RED
+    dist_color = rl.WHITE
+    
+    if self.lead_dist != "-":
+      if self.lead_dist_raw < 15.0:
+        ball_color = rl.RED  
+        dist_color = rl.Color(255, 100, 100, 255) 
+      else:
+        ball_color = rl.GREEN 
+        dist_color = rl.Color(128, 216, 166, 255) 
+    
+    rl.draw_circle(pos_x, pos_y, 25, ball_color)
+
+    dist_text = self.lead_dist
+    dist_font_size = 40
+    dist_size = measure_text_cached(self._font_bold, dist_text, dist_font_size)
+    
+    text_x = pos_x + 35  
+    text_y = pos_y - dist_size.y / 2
+        
+    rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), dist_font_size, 0, dist_color)
+
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """TDX 路況警告：畫面絕對置中顯示，字體放大，並具備最高視覺優先級"""
+    """TDX 路況警告：防範干擾兩側盲區"""
     if not self.tdx_event_active or not self.tdx_event_desc:
       return
 
-    # 【新增】繪製全區半透明黑色遮罩，壓暗背景其他 UI (如方向盤、速度等)，讓警告絕對突顯
-    rl.draw_rectangle(int(rect.x), int(rect.y), int(rect.width), int(rect.height), rl.Color(0, 0, 0, 120))
+    bar_width = 30
 
-    # 字體放大至 60
+    # 繪製全區半透明黑色遮罩，避開兩側盲區區域
+    safe_x = int(rect.x + bar_width)
+    safe_width = int(rect.width - bar_width * 2)
+    rl.draw_rectangle(safe_x, int(rect.y), safe_width, int(rect.height), rl.Color(0, 0, 0, 120))
+
+    # 字體設定
     font_size = 60
     text_size = measure_text_cached(self._font_bold, self.tdx_event_desc, font_size)
     
-    # 邊距設定
     bg_padding_x = 25
     bg_padding_y = 15
 
-    # 畫面絕對置中：使用 rect 的中心點減去文字大小的一半
-    pos_x = rect.x + (rect.width - text_size.x) / 2
+    max_text_width = safe_width - bg_padding_x * 2 - 20 
+    display_width = min(text_size.x, max_text_width)
+
+    pos_x = rect.x + (rect.width - display_width) / 2
     pos_y = rect.y + (rect.height - text_size.y) / 2
     
     bg_rect = rl.Rectangle(
         pos_x - bg_padding_x, 
         pos_y - bg_padding_y, 
-        text_size.x + bg_padding_x * 2, 
+        display_width + bg_padding_x * 2, 
         text_size.y + bg_padding_y * 2
     )
     
-    # 呼吸燈閃爍警告背景
     alpha = 150 + int(60 * math.sin(time.time() * 5))
     rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
     
-    # 繪製文字
-    rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(pos_x, pos_y), font_size, 0, rl.WHITE)
+    if text_size.x > max_text_width:
+      rl.begin_scissor_mode(int(bg_rect.x), int(bg_rect.y), int(bg_rect.width), int(bg_rect.height))
+
+      extra_width = text_size.x - max_text_width
+      scroll_speed = 80.0     
+      scroll_duration = extra_width / scroll_speed
+      pause_duration = 2.0    
+
+      cycle_time = time.time() % ((scroll_duration + pause_duration) * 2)
+
+      if cycle_time < pause_duration:
+        offset = 0.0
+      elif cycle_time < pause_duration + scroll_duration:
+        progress = (cycle_time - pause_duration) / scroll_duration
+        offset = extra_width * progress
+      elif cycle_time < pause_duration * 2 + scroll_duration:
+        offset = extra_width
+      else:
+        progress = (cycle_time - pause_duration * 2 - scroll_duration) / scroll_duration
+        offset = extra_width * (1 - progress)
+
+      draw_x = pos_x - offset
+      rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(draw_x, pos_y), font_size, 0, rl.WHITE)
+
+      rl.end_scissor_mode()
+    else:
+      rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(pos_x, pos_y), font_size, 0, rl.WHITE)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
