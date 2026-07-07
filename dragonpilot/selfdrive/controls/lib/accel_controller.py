@@ -56,7 +56,7 @@ RAMP_OFF_RANGE = 3.0    # 接近巡航速度時，加速度上限開始線性遞
 # 非對稱變化率限制 (Rate Limiting)
 A_MIN_TIGHTEN_RATE = 1.5  # 煞車加重時的變化率上限 (m/s³，對應原本的 MAX_DECEL_INCREASE_RATE)
 A_MIN_RELAX_RATE = 0.6    # 煞車放鬆時的變化率上限 (m/s³，對應原本的 MAX_DECEL_DECREASE_RATE)
-A_MAX_RATE = 0.8          # 加速度上限的變化率 (m/s³)
+A_MAX_RATE = 1.2          # 加速度上限的變化率 (m/s³)
 
 # 動態安全廊道間距 (Dynamic Safety Corridor Gap)
 # 確保最小加速度永遠嚴格小於最大加速度，防止解算器崩潰 (Solver Crash)
