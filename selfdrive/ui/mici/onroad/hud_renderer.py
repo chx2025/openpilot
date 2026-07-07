@@ -220,33 +220,39 @@ class HudRenderer(Widget):
     controls_state = sm['controlsState']
     car_state = sm['carState']
 
+    # --- 讀取方向燈與盲區訊號 (正式上路模式) ---
+    self.left_blinker = car_state.leftBlinker
+    self.right_blinker = car_state.rightBlinker
+    self.left_blindspot = car_state.leftBlindspot
+    self.right_blindspot = car_state.rightBlindspot
+
     # =========================================================================
-    # --- 測試模式：模擬方向燈與盲區來回顯示 ---
+    # --- 測試模式：模擬方向燈與盲區來回顯示 (已註解關閉) ---
     # =========================================================================
-    t = time.time()
-    cycle = int(t / 2) % 6  # 每 2 秒切換一個情境
-
-    self.left_blinker = False
-    self.right_blinker = False
-    self.left_blindspot = False
-    self.right_blindspot = False
-
-    is_blinking = int(t * 2) % 2 == 0  # 每 0.5 秒閃爍
-
-    if cycle == 0:
-        self.left_blinker = is_blinking
-    elif cycle == 1:
-        self.right_blinker = is_blinking
-    elif cycle == 2:
-        self.left_blindspot = True
-    elif cycle == 3:
-        self.right_blindspot = True
-    elif cycle == 4:
-        self.left_blinker = is_blinking
-        self.left_blindspot = True
-    elif cycle == 5:
-        self.right_blinker = is_blinking
-        self.right_blindspot = True
+    # t = time.time()
+    # cycle = int(t / 2) % 6  # 每 2 秒切換一個情境
+    #
+    # self.left_blinker = False
+    # self.right_blinker = False
+    # self.left_blindspot = False
+    # self.right_blindspot = False
+    #
+    # is_blinking = int(t * 2) % 2 == 0  # 每 0.5 秒閃爍
+    #
+    # if cycle == 0:
+    #     self.left_blinker = is_blinking
+    # elif cycle == 1:
+    #     self.right_blinker = is_blinking
+    # elif cycle == 2:
+    #     self.left_blindspot = True
+    # elif cycle == 3:
+    #     self.right_blindspot = True
+    # elif cycle == 4:
+    #     self.left_blinker = is_blinking
+    #     self.left_blindspot = True
+    # elif cycle == 5:
+    #     self.right_blinker = is_blinking
+    #     self.right_blindspot = True
     # =========================================================================
 
     v_cruise_cluster = car_state.vCruiseCluster
@@ -328,7 +334,7 @@ class HudRenderer(Widget):
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), dist_font_size, 0, dist_color)
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """TDX 路況警告：防範干擾兩側盲區"""
+    """TDX 路況警告：防範干擾兩側盲區，超過範圍才跑馬燈"""
     if not self.tdx_event_active or not self.tdx_event_desc:
       return
 
@@ -347,7 +353,10 @@ class HudRenderer(Widget):
     bg_padding_y = 15
 
     max_text_width = safe_width - bg_padding_x * 2 - 20 
-    display_width = min(text_size.x, max_text_width)
+    
+    # 判斷是否啟動跑馬燈
+    is_overflow = text_size.x > max_text_width
+    display_width = min(text_size.x, max_text_width) if is_overflow else text_size.x
 
     pos_x = rect.x + (rect.width - display_width) / 2
     pos_y = rect.y + (rect.height - text_size.y) / 2
@@ -362,7 +371,7 @@ class HudRenderer(Widget):
     alpha = 150 + int(60 * math.sin(time.time() * 5))
     rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
     
-    if text_size.x > max_text_width:
+    if is_overflow:
       rl.begin_scissor_mode(int(bg_rect.x), int(bg_rect.y), int(bg_rect.width), int(bg_rect.height))
 
       extra_width = text_size.x - max_text_width
