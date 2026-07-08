@@ -90,7 +90,7 @@ class AEM:
     # 2. 讀取並驗證 GPS 座標 (完全看齊 tdxd 雙重保障與精度檢查邏輯)
     current_lat = None
     current_lon = None
-    MAX_HORIZONTAL_ACCURACY = 50.0
+    MAX_HORIZONTAL_ACCURACY = 100.0
 
     try:
       is_gps_ready = False
