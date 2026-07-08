@@ -12,7 +12,7 @@ from openpilot.common.swaglog import cloudlog
 # =========================================================
 OVERTAKE_THRESHOLD = 2.0 / 3.6   # 2 km/h - 只要比定速快 2 公里，就允許進入滑行
 HYSTERESIS_OFFSET = 1.0 / 3.6    # 1 km/h - 保持滑行直到接近定速時才解除
-TTC_THRESHOLD = 2.0              # 秒 - 前方 2.0 秒內有車即停用
+TTC_THRESHOLD = 3.0              # 秒 - 修改：前方 3.0 秒內有車即停用 (原為 2.0)
 
 # 車速開關門檻 (50 km/h 打開，40 km/h 關閉)
 MIN_SPEED_ENABLE = 50.0 / 3.6    
@@ -23,7 +23,7 @@ OVERSPEED_ACTIVE_MARGIN = 25.0 / 3.6   # 正在滑行時最高容忍超速 25 km
 OVERSPEED_INACTIVE_MARGIN = 20.0 / 3.6 # 關閉後需降至超速 20 km/h 以下才重啟
 
 # 緊急安全防線
-EMERGENCY_TTC = 2.0
+EMERGENCY_TTC = 2.0              # 註：緊急解除仍維持 2.0 秒，避免與常規 3.0 秒解除混淆而狂刷警示日誌
 EMERGENCY_RELATIVE_SPEED = 10.0
 EMERGENCY_DECEL_THRESHOLD = -1.5 # 煞車力道超過此值視為緊急狀況，立刻交還控制權
 
@@ -99,17 +99,18 @@ class OCM:
       self._has_lead = False
 
   def _should_activate(self, user_ctrl_lon, v_ego, v_cruise, in_cooldown):
+    # 修改：雙重防護，當前車速低於巡航車速時，絕對不允許啟動滑行
+    if v_ego < v_cruise:
+        return False
+
     # 坡度安全防護：如果是明顯下坡 (-3%以上)，不允許純滑行
     if self.current_pitch < PITCH_DOWNHILL_THRESHOLD:
         return False
 
-    # ==========================================
-    # 修改區塊：超速上限防護 (加入遲滯區間防震盪)
-    # ==========================================
+    # 超速上限防護 (加入遲滯區間防震盪)
     overspeed_margin = OVERSPEED_ACTIVE_MARGIN if self.active else OVERSPEED_INACTIVE_MARGIN
     if v_ego > (v_cruise + overspeed_margin):
         return False
-    # ==========================================
 
     if self.active:
       self._is_speed_over_cruise = v_ego > (v_cruise + HYSTERESIS_OFFSET)
