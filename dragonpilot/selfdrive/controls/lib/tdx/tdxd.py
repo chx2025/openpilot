@@ -467,7 +467,8 @@ def main():
                     is_ahead = True
                 
                 # 方法B：空間半徑 + 車頭方位角 + 文字南北向防呆 (專抓匝道與未綁定事件)
-                elif evt_lat and evt_lon:
+                # 【修正】：加上 stable_current_section is not None，確認車輛在國道上才掃描
+                elif evt_lat and evt_lon and stable_current_section is not None:
                     # 計算絕對距離
                     dist_m = _get_distance_meters(lon, lat, evt_lon, evt_lat)
                     if dist_m <= 3000:  # 事件在 3 公里範圍內
