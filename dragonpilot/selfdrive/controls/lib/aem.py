@@ -17,91 +17,123 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 """
 
 import numpy as np
-
-# 車速閾值 (將 km/h 轉換為 m/s)
-SPEED_ENABLE_MS = 70.0 / 3.6   # 約 19.44 m/s (低於此速度允許啟用)
-SPEED_DISABLE_MS = 80.0 / 3.6  # 約 22.22 m/s (高於此速度強制關閉)
-
-# 動態車距參數 (保留作為緊急防護：應對前車急煞或機車切入)
-TIME_GAP = 1.5         # 秒 (緊急動態車距時間)
-MIN_DISTANCE = 8.0     # 公尺 (緊急最短觸發距離)
-
-# ==========================================
-# 新增：紅燈/路口提早預判參數 (用於平緩舒適煞停)
-# ==========================================
-EARLY_STOP_TIME_GAP = 3.5          # 秒 (提供更長的安全煞車緩衝時間)
-EARLY_STOP_MIN_DISTANCE = 30.0     # 公尺 (確保市區低速時也有 30 公尺的提早切換餘裕)
-
-# 綠燈起步/暢通判定參數
-GREEN_LIGHT_X_THRESHOLD = 20.0 # 公尺 (軌跡大於此值視為綠燈或路況暢通)
-
+import json
+import os
 
 class AEM:
   def __init__(self):
     self._active = False
-    self._speed_condition_met = True
-
-  def update_states(self, v_ego, should_stop, a_target, trajectory_length):
-    """
-    更新 AEM 狀態 (專注於判定是否切換至實驗模式)
-    :param v_ego: 當前車速 (m/s)
-    :param should_stop: boolean, 模型判定是否該停 (紅綠燈/停止線)
-    :param a_target: float, 模型目標加速度 (m/s^2)
-    :param trajectory_length: float, 預測軌跡總長 (m)
-    """
-
-    # ==========================================
-    # 新增：過濾遠距離的「幽靈煞車/誤判紅燈」訊號
-    # ==========================================
-    # 如果模型喊停，但其實距離還很遠(>40公尺)，而且車子只是在滑行(a_target > -0.3)
-    # 我們就判定這是 AI 的誤判，強制把 should_stop 轉為 False
-    if should_stop and trajectory_length > 40.0 and a_target > -0.3:
-      should_stop = False
     
-    # 1. 處理車速遲滯區間
-    if v_ego < SPEED_ENABLE_MS:
-      self._speed_condition_met = True
-    elif v_ego > SPEED_DISABLE_MS:
-      self._speed_condition_met = False
+    # 預先載入並儲存座標以便進行高速向量化運算
+    self.signals_lat = np.array([])
+    self.signals_lon = np.array([])
+    self._load_export_data()
 
-    # 若車速大於 80km/h，強制維持 ACC 不允許切換 (保留高速公路舒適度)
-    if not self._speed_condition_met:
+  def _load_export_data(self):
+    """
+    從同目錄下的 export.json 讀取路口與紅綠燈節點
+    """
+    try:
+      file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'export.json')
+      
+      lats = []
+      lons = []
+      if os.path.exists(file_path):
+        with open(file_path, 'r', encoding='utf-8') as f:
+          data = json.load(f)
+          for element in data.get('elements', []):
+            if element.get('type') == 'node' and 'lat' in element and 'lon' in element:
+              lats.append(element['lat'])
+              lons.append(element['lon'])
+              
+        self.signals_lat = np.array(lats)
+        self.signals_lon = np.array(lons)
+        print(f"[AEM] 成功載入 {len(lats)} 個座標點。")
+      else:
+        print(f"[AEM] 警告：找不到 export.json 檔案，路徑: {file_path}")
+    except Exception as e:
+      print(f"[AEM] 載入 export.json 失敗: {e}")
+
+  def _haversine_distances(self, lat1, lon1):
+    """
+    使用向量化計算車輛當前位置與所有載入座標的距離 (公尺)
+    """
+    if len(self.signals_lat) == 0:
+      return np.array([])
+      
+    R = 6371000.0  # 地球半徑 (公尺)
+    phi1 = np.radians(lat1)
+    phi2 = np.radians(self.signals_lat)
+    dphi = np.radians(self.signals_lat - lat1)
+    dlambda = np.radians(self.signals_lon - lon1)
+    
+    a = np.sin(dphi / 2.0)**2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2.0)**2
+    
+    a = np.clip(a, 0.0, 1.0)
+    c = 2.0 * R * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+    return c
+
+  def update_states(self, sm):
+    """
+    從 SubMaster 直接獲取定速與 GPS 訊號並更新 AEM 狀態
+    :param sm: SubMaster 訊息中心
+    """
+    # 1. 讀取並處理巡航定速設定值
+    try:
+      v_cruise_kph = sm['carState'].vCruise
+      # V_CRUISE_UNSET 通常為 255，將其重設為 0
+      if v_cruise_kph == 255:
+        v_cruise_kph = 0.0
+    except Exception:
+      v_cruise_kph = 0.0
+
+    # 2. 讀取並驗證 GPS 座標 (完全看齊 tdxd 雙重保障與精度檢查邏輯)
+    current_lat = None
+    current_lon = None
+    MAX_HORIZONTAL_ACCURACY = 50.0
+
+    try:
+      is_gps_ready = False
+      
+      # 優先嘗試讀取 liveGPS
+      if sm.valid.get('liveGPS', False):
+        live_gps = sm['liveGPS']
+        if live_gps.gpsOK and (live_gps.horizontalAccuracy <= 0 or live_gps.horizontalAccuracy <= MAX_HORIZONTAL_ACCURACY):
+          current_lat = live_gps.latitude
+          current_lon = live_gps.longitude
+          if current_lat != 0.0 and current_lon != 0.0:
+            is_gps_ready = True
+      
+      # 若 liveGPS 未就緒，退而求其次讀取 gpsLocationExternal (備援)
+      if not is_gps_ready and sm.valid.get('gpsLocationExternal', False):
+        raw_gps = sm['gpsLocationExternal']
+        acc = getattr(raw_gps, 'horizontalAccuracy', 0.0)
+        if acc <= 0 or acc <= MAX_HORIZONTAL_ACCURACY:
+          current_lat = raw_gps.latitude
+          current_lon = raw_gps.longitude
+          if current_lat == 0.0 and current_lon == 0.0:
+            current_lat = None
+            current_lon = None
+    except Exception:
+      pass
+
+    # 3. 安全防呆：若 GPS 資料無效或圖資未成功載入，維持一般 ACC 模式
+    if current_lat is None or current_lon is None or len(self.signals_lat) == 0:
       self._active = False
       return
 
-    # ==========================================
-    # 2. 加速意圖優先判定 (新增：模型一加速就交給原廠 ACC)
-    # ==========================================
-    # 只要模型有明確的加速意圖 (大於 0.1)，立刻切換為 ACC
-    if a_target > 0.1:
+    # 4. 條件一：巡航定速必須低於 75 km/h
+    if v_cruise_kph >= 75.0:
       self._active = False
       return
 
-    # 3. 綠燈起步 / 前方暢通優先判定
-    # 必須在模型沒有要停，且沒有減速意圖 (a_target > -0.3) 的前提下，才視為暢通並切回 ACC
-    if not should_stop and a_target > -0.3 and trajectory_length > GREEN_LIGHT_X_THRESHOLD:
-      self._active = False
-      return
-
-    # 4. 計算動態觸發距離閾值
-    urgent_trigger_threshold = max(MIN_DISTANCE, v_ego * TIME_GAP)
-    early_stop_threshold = max(EARLY_STOP_MIN_DISTANCE, v_ego * EARLY_STOP_TIME_GAP)
-
-    # 5. 模式切換核心邏輯
-    if should_stop:
-      # 【情況 A：遇到紅綠燈或停止線】
+    # 5. 條件二：計算 GPS 座標是否進入任何圖資座標的 50 公尺內
+    distances = self._haversine_distances(current_lat, current_lon)
+    
+    # 若矩陣中存在任何一個距離小於等於 50 公尺，則啟用實驗模式 (blended)
+    if np.any(distances <= 50.0):
       self._active = True
-
-    elif a_target < -0.5 and trajectory_length <= early_stop_threshold:
-      # 【情況 B：紅燈 / 遠處靜止車輛提早預判】
-      self._active = True
-
-    elif a_target < -1.0 and trajectory_length <= urgent_trigger_threshold:
-      # 【情況 C：遇到動態障礙物 / 前車急煞】
-      self._active = True
-        
     else:
-      # 無需煞停或減速，保持一般 ACC 模式
       self._active = False
 
   def get_mode(self, current_mode):
