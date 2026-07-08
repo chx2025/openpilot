@@ -90,7 +90,7 @@ class AEM:
     # 2. 讀取並驗證 GPS 座標 (完全看齊 tdxd 雙重保障與精度檢查邏輯)
     current_lat = None
     current_lon = None
-    MAX_HORIZONTAL_ACCURACY = 100.0
+    MAX_HORIZONTAL_ACCURACY = 50.0
 
     try:
       is_gps_ready = False
@@ -127,11 +127,11 @@ class AEM:
       self._active = False
       return
 
-    # 5. 條件二：計算 GPS 座標是否進入任何圖資座標的 50 公尺內
+    # 5. 條件二：計算 GPS 座標是否進入任何圖資座標的 100 公尺內
     distances = self._haversine_distances(current_lat, current_lon)
     
-    # 若矩陣中存在任何一個距離小於等於 50 公尺，則啟用實驗模式 (blended)
-    if np.any(distances <= 50.0):
+    # 若矩陣中存在任何一個距離小於等於 100 公尺，則啟用實驗模式 (blended)
+    if np.any(distances <= 100.0):
       self._active = True
     else:
       self._active = False
