@@ -100,15 +100,8 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
     LongitudinalPlannerDP.update(self, sm)
 
     if dp_flags & DPFlags.AEM:
-      model_msg = sm['modelV2']
-      v_ego = sm['carState'].vEgo
-
-      should_stop = model_msg.action.shouldStop
-      a_target = model_msg.action.desiredAcceleration
-      model_x = model_msg.position.x
-      trajectory_length = model_x[-1] if len(model_x) > 0 else 0.0
-
-      self.aem.update_states(v_ego, should_stop, a_target, trajectory_length)
+      # 將 SubMaster 直接傳入 AEM 內部進行解析，保持此檔案乾淨
+      self.aem.update_states(sm)
       mode = self.aem.get_mode(mode)
 
     if len(sm['carControl'].orientationNED) == 3:
