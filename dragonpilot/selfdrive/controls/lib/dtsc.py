@@ -212,7 +212,9 @@ class DTSC:
         mask_speed = speed_excess > 0.01
         mask = np.logical_and(mask_speed, mask_curve)
         persistence_ok = (float(np.sum(mask)) / len(mask)) >= PERSISTENCE_MIN_FRAC if len(mask) > 0 else False
-        critical_dist = rel_pos[critical_idx] if critical_idx is not None else 999.0
+        
+        # [修正 1] 修復漏洞，確保無危險時正常套用短距離忽略
+        critical_dist = rel_pos[critical_idx] if critical_idx is not None else 0.0
 
         # 防變道急煞核心判斷保留
         if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
@@ -220,6 +222,12 @@ class DTSC:
             dt_mode = None
             raw_suggested_speed = V_CRUISE_MAX 
         elif not persistence_ok and critical_dist < SHORT_DIST_IGNORE:
+            dt_decel = sp_decel = 0.0
+            dt_mode = None
+            raw_suggested_speed = V_CRUISE_MAX
+
+        # [修正 2] 增加低速防卡死機制，確保起步順暢
+        if v_ego < 3.0:
             dt_decel = sp_decel = 0.0
             dt_mode = None
             raw_suggested_speed = V_CRUISE_MAX
