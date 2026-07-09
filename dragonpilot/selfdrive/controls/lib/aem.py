@@ -12,13 +12,12 @@ for non-commercial purposes only, subject to the following conditions:
 - Commercial use (e.g. use in a product, service, or activity intended to
   generate revenue) is prohibited without explicit written permission from
   the copyright holder.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
 import numpy as np
 import json
 import os
+import cereal.messaging as messaging
 
 class AEM:
   def __init__(self):
@@ -28,6 +27,9 @@ class AEM:
     self.signals_lat = np.array([])
     self.signals_lon = np.array([])
     self._load_export_data()
+
+    # 建立 AEM 專屬的 GPS 接收器，避免 longitudinal_planner 沒給 GPS 資料
+    self.sm_gps = messaging.SubMaster(['liveGPS', 'gpsLocationExternal'])
 
   def _load_export_data(self):
     """
@@ -75,13 +77,15 @@ class AEM:
 
   def update_states(self, sm):
     """
-    從 SubMaster 直接獲取定速與 GPS 訊號並更新 AEM 狀態
-    :param sm: SubMaster 訊息中心
+    獲取定速與獨立 GPS 訊號並更新 AEM 狀態
+    :param sm: longitudinal_planner 傳來的 SubMaster (主要用來抓定速)
     """
+    # 每次呼叫時，更新自己專屬的 GPS 接收器 (不阻塞主執行緒)
+    self.sm_gps.update(0)
+
     # 1. 讀取並處理巡航定速設定值
     try:
       v_cruise_kph = sm['carState'].vCruise
-      # V_CRUISE_UNSET 通常為 255，將其重設為 0
       if v_cruise_kph == 255:
         v_cruise_kph = 0.0
     except Exception:
@@ -95,18 +99,18 @@ class AEM:
     try:
       is_gps_ready = False
       
-      # 優先嘗試讀取 liveGPS
-      if sm.valid.get('liveGPS', False):
-        live_gps = sm['liveGPS']
+      # 【來源一】：優先嘗試讀取 liveGPS
+      if self.sm_gps.valid.get('liveGPS', False) or self.sm_gps.updated.get('liveGPS', False):
+        live_gps = self.sm_gps['liveGPS']
         if live_gps.gpsOK and (live_gps.horizontalAccuracy <= 0 or live_gps.horizontalAccuracy <= MAX_HORIZONTAL_ACCURACY):
           current_lat = live_gps.latitude
           current_lon = live_gps.longitude
           if current_lat != 0.0 and current_lon != 0.0:
             is_gps_ready = True
       
-      # 若 liveGPS 未就緒，退而求其次讀取 gpsLocationExternal (備援)
-      if not is_gps_ready and sm.valid.get('gpsLocationExternal', False):
-        raw_gps = sm['gpsLocationExternal']
+      # 【來源二】：若 liveGPS 未就緒，讀取 gpsLocationExternal (備援)
+      if not is_gps_ready and (self.sm_gps.valid.get('gpsLocationExternal', False) or self.sm_gps.updated.get('gpsLocationExternal', False)):
+        raw_gps = self.sm_gps['gpsLocationExternal']
         acc = getattr(raw_gps, 'horizontalAccuracy', 0.0)
         if acc <= 0 or acc <= MAX_HORIZONTAL_ACCURACY:
           current_lat = raw_gps.latitude
@@ -117,7 +121,7 @@ class AEM:
     except Exception:
       pass
 
-    # 3. 安全防呆：若 GPS 資料無效或圖資未成功載入，維持一般 ACC 模式
+    # 3. 安全防呆：如果拿不到座標或沒載入圖資，保持一般 ACC 模式
     if current_lat is None or current_lon is None or len(self.signals_lat) == 0:
       self._active = False
       return
@@ -127,11 +131,11 @@ class AEM:
       self._active = False
       return
 
-    # 5. 條件二：計算 GPS 座標是否進入任何圖資座標的 100 公尺內
+    # 5. 條件二：計算 GPS 座標是否進入任何圖資座標的 150 公尺內
     distances = self._haversine_distances(current_lat, current_lon)
     
-    # 若矩陣中存在任何一個距離小於等於 100 公尺，則啟用實驗模式 (blended)
-    if np.any(distances <= 100.0):
+    # 若矩陣中存在任何一個距離小於等於 150 公尺，則啟用實驗模式 (blended)
+    if np.any(distances <= 150.0):
       self._active = True
     else:
       self._active = False
@@ -144,3 +148,4 @@ class AEM:
       return 'blended'  
     else:
       return 'acc'
+
