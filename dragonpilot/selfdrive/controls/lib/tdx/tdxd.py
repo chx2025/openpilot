@@ -280,7 +280,7 @@ class FreewayDataClient:
                         # 帶入 direction_text，讓內積演算法判斷對錯車道
                         sec_id = matcher.find_current_section(evt_lat, evt_lon, threshold_meters=1000, direction_text=direction)
                         
-                        # 【修改】加入 lat, lon, direction，且就算找不到完美的 SectionID 也存起來供雷達掃描用
+                        # 加入 lat, lon, direction，且就算找不到完美的 SectionID 也存起來供雷達掃描用
                         new_events.append({
                             'EventType': event_type,
                             'Description': desc,
@@ -344,12 +344,13 @@ def main():
     current_section_miss_count = 0
     
     # ==========================================
-    # 測試點設定 (可自行開關) 切換回真實的車輛 GPS，只要把 TEST_MODE = True 改成 TEST_MODE = False
+    # 測試點設定 (可自行開關) 
+    # 切換回真實的車輛 GPS，只要把 TEST_MODE = True 改成 TEST_MODE = False
     # ==========================================
-    TEST_MODE = False
-    TEST_LAT = 24.860332
-    TEST_LON = 121.218465
-    TEST_BEARING = 65.0   
+    TEST_MODE = True
+    TEST_LAT = 25.122042
+    TEST_LON = 121.734906 
+    TEST_BEARING = 180.0   
     # ==========================================
 
     while True:
@@ -420,15 +421,26 @@ def main():
                 ahead_section_history.clear()
                 stable_ahead_section = None
 
+            # ----------------------------------------------------
+            # 填寫 TDX 訊息
+            # ----------------------------------------------------
             msg = messaging.new_message('tdx')
             traffic = msg.tdx.init('trafficStatus')
             
+            # 分別取得目前與前方路段的車速
+            curr_speed = client.cached_speeds.get(str(stable_current_section).strip(), -1) if stable_current_section else -1
             ahead_speed = client.cached_speeds.get(str(stable_ahead_section).strip(), -1) if stable_ahead_section else -1
+
+            # 填入 capnp 結構
+            traffic.sectionId = str(stable_current_section) if stable_current_section else ""
+            traffic.speed = int(curr_speed)
+            traffic.nextSectionId = str(stable_ahead_section) if stable_ahead_section else ""
+            traffic.nextSpeed = int(ahead_speed)
+
+            # 狀態燈號維持以前方車速為準 (給 HUD 作為顏色顯示依據)
             display_speed = ahead_speed
 
             if display_speed > 0:
-                traffic.sectionId = str(stable_ahead_section)
-                traffic.speed = int(display_speed)
                 if display_speed >= 80:
                     traffic.status = "GREEN"
                 elif display_speed >= 40:
@@ -436,14 +448,14 @@ def main():
                 else:
                     traffic.status = "RED"
             else:
-                traffic.sectionId = ""
-                traffic.speed = -1
                 traffic.status = "GREEN"
 
+            # ----------------------------------------------------
+            # 處理事件
+            # ----------------------------------------------------
             current_event = None
             ahead_event = None
 
-            # 【全新邏輯】結合 SectionID 與「前方扇形半徑空間」比對，並嚴格檢查南北向
             for evt in client.cached_events:
                 evt_sid = evt.get('SectionID', '')
                 evt_desc = evt['Description']
@@ -454,32 +466,26 @@ def main():
 
                 formatted_evt = f"{evt_type}|{evt_desc}"
 
-                # 1. 目前路段比對 (維持原來的精準 SectionID 綁定)
+                # 1. 目前路段比對
                 if stable_current_section and evt_sid == str(stable_current_section).strip():
                     current_event = (current_event + "/" + formatted_evt) if current_event else formatted_evt
-                    continue  # 已經發生在目前路段，跳過前方計算
+                    continue  
 
-                # 2. 前方路段比對：方法A (拓樸推導) 或 方法B (空間雷達)
+                # 2. 前方路段比對
                 is_ahead = False
                 
-                # 方法A：原本的拓樸推導 (對付主線事件最精準)
+                # 方法A：拓樸推導
                 if stable_ahead_section and evt_sid == str(stable_ahead_section).strip():
                     is_ahead = True
                 
-                # 方法B：空間半徑 + 車頭方位角 + 文字南北向防呆 (專抓匝道與未綁定事件)
-                # 【修正】：加上 stable_current_section is not None，確認車輛在國道上才掃描
+                # 方法B：空間雷達
                 elif evt_lat and evt_lon and stable_current_section is not None:
-                    # 計算絕對距離
                     dist_m = _get_distance_meters(lon, lat, evt_lon, evt_lat)
-                    if dist_m <= 3000:  # 事件在 3 公里範圍內
-                        # 計算從車頭指向事件的方位角
+                    if dist_m <= 3000:
                         evt_bearing = _segment_bearing(lon, lat, evt_lon, evt_lat)
-                        # 如果夾角小於 60 度，代表事件在我們正前方的扇形視野內
                         if _angle_diff(bearing, evt_bearing) <= 60:
-                            # 雙重防呆：用當前行駛方向 (例如 '南向')的第一個字去比對 XML 的方向文字 (例如 '南')
                             if evt_dir and (my_direction[0] in evt_dir):
                                 is_ahead = True
-                            # 如果高公局 XML 剛好沒寫方向，但角度這麼完美落在正前方，也視為前方事件
                             elif not evt_dir:
                                 is_ahead = True
 
@@ -509,11 +515,14 @@ def main():
 
             pm.send('tdx', msg) 
 
+            # ----------------------------------------------------
+            # 輸出 log
+            # ----------------------------------------------------
             print(f"GPS: {gps_source} | 航向: {bearing:.1f}°({my_direction})")
             print(f"路段判定 -> 目前: {stable_current_section or '無'} | 前方: {stable_ahead_section or '無'}")
             
-            if traffic.speed > 0:
-                print(f" => 前方車速顯示: {traffic.speed} km/h")
+            if traffic.nextSpeed > 0:
+                print(f" => 前方車速顯示: {traffic.nextSpeed} km/h")
             if event.isActive:
                 print(f" => 事件警告: {event.description}")
             print("-" * 40)
