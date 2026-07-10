@@ -84,6 +84,7 @@ class HudRenderer(Widget):
 
     # --- TDX 路況預警變數 ---
     self.tdx_speed: int = -1
+    self.tdx_next_speed: int = -1
     self.tdx_status: str = "UNKNOWN"
     self.tdx_event_active: bool = False
     self.tdx_event_desc: str = ""
@@ -116,6 +117,7 @@ class HudRenderer(Widget):
       
       # 重置 TDX 變數，避免殘留上次熄火前的資料
       self.tdx_speed = -1
+      self.tdx_next_speed = -1
       self.tdx_status = "UNKNOWN"
       self.tdx_event_active = False
       self.tdx_event_desc = ""
@@ -137,6 +139,7 @@ class HudRenderer(Widget):
     try:
       tdx = sm['tdx']
       self.tdx_speed = tdx.trafficStatus.speed
+      self.tdx_next_speed = tdx.trafficStatus.nextSpeed
       self.tdx_status = str(tdx.trafficStatus.status)
       self.tdx_event_active = tdx.roadEvent.isActive
       
@@ -208,7 +211,7 @@ class HudRenderer(Widget):
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
     """繪製高公局即時路況與事件 (車速維持原位，事件貼齊下方單行跑馬燈)"""
-    if self.tdx_speed <= 0 and not self.tdx_event_active:
+    if self.tdx_next_speed <= 0 and not self.tdx_event_active:
       return
 
     bg_padding_x = 45
@@ -225,10 +228,10 @@ class HudRenderer(Widget):
       speed_color = rl.WHITE
 
     # ==========================================
-    # 第一行: 車速 (維持在原位：頂部列下方)
+    # 第一行: 車速 (維持在原位：頂部列下方，僅顯示前方車速)
     # ==========================================
-    if 0 < self.tdx_speed <= 100:
-      speed_text = f"前方車速: {self.tdx_speed} km/h"
+    if 0 < self.tdx_next_speed <= 150:
+      speed_text = f"前方車速: {self.tdx_next_speed} km/h"
       tdx_speed_font_size = 90
       speed_size = measure_text_cached(self._font_semi_bold, speed_text, tdx_speed_font_size)
       
