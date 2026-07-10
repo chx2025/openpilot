@@ -33,7 +33,7 @@ DECEL_V  = np.array([0.0, -0.1, -0.3, -0.5, -0.8, -1.1, -1.4, -1.8, -2.3])
 MAX_COMFORT_DECEL = -2.0       
 EMERGENCY_DECEL   = -3.0       
 MIN_CURVE_DISTANCE = 10.0      
-MAX_EXIT_ACCEL = 0.6           
+MAX_EXIT_ACCEL = 0.8  # [優化] 出彎最大加速度從 0.6 放寬至 0.8，改善動力銜接         
 
 # ==========================================================
 # [二、防變道急煞與狀態平滑參數 (保留 v27 免疫幽靈急煞設定)]
@@ -213,10 +213,9 @@ class DTSC:
         mask = np.logical_and(mask_speed, mask_curve)
         persistence_ok = (float(np.sum(mask)) / len(mask)) >= PERSISTENCE_MIN_FRAC if len(mask) > 0 else False
         
-        # [修正 1] 修復漏洞，確保無危險時正常套用短距離忽略
+        # [修復] 防變道急煞核心判斷，修正 999 漏洞確保無危險時正常套用短距離忽略
         critical_dist = rel_pos[critical_idx] if critical_idx is not None else 0.0
 
-        # 防變道急煞核心判斷保留
         if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
             dt_decel = sp_decel = 0.0
             dt_mode = None
@@ -226,14 +225,24 @@ class DTSC:
             dt_mode = None
             raw_suggested_speed = V_CRUISE_MAX
 
-        # [修正 2] 增加低速防卡死機制，確保起步順暢
-        if v_ego < 3.0:
-            dt_decel = sp_decel = 0.0
-            dt_mode = None
-            raw_suggested_speed = V_CRUISE_MAX
+        # [優化：線性過渡] 車速 10~21 km/h (3.0 ~ 6.0 m/s) 間漸進套用 DTSC，避免切換瞬間頓挫
+        if 3.0 <= v_ego < 6.0:
+            fade_factor = (v_ego - 3.0) / 3.0  
+            dt_decel *= fade_factor
+            sp_decel *= fade_factor
 
         final_required_decel = dt_decel if dt_mode == "EMERGENCY" else min(sp_decel, dt_decel)
         final_required_decel = clamp(final_required_decel, EMERGENCY_DECEL, 0.0)
+
+        # [核心修復] 低速防卡死機制 (根除起步死鎖)：
+        # 當車速極低時，強制清空所有狀態，防止死咬機制 (hysteresis) 卡在 True 導致系統封殺油門
+        if v_ego < 3.0:
+            self.active = False
+            self.hysteresis_timer = 0.0
+            self.output_v_target = V_CRUISE_MAX
+            self.smoothed_a_target = 0.0
+            final_required_decel = 0.0
+            raw_suggested_speed = V_CRUISE_MAX
 
         # ==========================================================
         # [Candy 融合：狀態死咬 (Hysteresis Recovery)]
@@ -263,8 +272,9 @@ class DTSC:
         # ==========================================================
         if self.active:
             # A. 加速度平滑 (LPF)
+            # [優化] 降低濾波係數 (0.15 -> 0.08) 讓煞車踩放更像人類的緩踩緩放
             raw_a_target = float(clamp(final_required_decel, EMERGENCY_DECEL, MAX_EXIT_ACCEL))
-            alpha_a = 0.15 
+            alpha_a = 0.08 
             self.smoothed_a_target = (1.0 - alpha_a) * self.smoothed_a_target + (alpha_a * raw_a_target)
 
             # B. 速度階梯爬升 (Staircase)
