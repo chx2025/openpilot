@@ -185,8 +185,22 @@ class DTSC:
         if not self._is_model_valid(model_msg):
             self.filtered_lat_limits = None 
             self.lpf_reset_timer = 0
+
+            # [修復] 若上一輪仍在主動煞車，本輪 model 無效時先延續上一輪的減速度上限，
+            # 避免 model 短暫抖動的那一幀完全放飛油門，造成「放→收」的頓挫；
+            # 同時把 hysteresis_timer / output_v_target / output_a_target 一併歸零，
+            # 避免 model 恢復後殘留的 hysteresis 狀態導致不必要的二次煞車。
+            if self.active and self.smoothed_a_target < 0:
+                for i in range(horizon_len):
+                    a_max[i] = min(a_max[i], self.smoothed_a_target)
+                    if a_max[i] < a_min[i]:
+                        a_min[i] = a_max[i] - 0.05
+
             self.active = False
+            self.hysteresis_timer = 0.0
             self.smoothed_a_target = 0.0
+            self.output_v_target = V_CRUISE_MAX
+            self.output_a_target = 0.0
             return a_min, a_max
 
         v_pred, rel_pos, yaw_rates, pred_y = self._compute_model_arrays(model_msg)
@@ -297,11 +311,16 @@ class DTSC:
         # ==========================================================
         if self.active:
             pass_decel = self.smoothed_a_target if self.smoothed_a_target < 0 else 0.0
-            critical_distance = rel_pos[critical_idx] if critical_idx is not None else np.max(rel_pos)
+            # [修復] critical_idx 為 None (代表已無需煞車超速) 時，改用 0.0 而非 np.max(rel_pos)，
+            # 否則會讓 rel_pos[i] <= critical_distance 對整個 horizon 恆成立，導致下方
+            # is_physically_in_curve 的出彎油門壓制永遠進不了 else 分支而失效。
+            critical_distance = rel_pos[critical_idx] if critical_idx is not None else 0.0
             critical_distance = max(critical_distance, 1e-3)
 
-            # 實體車身檢測 (0.1G)：方向盤尚未回正，車身還在明顯彎中
-            is_physically_in_curve = predicted_lat_accels[0] > 1.0
+            # 實體車身檢測：方向盤尚未回正，車身還在明顯彎中
+            # [修復] 門檻改為隨 aggressiveness 縮放，避免高攻擊性設定下出彎油門解放過慢
+            curve_exit_threshold = 1.0 * self.aggressiveness
+            is_physically_in_curve = predicted_lat_accels[0] > curve_exit_threshold
 
             for i in range(horizon_len):
                 if rel_pos[i] <= critical_distance + 1e-6:
