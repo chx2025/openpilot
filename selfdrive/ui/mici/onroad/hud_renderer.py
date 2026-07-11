@@ -115,7 +115,6 @@ class HudRenderer(Widget):
     self.v_ego_cluster_seen: bool = False
     self._engaged: bool = False
 
-    # --- TDX 路況預警變數 ---
     self.tdx_event_active: bool = False
     self.tdx_event_desc: str = ""
 
@@ -221,8 +220,8 @@ class HudRenderer(Widget):
       raw_desc = str(tdx.roadEvent.description)
 
       EVENT_TYPE_LABEL = {
-          '1': '[事故]', '2': '[施工]', '3': '[壅塞]',
-          '4': '[管制]', '5': '[天氣]', '8': '[異常]'
+          '1': '交通事故', '2': '施工事件', '3': '壅塞事件',
+          '4': '道路管制', '5': '天氣異常', '8': '其他異常'
       }
 
       if raw_desc and ":" in raw_desc:
@@ -251,23 +250,15 @@ class HudRenderer(Widget):
     controls_state = sm['controlsState']
     car_state = sm['carState']
 
-    # --- 測試模式啟用中 (已註解) ---
-    # t = time.time()
-    # cycle = int(t / 2) % 6
-    # is_blinking = int(t * 2) % 2 == 0
-    # 
-    # if cycle == 0:
-    #     self._dp_indicator_show_left, self._dp_indicator_count_left, self._dp_indicator_color_left = self._update_dp_indicator_side_state(is_blinking, False, self._dp_indicator_show_left, self._dp_indicator_count_left)
-    # elif cycle == 1:
-    #     self._dp_indicator_show_right, self._dp_indicator_count_right, self._dp_indicator_color_right = self._update_dp_indicator_side_state(is_blinking, False, self._dp_indicator_show_right, self._dp_indicator_count_right)
-    # elif cycle == 2:
-    #     self._dp_indicator_show_left, self._dp_indicator_count_left, self._dp_indicator_color_left = self._update_dp_indicator_side_state(False, True, self._dp_indicator_show_left, self._dp_indicator_count_left)
-    # elif cycle == 3:
-    #     self._dp_indicator_show_right, self._dp_indicator_count_right, self._dp_indicator_color_right = self._update_dp_indicator_side_state(False, True, self._dp_indicator_show_right, self._dp_indicator_count_right)
-    # elif cycle == 4:
-    #     self._dp_indicator_show_left, self._dp_indicator_count_left, self._dp_indicator_color_left = self._update_dp_indicator_side_state(is_blinking, True, self._dp_indicator_show_left, self._dp_indicator_count_left)
-    # elif cycle == 5:
-    #     self._dp_indicator_show_right, self._dp_indicator_count_right, self._dp_indicator_color_right = self._update_dp_indicator_side_state(is_blinking, True, self._dp_indicator_show_right, self._dp_indicator_count_right)
+    # --- 更新兩側方向燈與盲區閃爍狀態 ---
+    self._dp_indicator_show_left, self._dp_indicator_count_left, self._dp_indicator_color_left = \
+      self._update_dp_indicator_side_state(car_state.leftBlinker, car_state.leftBlindspot,
+                                           self._dp_indicator_show_left, self._dp_indicator_count_left)
+    
+    self._dp_indicator_show_right, self._dp_indicator_count_right, self._dp_indicator_color_right = \
+      self._update_dp_indicator_side_state(car_state.rightBlinker, car_state.rightBlindspot,
+                                           self._dp_indicator_show_right, self._dp_indicator_count_right)
+
     v_cruise_cluster = car_state.vCruiseCluster
     set_speed = (
       controls_state.deprecated.vCruise if v_cruise_cluster == 0.0 else v_cruise_cluster
@@ -295,7 +286,7 @@ class HudRenderer(Widget):
     # 顯示動態立體球體與距離
     self._draw_lead_info(rect)
     
-    # 繪製 TDX 警告 (僅顯示跑馬燈事件)
+    # 繪製 TDX 警告
     self._draw_tdx_info(rect)
 
     # 繪製自帶雙閃爍頻率的方向燈與盲區邊條
@@ -314,7 +305,7 @@ class HudRenderer(Widget):
       rl.draw_rectangle(int(rect.x + rect.width - bar_width), y_pos, bar_width, bar_height, self._dp_indicator_color_right)
 
   def _draw_lead_info(self, rect: rl.Rectangle) -> None:
-    """繪製立體球體與前車距離 (黑底僅限球體本身，縮小5pix)"""
+    """繪製立體球體與前車距離 (黑底僅限球體本身)"""
     pos_x = int(rect.x + 46)
     pos_y = int(rect.y + rect.height - 39)
     
@@ -322,8 +313,8 @@ class HudRenderer(Widget):
     radius_x = 25.0
     radius_y = 25.0
 
-    # --- 繪製僅限球體本身的專屬黑底 (縮小5pix，將 bg_padding 從 8 改為 3) ---
-    bg_padding = 3.0  
+    # --- 繪製僅限球體本身的專屬黑底 ---
+    bg_padding = 3.0  # 向外擴張 3 個像素形成一圈黑色邊框
     rl.draw_ellipse(pos_x, pos_y, radius_x + bg_padding, radius_y + bg_padding, rl.Color(0, 0, 0, 180))
     
     dist_color = rl.WHITE
@@ -359,70 +350,79 @@ class HudRenderer(Widget):
     text_x = pos_x + 35  
     text_y = pos_y - dist_size.y / 2
         
-    # 繪製文字陰影
+    # 繪製文字陰影 (確保在無黑底的情況下，於強光背景中也能清楚辨識數字)
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x + 2, text_y + 2), dist_font_size, 0, rl.Color(0, 0, 0, 150))
     # 繪製文字主體
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), dist_font_size, 0, dist_color)
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """TDX 路況警告：來回跑馬燈，黑底僅限文字顯示區域"""
+    """TDX 路況警告：單向循環跑馬燈，寬度貼齊兩側 BSM 與方向燈，字體 70"""
     if not self.tdx_event_active or not self.tdx_event_desc:
       return
 
     font_size = 70
     text_size = measure_text_cached(self._font_bold, self.tdx_event_desc, font_size)
     
-    bg_padding_x = 25
+    # 這裡呼應 BSM 邊緣條的設定
+    bar_width = 30  
+    gap = 2  # 距離兩側邊條的 2px 安全微調間距
+
+    # 計算背景框的固定寬度與位置 (完美橫跨左右邊條的內部空間)
+    bg_width = rect.width - (bar_width * 2) - (gap * 2)
+    bg_x = rect.x + bar_width + gap
+    
     bg_padding_y = 15
-    bar_width = 30
-
-    max_text_width = rect.width - (bar_width * 2) - (bg_padding_x * 2) - 20 
+    bg_height = text_size.y + bg_padding_y * 2
     
-    is_overflow = text_size.x > max_text_width
-    display_width = min(text_size.x, max_text_width) if is_overflow else text_size.x
-
-    pos_x = rect.x + (rect.width - display_width) / 2
+    # 垂直位置：螢幕中央偏下
     pos_y = rect.y + (rect.height - text_size.y) / 2 - 20
-    
-    bg_rect = rl.Rectangle(
-        pos_x - bg_padding_x, 
-        pos_y - bg_padding_y, 
-        display_width + bg_padding_x * 2, 
-        text_size.y + bg_padding_y * 2
-    )
-    
-    rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(0, 0, 0, 180))
+    bg_y = pos_y - bg_padding_y
 
+    bg_rect = rl.Rectangle(bg_x, bg_y, bg_width, bg_height)
+    
+    # 畫背景
+    rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(0, 0, 0, 180))
     alpha = 150 + int(60 * math.sin(time.time() * 5))
     rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
     
+    # 處理文字跑馬燈 (文字顯示的有效範圍)
+    text_padding = 20
+    max_text_width = bg_width - (text_padding * 2)
+    is_overflow = text_size.x > max_text_width
+
     if is_overflow:
       rl.begin_scissor_mode(int(bg_rect.x), int(bg_rect.y), int(bg_rect.width), int(bg_rect.height))
 
       extra_width = text_size.x - max_text_width
       scroll_speed = 80.0     
       scroll_duration = extra_width / scroll_speed
-      pause_duration = 2.0    
+      
+      # --- 單向跑馬燈時間設定 ---
+      start_pause = 2.0  # 停在起點的時間 (秒)
+      end_pause = 2.0    # 停在終點的時間 (秒)
+      total_cycle = start_pause + scroll_duration + end_pause
 
-      cycle_time = time.time() % ((scroll_duration + pause_duration) * 2)
+      cycle_time = time.time() % total_cycle
 
-      if cycle_time < pause_duration:
+      if cycle_time < start_pause:
+        # 第一階段：停在開頭
         offset = 0.0
-      elif cycle_time < pause_duration + scroll_duration:
-        progress = (cycle_time - pause_duration) / scroll_duration
+      elif cycle_time < start_pause + scroll_duration:
+        # 第二階段：單向向左滑動
+        progress = (cycle_time - start_pause) / scroll_duration
         offset = extra_width * progress
-      elif cycle_time < pause_duration * 2 + scroll_duration:
-        offset = extra_width
       else:
-        progress = (cycle_time - pause_duration * 2 - scroll_duration) / scroll_duration
-        offset = extra_width * (1 - progress)
+        # 第三階段：停在結尾，時間一到直接歸零重新開始
+        offset = extra_width
 
-      draw_x = pos_x - offset
+      draw_x = bg_x + text_padding - offset
       rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(draw_x, pos_y), font_size, 0, rl.WHITE)
 
       rl.end_scissor_mode()
     else:
-      rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(pos_x, pos_y), font_size, 0, rl.WHITE)
+      # 文字沒超過時，在整條橫幅中置中
+      draw_x = bg_x + (bg_width - text_size.x) / 2
+      rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(draw_x, pos_y), font_size, 0, rl.WHITE)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
@@ -459,4 +459,57 @@ class HudRenderer(Widget):
 
     if self._show_wheel_critical:
       EXCLAMATION_POINT_SPACING = 10
-      exclamation_pos_x = pos_x - self._txt_exclamation_point.width / 2 + wheel_txt.width / 2 + EXCLAM
+      exclamation_pos_x = pos_x - self._txt_exclamation_point.width / 2 + wheel_txt.width / 2 + EXCLAMATION_POINT_SPACING
+      exclamation_pos_y = pos_y - self._txt_exclamation_point.height / 2
+      rl.draw_texture_ex(self._txt_exclamation_point, rl.Vector2(exclamation_pos_x, exclamation_pos_y), 0.0, 1.0, rl.WHITE)
+
+  def _draw_set_speed(self, rect: rl.Rectangle) -> None:
+    alpha = self._set_speed_alpha_filter.update(0 < rl.get_time() - self._set_speed_changed_time < SET_SPEED_PERSISTENCE and
+                                                self._can_draw_top_icons and self._engaged)
+    if alpha < 1e-2:
+      return
+
+    x = rect.x
+    y = rect.y
+
+    circle_radius = 162 // 2
+    rl.draw_circle_gradient(rl.Vector2(x + circle_radius, y + circle_radius), circle_radius,
+                            rl.Color(0, 0, 0, int(255 / 2 * alpha)), rl.BLANK)
+
+    set_speed_color = rl.Color(255, 255, 255, int(255 * 0.9 * alpha))
+    max_color = rl.Color(255, 255, 255, int(255 * 0.9 * alpha))
+
+    set_speed = self.set_speed
+    if self.is_cruise_set and not ui_state.is_metric:
+      set_speed *= KM_TO_MILE
+
+    set_speed_text = CRUISE_DISABLED_CHAR if not self.is_cruise_set else str(round(set_speed))
+    rl.draw_text_ex(
+      self._font_display,
+      set_speed_text,
+      rl.Vector2(x + 13 + 4, y + 3 - 8 - 3 + 4),
+      FONT_SIZES.set_speed,
+      0,
+      set_speed_color,
+    )
+
+    max_text = tr("MAX")
+    rl.draw_text_ex(
+      self._font_semi_bold,
+      max_text,
+      rl.Vector2(x + 25, y + FONT_SIZES.set_speed - 7 + 4),
+      FONT_SIZES.max_speed,
+      0,
+      max_color,
+    )
+
+  def _draw_current_speed(self, rect: rl.Rectangle) -> None:
+    speed_text = str(round(self.speed))
+    speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
+    speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
+    rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.WHITE)
+
+    unit_text = tr("km/h") if ui_state.is_metric else tr("mph")
+    unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)
+    unit_pos = rl.Vector2(rect.x + rect.width / 2 - unit_text_size.x / 2, 290 - unit_text_size.y / 2)
+    rl.draw_text_ex(self._font_medium, unit_text, unit_pos, FONT_SIZES.speed_unit, 0, COLORS.WHITE_TRANSLUCENT)
