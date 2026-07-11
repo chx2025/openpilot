@@ -345,12 +345,11 @@ def main():
     
     # ==========================================
     # 測試點設定 (可自行開關) 
-    # 切換回真實的車輛 GPS，只要把 TEST_MODE = True 改成 TEST_MODE = False
     # ==========================================
     TEST_MODE = False
-    TEST_LAT = 25.122042
-    TEST_LON = 121.734906 
-    TEST_BEARING = 180.0   
+    TEST_LAT = 24.860332
+    TEST_LON = 121.218465
+    TEST_BEARING = 65.0   
     # ==========================================
 
     while True:
@@ -466,8 +465,20 @@ def main():
 
                 formatted_evt = f"{evt_type}|{evt_desc}"
 
+                # 【實體方位角檢查】：確保事件是在車頭前方
+                is_physically_ahead = True
+                if evt_lat and evt_lon:
+                    evt_bearing = _segment_bearing(lon, lat, evt_lon, evt_lat)
+                    # 只要夾角大於 90 度，代表該事件座標已經落在車側或後方（已通過）
+                    if _angle_diff(bearing, evt_bearing) > 120:
+                        is_physically_ahead = False
+
                 # 1. 目前路段比對
                 if stable_current_section and evt_sid == str(stable_current_section).strip():
+                    # 如果事件實體位置已經在後方，就不再顯示為目前事件！
+                    if not is_physically_ahead:
+                        continue
+                    
                     current_event = (current_event + "/" + formatted_evt) if current_event else formatted_evt
                     continue  
 
@@ -476,13 +487,15 @@ def main():
                 
                 # 方法A：拓樸推導
                 if stable_ahead_section and evt_sid == str(stable_ahead_section).strip():
-                    is_ahead = True
+                    if is_physically_ahead:
+                        is_ahead = True
                 
                 # 方法B：空間雷達
                 elif evt_lat and evt_lon and stable_current_section is not None:
                     dist_m = _get_distance_meters(lon, lat, evt_lon, evt_lat)
                     if dist_m <= 3000:
                         evt_bearing = _segment_bearing(lon, lat, evt_lon, evt_lat)
+                        # 空間雷達要求更嚴格的 60 度正前方扇形
                         if _angle_diff(bearing, evt_bearing) <= 60:
                             if evt_dir and (my_direction[0] in evt_dir):
                                 is_ahead = True
