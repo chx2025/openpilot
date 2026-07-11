@@ -426,17 +426,14 @@ def main():
             msg = messaging.new_message('tdx')
             traffic = msg.tdx.init('trafficStatus')
             
-            # 分別取得目前與前方路段的車速
             curr_speed = client.cached_speeds.get(str(stable_current_section).strip(), -1) if stable_current_section else -1
             ahead_speed = client.cached_speeds.get(str(stable_ahead_section).strip(), -1) if stable_ahead_section else -1
 
-            # 填入 capnp 結構
             traffic.sectionId = str(stable_current_section) if stable_current_section else ""
             traffic.speed = int(curr_speed)
             traffic.nextSectionId = str(stable_ahead_section) if stable_ahead_section else ""
             traffic.nextSpeed = int(ahead_speed)
 
-            # 狀態燈號維持以前方車速為準 (給 HUD 作為顏色顯示依據)
             display_speed = ahead_speed
 
             if display_speed > 0:
@@ -465,17 +462,22 @@ def main():
 
                 formatted_evt = f"{evt_type}|{evt_desc}"
 
-                # 【實體方位角檢查】：確保事件是在車頭前方
+                # 【距離 + 角度混合檢查】
                 is_physically_ahead = True
                 if evt_lat and evt_lon:
+                    dist_to_evt = _get_distance_meters(lon, lat, evt_lon, evt_lat)
                     evt_bearing = _segment_bearing(lon, lat, evt_lon, evt_lat)
-                    # 只要夾角大於 90 度，代表該事件座標已經落在車側或後方（已通過）
-                    if _angle_diff(bearing, evt_bearing) > 120:
+                    angle_diff = _angle_diff(bearing, evt_bearing)
+                    
+                    # 1. 核心保留區：只要距離小於 300 公尺，無視角度強制顯示（避免接近時 GPS 亂跳導致閃爍）
+                    if dist_to_evt <= 300:
+                        is_physically_ahead = True
+                    # 2. 駛離判定：距離大於 300 公尺，且角度大於 90 度 (確實落在車身後方)，才正式取消
+                    elif angle_diff > 90:
                         is_physically_ahead = False
 
                 # 1. 目前路段比對
                 if stable_current_section and evt_sid == str(stable_current_section).strip():
-                    # 如果事件實體位置已經在後方，就不再顯示為目前事件！
                     if not is_physically_ahead:
                         continue
                     
@@ -492,10 +494,7 @@ def main():
                 
                 # 方法B：空間雷達
                 elif evt_lat and evt_lon and stable_current_section is not None:
-                    dist_m = _get_distance_meters(lon, lat, evt_lon, evt_lat)
-                    if dist_m <= 3000:
-                        evt_bearing = _segment_bearing(lon, lat, evt_lon, evt_lat)
-                        # 空間雷達要求更嚴格的 60 度正前方扇形
+                    if dist_to_evt <= 3000:
                         if _angle_diff(bearing, evt_bearing) <= 60:
                             if evt_dir and (my_direction[0] in evt_dir):
                                 is_ahead = True
