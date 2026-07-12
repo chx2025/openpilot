@@ -71,7 +71,7 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
     self.ocm = OCM()
-    self. = ()
+    self.aem = AEM()
     self.apm = APM()
 
   @staticmethod
@@ -99,7 +99,7 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
 
     LongitudinalPlannerDP.update(self, sm)
 
-    if dp_flags & DPFlags.:
+    if dp_flags & DPFlags.AEM:
       # 已修正：將 sm 拆解並傳入正確的 model_msg, radar_msg 與 v_ego
       self.aem.update_states(model_msg=sm['modelV2'], radar_msg=sm['radarState'], v_ego=sm['carState'].vEgo)
       mode = self.aem.get_mode(mode)
