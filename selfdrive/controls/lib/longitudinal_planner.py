@@ -101,7 +101,7 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
 
     if dp_flags & DPFlags.AEM:
       # 已修正：將 sm 拆解並傳入正確的 model_msg, radar_msg 與 v_ego
-      self.aem.update_states(model_msg=sm['modelV2'], radar_msg=sm['radarState'], v_ego=sm['carState'].vEgo)
+      self.aem.update_states(sm['modelV2'], sm['radarState'], sm['carState'].vEgo)
       mode = self.aem.get_mode(mode)
 
     if len(sm['carControl'].orientationNED) == 3:
