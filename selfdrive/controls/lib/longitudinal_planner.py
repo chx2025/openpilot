@@ -100,8 +100,8 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
     LongitudinalPlannerDP.update(self, sm)
 
     if dp_flags & DPFlags.AEM:
-      # 將 SubMaster 直接傳入 AEM 內部進行解析，保持此檔案乾淨
-      self.aem.update_states(sm)
+      # 已修正：將 sm 拆解並傳入正確的 model_msg, radar_msg 與 v_ego
+      self.aem.update_states(sm['modelV2'], sm['radarState'], sm['carState'].vEgo)
       mode = self.aem.get_mode(mode)
 
     if len(sm['carControl'].orientationNED) == 3:
