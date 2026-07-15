@@ -62,14 +62,14 @@ set_tici_hw() {
       fi
     done
 
-    # 優雅降級：成功才寫入快取，失敗則不寫入並繼續放行
+    # 優雅降級：成功才寫入快取，失敗則不寫入並繼續放行（不 exit，維持快速開機）
     if [ -n "$mcu" ]; then
       if sudo mount -o remount,rw /persist 2>/dev/null; then
         echo "$mcu" | sudo tee "$cache" >/dev/null 2>&1
         sudo mount -o remount,ro /persist 2>/dev/null
       fi
     else
-      echo "Warning: Panda MCU detection failed after $attempts attempts. Proceeding without cache..."
+      echo "WARNING: Panda MCU detection failed after $attempts attempts. TICI_DOS/TICI_TRES not set, proceeding anyway."
     fi
   fi
 
@@ -138,21 +138,35 @@ set_model_fingerprint() {
 function launch {
   [ -f "$DIR/.git/index.lock" ] && rm -f $DIR/.git/index.lock
 
-  # Git 智慧更新機制：只比對 Commit Hash，無阻擋標記即自動覆蓋更新
+  # Git 智慧更新機制：commit hash 比對 (快) + 本地修改保護 (近乎零成本的 stat 比對)
+  #
+  # LOCAL_MODIFIED 檢查沿用原生機制：只要 .git 底下有任何檔案比 .overlay_init 新，
+  # 就代表使用者在本地做了修改（不論是否已 commit），此時一律跳過覆蓋更新，
+  # 避免自動更新把還在寫的東西沖掉。這個檢查只是一次 find+grep，幾乎不花時間，
+  # 不會拖慢開機。
   if [ ! -f "/data/.skip_overlay_check" ]; then
-    LOCAL_COMMIT=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
-    STAGING_COMMIT=$(git -C "${STAGING_ROOT}/finalized" rev-parse HEAD 2>/dev/null)
+    LOCAL_MODIFIED=0
+    if [ -f "${DIR}/.overlay_init" ]; then
+      find ${DIR}/.git -newer ${DIR}/.overlay_init 2>/dev/null | grep -q '.' && LOCAL_MODIFIED=1
+    fi
 
-    if [ -n "$STAGING_COMMIT" ] && [ "$LOCAL_COMMIT" != "$STAGING_COMMIT" ]; then
-      if [ -f "${STAGING_ROOT}/finalized/.overlay_consistent" ]; then
-        if [ ! -d /data/safe_staging/old_openpilot ]; then
-          echo "偵測到遠端新版本 ($STAGING_COMMIT)，執行更新替換..."
-          LAUNCHER_LOCATION="${BASH_SOURCE[0]}"
-          mv $DIR /data/safe_staging/old_openpilot
-          mv "${STAGING_ROOT}/finalized" $DIR
-          cd $DIR
-          unset AGNOS_VERSION
-          exec "${LAUNCHER_LOCATION}"
+    if [ "$LOCAL_MODIFIED" -eq 1 ]; then
+      echo "${DIR} 有本地修改（含未 commit），跳過覆蓋更新"
+    else
+      LOCAL_COMMIT=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
+      STAGING_COMMIT=$(git -C "${STAGING_ROOT}/finalized" rev-parse HEAD 2>/dev/null)
+
+      if [ -n "$STAGING_COMMIT" ] && [ "$LOCAL_COMMIT" != "$STAGING_COMMIT" ]; then
+        if [ -f "${STAGING_ROOT}/finalized/.overlay_consistent" ]; then
+          if [ ! -d /data/safe_staging/old_openpilot ]; then
+            echo "偵測到遠端新版本 ($STAGING_COMMIT)，執行更新替換..."
+            LAUNCHER_LOCATION="${BASH_SOURCE[0]}"
+            mv $DIR /data/safe_staging/old_openpilot
+            mv "${STAGING_ROOT}/finalized" $DIR
+            cd $DIR
+            unset AGNOS_VERSION
+            exec "${LAUNCHER_LOCATION}"
+          fi
         fi
       fi
     fi
@@ -172,18 +186,37 @@ function launch {
 
   cd system/manager
 
-  # Git 智慧免編譯機制：只在程式碼有真正變動時才呼叫 build.py
+  # Git 智慧免編譯機制：commit hash 比對 (快) + working tree dirty 檢查 (近乎零成本)
+  #
+  # 只比對 commit hash 會漏掉「還沒 commit 就重開機測試」的情況（開發時常態）。
+  # `git status --porcelain` 是單一指令、只掃差異，通常是毫秒等級，遠比 build.py
+  # 本身快上百倍，加這個才能保證「你剛改的程式碼」一定會被編到，同時不變動未修改
+  # 版本的快速跳過路徑。非 git 環境（純 prebuilt image）則退回原生 prebuilt flag，
+  # 不會每次強制全編。
   CURRENT_COMMIT=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
-  CACHED_COMMIT=$(cat /data/.build_commit_cache 2>/dev/null)
 
-  if [ -n "$CURRENT_COMMIT" ] && [ "$CURRENT_COMMIT" = "$CACHED_COMMIT" ]; then
-    echo "Git 版本未變更，安全跳過編譯階段"
+  if [ -z "$CURRENT_COMMIT" ]; then
+    if [ ! -f $DIR/prebuilt ]; then
+      ./build.py
+    fi
   else
-    echo "開始完整編譯..."
-    ./build.py
-    # 確認編譯成功後，才寫入新的快取
-    if [ $? -eq 0 ] && [ -n "$CURRENT_COMMIT" ]; then
-      echo "$CURRENT_COMMIT" > /data/.build_commit_cache
+    DIRTY=$(git -C "$DIR" status --porcelain --untracked-files=normal 2>/dev/null)
+    CACHED_COMMIT=$(cat /data/.build_commit_cache 2>/dev/null)
+
+    if [ -z "$DIRTY" ] && [ "$CURRENT_COMMIT" = "$CACHED_COMMIT" ]; then
+      echo "Git 版本未變更且無未提交修改，安全跳過編譯階段"
+    else
+      echo "偵測到程式碼變更（commit 或未提交修改），開始編譯..."
+      ./build.py
+      if [ $? -eq 0 ]; then
+        # 只在乾淨狀態下寫入快取；有 dirty 改動時故意不寫，
+        # 確保下次開機（不論改動有沒有 commit）都會重新判斷。
+        if [ -z "$DIRTY" ]; then
+          echo "$CURRENT_COMMIT" > /data/.build_commit_cache
+        else
+          rm -f /data/.build_commit_cache
+        fi
+      fi
     fi
   fi
 
