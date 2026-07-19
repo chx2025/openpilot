@@ -213,38 +213,36 @@ class HudRenderer(Widget):
       self.lead_dist_raw = 0.0
       self.lead_dist = "-"
 
-    # --- 讀取 TDX 狀態 (顯示標題) ---
+    # --- 讀取 TDX 狀態 (背景接收事件) ---
     try:
       tdx = sm['tdx']
       self.tdx_event_active = tdx.roadEvent.isActive
       raw_desc = str(tdx.roadEvent.description)
 
       EVENT_TYPE_LABEL = {
-          '1': '[事故]', '2': '[施工]', '3': '[壅塞]',
-          '4': '[管制]', '5': '[天氣]', '8': '[異常]'
+          '1': '交通事故', '2': '施工事件', '3': '壅塞事件',
+          '4': '道路管制', '5': '天氣異常', '8': '其他異常'
       }
 
       if raw_desc and ":" in raw_desc:
           loc_part, events_part = raw_desc.split(":", 1)
           
-          if "前方" in loc_part:
-              label_events = []
-              for evt in events_part.split("/"):
-                  parts = evt.split("|")
-                  evt_type = parts[0] if len(parts) > 1 else '0'
-                  label = EVENT_TYPE_LABEL.get(evt_type, '[其他]')
-                  label_events.append(label)
+          # 解除 "前方" 限制，讓 "目前" 也能顯示
+          label_events = []
+          for evt in events_part.split("/"):
+              parts = evt.split("|")
+              evt_type = parts[0] if len(parts) > 1 else '0'
+              label = EVENT_TYPE_LABEL.get(evt_type, '[其他]')
+              label_events.append(label)
 
-              unique_labels = []
-              for lbl in label_events:
-                  if lbl not in unique_labels:
-                      unique_labels.append(lbl)
+          unique_labels = []
+          for lbl in label_events:
+              if lbl not in unique_labels:
+                  unique_labels.append(lbl)
 
-              self.tdx_event_desc = f"前方:{''.join(unique_labels)}"
-          else:
-              self.tdx_event_desc = ""
+          self.tdx_event_desc = f"{loc_part}:{''.join(unique_labels)}"
       else:
-          self.tdx_event_desc = ""
+          self.tdx_event_desc = raw_desc
 
     except Exception:
       pass
@@ -260,35 +258,6 @@ class HudRenderer(Widget):
     self._dp_indicator_show_right, self._dp_indicator_count_right, self._dp_indicator_color_right = \
       self._update_dp_indicator_side_state(car_state.rightBlinker, car_state.rightBlindspot,
                                            self._dp_indicator_show_right, self._dp_indicator_count_right)
-
-    # =========================================================================
-    # --- 測試模式：模擬方向燈與盲區來回顯示 (已註解關閉) ---
-    # =========================================================================
-    # t = time.time()
-    # cycle = int(t / 2) % 6  # 每 2 秒切換一個情境
-    #
-    # self.left_blinker = False
-    # self.right_blinker = False
-    # self.left_blindspot = False
-    # self.right_blindspot = False
-    #
-    # is_blinking = int(t * 2) % 2 == 0  # 每 0.5 秒閃爍
-    #
-    # if cycle == 0:
-    #     self.left_blinker = is_blinking
-    # elif cycle == 1:
-    #     self.right_blinker = is_blinking
-    # elif cycle == 2:
-    #     self.left_blindspot = True
-    # elif cycle == 3:
-    #     self.right_blindspot = True
-    # elif cycle == 4:
-    #     self.left_blinker = is_blinking
-    #     self.left_blindspot = True
-    # elif cycle == 5:
-    #     self.right_blinker = is_blinking
-    #     self.right_blindspot = True
-    # =========================================================================
 
     v_cruise_cluster = car_state.vCruiseCluster
     set_speed = (
@@ -387,64 +356,73 @@ class HudRenderer(Widget):
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), dist_font_size, 0, dist_color)
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """TDX 路況警告：來回跑馬燈，黑底僅限文字顯示區域，字體 70，向上平移 20px"""
+    """TDX 路況警告：單向循環跑馬燈，寬度貼齊兩側 BSM 與方向燈，字體 70"""
     if not self.tdx_event_active or not self.tdx_event_desc:
       return
 
     font_size = 70
     text_size = measure_text_cached(self._font_bold, self.tdx_event_desc, font_size)
     
-    bg_padding_x = 25
+    # 這裡呼應 BSM 邊緣條的設定
+    bar_width = 30  
+    gap = 2  # 距離兩側邊條的 2px 安全微調間距
+
+    # 計算背景框的固定寬度與位置 (完美橫跨左右邊條的內部空間)
+    bg_width = rect.width - (bar_width * 2) - (gap * 2)
+    bg_x = rect.x + bar_width + gap
+    
     bg_padding_y = 15
-    bar_width = 30
-
-    max_text_width = rect.width - (bar_width * 2) - (bg_padding_x * 2) - 20 
+    bg_height = text_size.y + bg_padding_y * 2
     
-    is_overflow = text_size.x > max_text_width
-    display_width = min(text_size.x, max_text_width) if is_overflow else text_size.x
-
-    pos_x = rect.x + (rect.width - display_width) / 2
+    # 垂直位置：螢幕中央偏下
     pos_y = rect.y + (rect.height - text_size.y) / 2 - 20
-    
-    bg_rect = rl.Rectangle(
-        pos_x - bg_padding_x, 
-        pos_y - bg_padding_y, 
-        display_width + bg_padding_x * 2, 
-        text_size.y + bg_padding_y * 2
-    )
-    
-    rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(0, 0, 0, 180))
+    bg_y = pos_y - bg_padding_y
 
+    bg_rect = rl.Rectangle(bg_x, bg_y, bg_width, bg_height)
+    
+    # 畫背景
+    rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(0, 0, 0, 180))
     alpha = 150 + int(60 * math.sin(time.time() * 5))
     rl.draw_rectangle_rounded(bg_rect, 0.2, 10, rl.Color(220, 50, 50, alpha))
     
+    # 處理文字跑馬燈 (文字顯示的有效範圍)
+    text_padding = 20
+    max_text_width = bg_width - (text_padding * 2)
+    is_overflow = text_size.x > max_text_width
+
     if is_overflow:
       rl.begin_scissor_mode(int(bg_rect.x), int(bg_rect.y), int(bg_rect.width), int(bg_rect.height))
 
       extra_width = text_size.x - max_text_width
       scroll_speed = 80.0     
       scroll_duration = extra_width / scroll_speed
-      pause_duration = 2.0    
+      
+      # --- 單向跑馬燈時間設定 ---
+      start_pause = 2.0  # 停在起點的時間 (秒)
+      end_pause = 2.0    # 停在終點的時間 (秒)
+      total_cycle = start_pause + scroll_duration + end_pause
 
-      cycle_time = time.time() % ((scroll_duration + pause_duration) * 2)
+      cycle_time = time.time() % total_cycle
 
-      if cycle_time < pause_duration:
+      if cycle_time < start_pause:
+        # 第一階段：停在開頭
         offset = 0.0
-      elif cycle_time < pause_duration + scroll_duration:
-        progress = (cycle_time - pause_duration) / scroll_duration
+      elif cycle_time < start_pause + scroll_duration:
+        # 第二階段：單向向左滑動
+        progress = (cycle_time - start_pause) / scroll_duration
         offset = extra_width * progress
-      elif cycle_time < pause_duration * 2 + scroll_duration:
-        offset = extra_width
       else:
-        progress = (cycle_time - pause_duration * 2 - scroll_duration) / scroll_duration
-        offset = extra_width * (1 - progress)
+        # 第三階段：停在結尾，時間一到直接歸零重新開始
+        offset = extra_width
 
-      draw_x = pos_x - offset
+      draw_x = bg_x + text_padding - offset
       rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(draw_x, pos_y), font_size, 0, rl.WHITE)
 
       rl.end_scissor_mode()
     else:
-      rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(pos_x, pos_y), font_size, 0, rl.WHITE)
+      # 文字沒超過時，在整條橫幅中置中
+      draw_x = bg_x + (bg_width - text_size.x) / 2
+      rl.draw_text_ex(self._font_bold, self.tdx_event_desc, rl.Vector2(draw_x, pos_y), font_size, 0, rl.WHITE)
 
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
