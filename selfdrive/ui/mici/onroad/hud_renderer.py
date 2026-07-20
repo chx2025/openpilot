@@ -21,6 +21,9 @@ CRUISE_DISABLED_CHAR = '–'
 
 SET_SPEED_PERSISTENCE = 2.5  # seconds
 
+# --- 測試模式總開關 (True: 開啟 UI 測試假數據 / False: 讀取真實車輛數據) ---
+DEBUG_TEST_UI = False
+
 # --- 方向燈與盲區閃爍頻率設定 ---
 DP_INDICATOR_BLINK_RATE_FAST = int(gui_app.target_fps * 0.25)
 DP_INDICATOR_BLINK_RATE_STD = int(gui_app.target_fps * 0.5)
@@ -250,13 +253,32 @@ class HudRenderer(Widget):
     controls_state = sm['controlsState']
     car_state = sm['carState']
 
+    # --- UI 測試模式覆寫區塊 ---
+    if DEBUG_TEST_UI:
+      self.lead_dist_raw = 105.0
+      self.lead_dist = "105m"
+      # 若要測試無鎖定前車，可將上方兩行改為：
+      # self.lead_dist_raw = 0.0
+      # self.lead_dist = "-"
+      
+      # 自定義左右邊條測試狀態 (這裡預設：左方向燈 / 右盲區)
+      test_left_blinker = True
+      test_left_bsm = False
+      test_right_blinker = False
+      test_right_bsm = True
+    else:
+      test_left_blinker = car_state.leftBlinker
+      test_left_bsm = car_state.leftBlindspot
+      test_right_blinker = car_state.rightBlinker
+      test_right_bsm = car_state.rightBlindspot
+
     # --- 更新兩側方向燈與盲區閃爍狀態 ---
     self._dp_indicator_show_left, self._dp_indicator_count_left, self._dp_indicator_color_left = \
-      self._update_dp_indicator_side_state(car_state.leftBlinker, car_state.leftBlindspot,
+      self._update_dp_indicator_side_state(test_left_blinker, test_left_bsm,
                                            self._dp_indicator_show_left, self._dp_indicator_count_left)
     
     self._dp_indicator_show_right, self._dp_indicator_count_right, self._dp_indicator_color_right = \
-      self._update_dp_indicator_side_state(car_state.rightBlinker, car_state.rightBlindspot,
+      self._update_dp_indicator_side_state(test_right_blinker, test_right_bsm,
                                            self._dp_indicator_show_right, self._dp_indicator_count_right)
 
     v_cruise_cluster = car_state.vCruiseCluster
@@ -283,77 +305,146 @@ class HudRenderer(Widget):
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
-    # 顯示動態立體球體與距離
+    # 顯示置中的動態立體倒三角形與前車距離
     self._draw_lead_info(rect)
     
     # 繪製 TDX 警告
     self._draw_tdx_info(rect)
 
-    # 繪製自帶雙閃爍頻率的方向燈與盲區邊條
+    # --- 最後繪製：自帶雙閃爍頻率的方向燈與盲區邊條 ---
+    # 確保圖層順序在最上方，不被裁切
     self._draw_edge_warnings(rect)
 
   def _draw_edge_warnings(self, rect: rl.Rectangle) -> None:
-    """繪製兩側方向燈與盲區警示"""
-    bar_width = 30  
+    """繪製兩側方向燈與盲區警示 (加入圓角效果並垂直置中)"""
+    bar_width = 20  
     bar_height = int(rect.height * 0.60) 
-    y_pos = int(rect.y + 20) 
+    
+    # 將 Y 軸座標改為垂直置中，並向上微調 20px
+    y_pos = int(rect.y + (rect.height - bar_height) / 2) - 20 
 
     if self._dp_indicator_show_left:
-      rl.draw_rectangle(int(rect.x), y_pos, bar_width, bar_height, self._dp_indicator_color_left)
+      left_rect = rl.Rectangle(int(rect.x), y_pos, bar_width, bar_height)
+      # 圓角參數設回 0.75
+      rl.draw_rectangle_rounded(left_rect, 0.75, 20, self._dp_indicator_color_left)
 
     if self._dp_indicator_show_right:
-      rl.draw_rectangle(int(rect.x + rect.width - bar_width), y_pos, bar_width, bar_height, self._dp_indicator_color_right)
+      right_rect = rl.Rectangle(int(rect.x + rect.width - bar_width), y_pos, bar_width, bar_height)
+      # 圓角參數設回 0.75
+      rl.draw_rectangle_rounded(right_rect, 0.75, 20, self._dp_indicator_color_right)
 
   def _draw_lead_info(self, rect: rl.Rectangle) -> None:
-    """繪製立體球體與前車距離 (黑底僅限球體本身)"""
-    pos_x = int(rect.x + 46)
-    pos_y = int(rect.y + rect.height - 39)
+    """繪製置中的圓角立體「倒三角形」與前車距離"""
     
-    # 球體尺寸微調
-    radius_x = 25.0
-    radius_y = 25.0
+    # 當無鎖定前車的時候，直接不顯示圖示與數字
+    if self.lead_dist == "-":
+      return
 
-    # --- 繪製僅限球體本身的專屬黑底 ---
-    bg_padding = 3.0  # 向外擴張 3 個像素形成一圈黑色邊框
-    rl.draw_ellipse(pos_x, pos_y, radius_x + bg_padding, radius_y + bg_padding, rl.Color(0, 0, 0, 180))
+    # 尺寸設定：高度 40，寬度 45
+    bar_h = 40.0
+    bar_w = 45.0
     
+    # 垂直位置與水平置中
+    pos_y = int(rect.y + rect.height - 39)
+    bar_y = pos_y - bar_h / 2
+    bar_x = rect.x + (rect.width - bar_w) / 2
+    
+    dist_text = self.lead_dist
+    dist_font_size = 40
+    dist_size = measure_text_cached(self._font_bold, dist_text, dist_font_size)
+    
+    # 距離數據顯示在圖形的左邊 (保持 15px 間距)
+    text_x = bar_x - dist_size.x - 15  
+    text_y = pos_y - dist_size.y / 2
+        
     dist_color = rl.WHITE
     
-    # 判斷是否處於警告狀態：未鎖定前車，或距離低於 15 米
-    is_warning = (self.lead_dist == "-") or (self.lead_dist_raw < 15.0)
+    # 判斷是否處於警告狀態
+    is_warning = (self.lead_dist_raw < 15.0)
 
     if is_warning:
       # 同步 TDX 頻道的呼吸燈頻率與透明度
       alpha = 150 + int(60 * math.sin(time.time() * 5))
-      
       center_color = rl.Color(255, 100, 100, alpha) 
       edge_color = rl.Color(180, 0, 0, alpha)       
-      
-      # 為了文字可讀性，距離數字維持穩定不閃爍
-      if self.lead_dist != "-":
-        dist_color = rl.Color(255, 100, 100, 255)
+      dist_color = rl.Color(255, 100, 100, 255)
     else:
       # 安全狀態：綠色恆亮
       center_color = rl.Color(150, 255, 150, 255) 
       edge_color = rl.Color(0, 180, 0, 255)       
       dist_color = rl.Color(128, 216, 166, 255)
-
-    # 繪製底層暗色 (做為邊緣)
-    rl.draw_ellipse(pos_x, pos_y, radius_x, radius_y, edge_color)
-    # 繪製上層亮色 (稍微縮小，製造出球體的立體反光感)
-    rl.draw_ellipse(pos_x, pos_y, radius_x * 0.7, radius_y * 0.7, center_color)
-
-    dist_text = self.lead_dist
-    dist_font_size = 40
-    dist_size = measure_text_cached(self._font_bold, dist_text, dist_font_size)
-    
-    text_x = pos_x + 35  
-    text_y = pos_y - dist_size.y / 2
         
-    # 繪製文字陰影 (確保在無黑底的情況下，於強光背景中也能清楚辨識數字)
+    # 繪製文字陰影與主體
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x + 2, text_y + 2), dist_font_size, 0, rl.Color(0, 0, 0, 150))
-    # 繪製文字主體
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), dist_font_size, 0, dist_color)
+
+    # --- 定義繪製圓角三角形的內部演算法 (避免半透明圖層重疊加深) ---
+    def draw_rounded_triangle_poly(x, y, w, h, r, scale, color):
+        cx = x + w / 2
+        # 因為是倒三角形，視覺形心偏上方
+        cy = y + h / 3
+        
+        # 內縮後的原始角點中心 (改為倒三角形：左上 -> 底部中心 -> 右上)
+        # 確保順序為逆時針 (Counter-Clockwise)
+        v1 = rl.Vector2(x + r, y + r)                  # 左上
+        v2 = rl.Vector2(x + w / 2, y + h - r)          # 底部中心
+        v3 = rl.Vector2(x + w - r, y + r)              # 右上
+        
+        # 依據 scale 比例推算實際點位
+        c1 = rl.Vector2(cx + (v1.x - cx) * scale, cy + (v1.y - cy) * scale)
+        c2 = rl.Vector2(cx + (v2.x - cx) * scale, cy + (v2.y - cy) * scale)
+        c3 = rl.Vector2(cx + (v3.x - cx) * scale, cy + (v3.y - cy) * scale)
+        scaled_r = r * scale
+
+        # 計算兩點之間的垂直法向量
+        def get_normal(pA, pB):
+            dx = pB.x - pA.x
+            dy = pB.y - pA.y
+            length = math.hypot(dx, dy)
+            return (-dy / length, dx / length) if length > 0 else (0, -1)
+
+        n12 = get_normal(c1, c2)
+        n23 = get_normal(c2, c3)
+        n31 = get_normal(c3, c1)
+
+        points = []
+        
+        # 計算弧線點的輪廓
+        def add_arc(center, n_start, n_end):
+            angle_start = math.atan2(n_start[1], n_start[0])
+            angle_end = math.atan2(n_end[1], n_end[0])
+            
+            # 強制確保角度為逆時針方向 (Pyray 螢幕座標 Y 軸向下，角度應為遞減)
+            while angle_end > angle_start:
+                angle_end -= math.pi * 2
+                
+            steps = 6 # 圓角的平滑度 (分 6 段)
+            for i in range(steps + 1):
+                t = i / steps
+                a = angle_start + (angle_end - angle_start) * t
+                points.append(rl.Vector2(center.x + math.cos(a) * scaled_r, center.y + math.sin(a) * scaled_r))
+
+        # 依序加入左上、底部中心、右下三個圓角的弧線
+        add_arc(c1, n31, n12)
+        add_arc(c2, n12, n23)
+        add_arc(c3, n23, n31)
+
+        # 透過中心點向輪廓畫出放射狀三角形 (Triangle Fan)，完美填充且不重疊
+        center_pt = rl.Vector2(cx, cy)
+        for i in range(len(points)):
+            p1 = points[i]
+            p2 = points[(i + 1) % len(points)]
+            rl.draw_triangle(center_pt, p1, p2, color)
+
+    # --- 依序繪製底層、邊緣、中心 ---
+    base_r = 6.0 # 控制三角形圓角平滑度的半徑參數
+    
+    # 背景黑底 (放大約 1.15 倍形成外圍邊框)
+    draw_rounded_triangle_poly(bar_x, bar_y, bar_w, bar_h, base_r, 1.15, rl.Color(0, 0, 0, 180))
+    # 底部暗色邊緣 (原始大小)
+    draw_rounded_triangle_poly(bar_x, bar_y, bar_w, bar_h, base_r, 1.0, edge_color)
+    # 頂部亮色中心 (縮小 0.7 倍製造立體感)
+    draw_rounded_triangle_poly(bar_x, bar_y, bar_w, bar_h, base_r, 0.7, center_color)
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
     """TDX 路況警告：單向循環跑馬燈，寬度貼齊兩側 BSM 與方向燈，字體 70"""
@@ -364,7 +455,7 @@ class HudRenderer(Widget):
     text_size = measure_text_cached(self._font_bold, self.tdx_event_desc, font_size)
     
     # 這裡呼應 BSM 邊緣條的設定
-    bar_width = 30  
+    bar_width = 20  
     gap = 2  # 距離兩側邊條的 2px 安全微調間距
 
     # 計算背景框的固定寬度與位置 (完美橫跨左右邊條的內部空間)
