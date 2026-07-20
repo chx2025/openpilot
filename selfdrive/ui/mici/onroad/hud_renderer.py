@@ -305,24 +305,7 @@ class HudRenderer(Widget):
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
-    # --- 優先繪製：依據狀態顯示 3px 螢幕邊框 ---
-    # 確保作為底層背景，避免覆蓋到後續繪製的圖層 (如 BSM 邊條)
-    status = ui_state.status
-    if status == UIStatus.OVERRIDE:
-      # 人工干預 (油門/方向盤介入)：灰色
-      border_color = rl.Color(145, 155, 149, 255)
-      rl.draw_rectangle_lines_ex(rect, 3.0, border_color)
-    elif status == UIStatus.ENGAGED:
-      if self.lead_dist != "-":
-        # 巡航且有鎖定前車：綠色 (與置中長條測距文字同色)
-        border_color = rl.Color(128, 216, 166, 255)
-      else:
-        # 巡航但無前車：紅色
-        border_color = rl.Color(255, 100, 100, 255)
-      
-      rl.draw_rectangle_lines_ex(rect, 3.0, border_color)
-
-    # 顯示置中的動態立體長條與前車距離
+    # 顯示置中的動態立體倒三角形與前車距離
     self._draw_lead_info(rect)
     
     # 繪製 TDX 警告
@@ -357,9 +340,9 @@ class HudRenderer(Widget):
     if self.lead_dist == "-":
       return
 
-    # 尺寸設定：高度 50，寬度 65
-    bar_h = 50.0
-    bar_w = 65.0
+    # 尺寸設定：高度 40，寬度 45
+    bar_h = 40.0
+    bar_w = 45.0
     
     # 垂直位置與水平置中
     pos_y = int(rect.y + rect.height - 39)
@@ -454,7 +437,7 @@ class HudRenderer(Widget):
             rl.draw_triangle(center_pt, p1, p2, color)
 
     # --- 依序繪製底層、邊緣、中心 ---
-    base_r = 7.0 # 控制三角形圓角平滑度的半徑參數
+    base_r = 6.0 # 控制三角形圓角平滑度的半徑參數
     
     # 背景黑底 (放大約 1.15 倍形成外圍邊框)
     draw_rounded_triangle_poly(bar_x, bar_y, bar_w, bar_h, base_r, 1.15, rl.Color(0, 0, 0, 180))
