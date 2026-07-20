@@ -21,6 +21,9 @@ CRUISE_DISABLED_CHAR = '–'
 
 SET_SPEED_PERSISTENCE = 2.5  # seconds
 
+# --- 測試模式總開關 (True: 開啟 UI 測試假數據 / False: 讀取真實車輛數據) ---
+DEBUG_TEST_UI = False
+
 # --- 方向燈與盲區閃爍頻率設定 ---
 DP_INDICATOR_BLINK_RATE_FAST = int(gui_app.target_fps * 0.25)
 DP_INDICATOR_BLINK_RATE_STD = int(gui_app.target_fps * 0.5)
@@ -250,13 +253,29 @@ class HudRenderer(Widget):
     controls_state = sm['controlsState']
     car_state = sm['carState']
 
+    # --- UI 測試模式覆寫區塊 ---
+    if DEBUG_TEST_UI:
+      self.lead_dist_raw = 105.0
+      self.lead_dist = "105m"
+      
+      # 自定義左右邊條測試狀態 (這裡預設：左方向燈 / 右盲區)
+      test_left_blinker = True
+      test_left_bsm = False
+      test_right_blinker = False
+      test_right_bsm = True
+    else:
+      test_left_blinker = car_state.leftBlinker
+      test_left_bsm = car_state.leftBlindspot
+      test_right_blinker = car_state.rightBlinker
+      test_right_bsm = car_state.rightBlindspot
+
     # --- 更新兩側方向燈與盲區閃爍狀態 ---
     self._dp_indicator_show_left, self._dp_indicator_count_left, self._dp_indicator_color_left = \
-      self._update_dp_indicator_side_state(car_state.leftBlinker, car_state.leftBlindspot,
+      self._update_dp_indicator_side_state(test_left_blinker, test_left_bsm,
                                            self._dp_indicator_show_left, self._dp_indicator_count_left)
     
     self._dp_indicator_show_right, self._dp_indicator_count_right, self._dp_indicator_color_right = \
-      self._update_dp_indicator_side_state(car_state.rightBlinker, car_state.rightBlindspot,
+      self._update_dp_indicator_side_state(test_right_blinker, test_right_bsm,
                                            self._dp_indicator_show_right, self._dp_indicator_count_right)
 
     v_cruise_cluster = car_state.vCruiseCluster
@@ -283,40 +302,72 @@ class HudRenderer(Widget):
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
-    # 顯示動態立體球體與距離
+    # --- 優先繪製：依據狀態顯示 3px 螢幕邊框 ---
+    # 確保作為底層背景，避免覆蓋到後續繪製的圖層 (如 BSM 邊條)
+    status = ui_state.status
+    if status == UIStatus.OVERRIDE:
+      # 人工干預 (油門/方向盤介入)：灰色
+      border_color = rl.Color(145, 155, 149, 255)
+      rl.draw_rectangle_lines_ex(rect, 3.0, border_color)
+    elif status == UIStatus.ENGAGED:
+      if self.lead_dist != "-":
+        # 巡航且有鎖定前車：綠色 (與置中長條測距文字同色)
+        border_color = rl.Color(128, 216, 166, 255)
+      else:
+        # 巡航但無前車：紅色
+        border_color = rl.Color(255, 100, 100, 255)
+      
+      rl.draw_rectangle_lines_ex(rect, 3.0, border_color)
+
+    # 顯示置中的動態立體長條與前車距離
     self._draw_lead_info(rect)
     
     # 繪製 TDX 警告
     self._draw_tdx_info(rect)
 
-    # 繪製自帶雙閃爍頻率的方向燈與盲區邊條
+    # --- 最後繪製：自帶雙閃爍頻率的方向燈與盲區邊條 ---
+    # 確保圖層順序在最上方，不被裁切
     self._draw_edge_warnings(rect)
 
   def _draw_edge_warnings(self, rect: rl.Rectangle) -> None:
-    """繪製兩側方向燈與盲區警示"""
-    bar_width = 30  
+    """繪製兩側方向燈與盲區警示 (加入圓角效果並垂直置中)"""
+    bar_width = 20  
     bar_height = int(rect.height * 0.60) 
-    y_pos = int(rect.y + 20) 
+    
+    # 將 Y 軸座標改為垂直置中
+    y_pos = int(rect.y + (rect.height - bar_height) / 2) 
 
     if self._dp_indicator_show_left:
-      rl.draw_rectangle(int(rect.x), y_pos, bar_width, bar_height, self._dp_indicator_color_left)
+      left_rect = rl.Rectangle(int(rect.x), y_pos, bar_width, bar_height)
+      # 圓角參數設為 1.0，讓兩端呈現完美半圓弧形
+      rl.draw_rectangle_rounded(left_rect, 1.0, 20, self._dp_indicator_color_left)
 
     if self._dp_indicator_show_right:
-      rl.draw_rectangle(int(rect.x + rect.width - bar_width), y_pos, bar_width, bar_height, self._dp_indicator_color_right)
+      right_rect = rl.Rectangle(int(rect.x + rect.width - bar_width), y_pos, bar_width, bar_height)
+      # 圓角參數設為 1.0，讓兩端呈現完美半圓弧形
+      rl.draw_rectangle_rounded(right_rect, 1.0, 20, self._dp_indicator_color_right)
 
   def _draw_lead_info(self, rect: rl.Rectangle) -> None:
-    """繪製立體球體與前車距離 (黑底僅限球體本身)"""
-    pos_x = int(rect.x + 46)
+    """繪製置中的立體長條與前車距離 (黑底僅限長條本身)"""
+    # 尺寸設定：高度 (50)，寬度為高度兩倍 (100)
+    bar_h = 50.0
+    bar_w = 100.0
+    
+    # 垂直位置維持與原本相同
     pos_y = int(rect.y + rect.height - 39)
-    
-    # 球體尺寸微調
-    radius_x = 25.0
-    radius_y = 25.0
+    bar_y = pos_y - bar_h / 2
 
-    # --- 繪製僅限球體本身的專屬黑底 ---
-    bg_padding = 3.0  # 向外擴張 3 個像素形成一圈黑色邊框
-    rl.draw_ellipse(pos_x, pos_y, radius_x + bg_padding, radius_y + bg_padding, rl.Color(0, 0, 0, 180))
+    # --- 將長方條置中於螢幕 ---
+    bar_x = rect.x + (rect.width - bar_w) / 2
     
+    dist_text = self.lead_dist
+    dist_font_size = 40
+    dist_size = measure_text_cached(self._font_bold, dist_text, dist_font_size)
+    
+    # 距離數據顯示在長方條的左邊 (保持 15px 間距)
+    text_x = bar_x - dist_size.x - 15  
+    text_y = pos_y - dist_size.y / 2
+        
     dist_color = rl.WHITE
     
     # 判斷是否處於警告狀態：未鎖定前車，或距離低於 15 米
@@ -337,23 +388,28 @@ class HudRenderer(Widget):
       center_color = rl.Color(150, 255, 150, 255) 
       edge_color = rl.Color(0, 180, 0, 255)       
       dist_color = rl.Color(128, 216, 166, 255)
-
-    # 繪製底層暗色 (做為邊緣)
-    rl.draw_ellipse(pos_x, pos_y, radius_x, radius_y, edge_color)
-    # 繪製上層亮色 (稍微縮小，製造出球體的立體反光感)
-    rl.draw_ellipse(pos_x, pos_y, radius_x * 0.7, radius_y * 0.7, center_color)
-
-    dist_text = self.lead_dist
-    dist_font_size = 40
-    dist_size = measure_text_cached(self._font_bold, dist_text, dist_font_size)
-    
-    text_x = pos_x + 35  
-    text_y = pos_y - dist_size.y / 2
         
     # 繪製文字陰影 (確保在無黑底的情況下，於強光背景中也能清楚辨識數字)
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x + 2, text_y + 2), dist_font_size, 0, rl.Color(0, 0, 0, 150))
     # 繪製文字主體
     rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), dist_font_size, 0, dist_color)
+
+    # --- 繪製僅限長條本身的專屬黑底 ---
+    bg_padding = 3.0  # 向外擴張 3 個像素形成一圈黑色邊框
+    bg_rect = rl.Rectangle(bar_x - bg_padding, bar_y - bg_padding, bar_w + bg_padding * 2, bar_h + bg_padding * 2)
+    rl.draw_rectangle_rounded(bg_rect, 0.5, 20, rl.Color(0, 0, 0, 180))
+
+    # 繪製底層暗色 (做為邊緣)
+    edge_rect = rl.Rectangle(bar_x, bar_y, bar_w, bar_h)
+    rl.draw_rectangle_rounded(edge_rect, 0.5, 20, edge_color)
+    
+    # 繪製上層亮色 (稍微縮小，製造出長條的立體反光感)
+    center_w = bar_w * 0.7
+    center_h = bar_h * 0.7
+    center_x = bar_x + (bar_w - center_w) / 2
+    center_y = bar_y + (bar_h - center_h) / 2
+    center_rect = rl.Rectangle(center_x, center_y, center_w, center_h)
+    rl.draw_rectangle_rounded(center_rect, 0.5, 20, center_color)
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
     """TDX 路況警告：單向循環跑馬燈，寬度貼齊兩側 BSM 與方向燈，字體 70"""
@@ -364,7 +420,7 @@ class HudRenderer(Widget):
     text_size = measure_text_cached(self._font_bold, self.tdx_event_desc, font_size)
     
     # 這裡呼應 BSM 邊緣條的設定
-    bar_width = 30  
+    bar_width = 20  
     gap = 2  # 距離兩側邊條的 2px 安全微調間距
 
     # 計算背景框的固定寬度與位置 (完美橫跨左右邊條的內部空間)
