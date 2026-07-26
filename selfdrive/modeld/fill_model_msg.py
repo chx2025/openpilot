@@ -100,8 +100,8 @@ def fill_model_msg(base_msg: capnp._DynamicStructBuilder, extended_msg: capnp._D
 
   # lane lines
   # 添加左右獨立車道偏移參數，單位米 (設定為內縮 15cm)
-  LEFT_LANE_OFFSET = 0.10   # 左車道線偏移量，正值向右偏移（向內）
-  RIGHT_LANE_OFFSET = 0.10  # 右車道線偏移量，正值向左偏移（向內）
+  LEFT_LANE_OFFSET = 0.15   # 左車道線偏移量，正值向右偏移（向內）
+  RIGHT_LANE_OFFSET = 0.15  # 右車道線偏移量，正值向左偏移（向內）
   
   modelV2.init('laneLines', 4)
   for i in range(4):
