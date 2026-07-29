@@ -210,7 +210,7 @@ class HudRenderer(Widget):
     return self._exp_button.is_pressed
 
   def _draw_tdx_info(self, rect: rl.Rectangle) -> None:
-    """繪製高公局即時路況與事件 (車速維持中間位置，事件向下貼齊 Performance 列)"""
+    """繪製高公局即時路況與事件 (車速維持原位，事件貼齊下方單行跑馬燈)"""
     if self.tdx_next_speed <= 0 and not self.tdx_event_active:
       return
 
@@ -228,15 +228,15 @@ class HudRenderer(Widget):
       speed_color = rl.WHITE
 
     # ==========================================
-    # 第一行: 車速 (移至畫面中間偏上)
+    # 第一行: 車速 (維持在原位：頂部列下方，僅顯示前方車速)
     # ==========================================
     if 0 < self.tdx_next_speed <= 150:
       speed_text = f"前方車速: {self.tdx_next_speed} km/h"
       tdx_speed_font_size = 90
       speed_size = measure_text_cached(self._font_semi_bold, speed_text, tdx_speed_font_size)
       
-      # 將 Y 軸改為中間位置 (目前速度下方)，並置中顯示
-      top_y = rect.y + (rect.height / 2) - 150 
+      # 恢復原本的固定 Y 軸位置
+      top_y = rect.y + UI_CONFIG.header_height + 25 
       speed_x = rect.x + rect.width / 2 - speed_size.x / 2
       
       bg_rect = rl.Rectangle(speed_x - bg_padding_x, top_y - bg_padding_y, speed_size.x + bg_padding_x * 2, speed_size.y + bg_padding_y * 2)
@@ -245,13 +245,12 @@ class HudRenderer(Widget):
       rl.draw_text_ex(self._font_semi_bold, speed_text, rl.Vector2(speed_x, top_y), tdx_speed_font_size, 0, speed_color)
 
     # ==========================================
-    # 第二行: 事件 (往下移，緊貼 Performance 列)
+    # 第二行: 事件 (貼齊下方 Performance 列，單行跑馬燈)
     # ==========================================
     if self.tdx_event_active and self.tdx_event_desc:
-      # 計算 Performance 列的高度
+      # 計算 Performance 列的位置以決定事件區底部
       perf_bar_height = PERF_FONT_SIZE + 2 * PERF_PADDING
-      # 計算 Performance 列的頂部 Y 座標
-      perf_bar_top_y = rect.y + rect.height - perf_bar_height - PERF_MARGIN_BOTTOM
+      perf_bar_y = rect.y + rect.height - perf_bar_height - PERF_MARGIN_BOTTOM
 
       tdx_event_font_size = 75
       max_text_width = rect.width - 200
@@ -264,9 +263,7 @@ class HudRenderer(Widget):
       display_width = min(text_width, max_text_width)
 
       event_bg_height = line_height + bg_padding_y * 2
-      
-      # 設定事件方塊的底部緊貼 Performance 列的頂部 (間距設為 0 或很小)
-      event_y = perf_bar_top_y - event_bg_height - 2  # 留 2px 小縫隙，避免完全重疊
+      event_y = perf_bar_y - event_bg_height - 15  # 留 15px 間距避免太黏
 
       event_x = rect.x + rect.width / 2 - display_width / 2
       event_bg_rect = rl.Rectangle(
