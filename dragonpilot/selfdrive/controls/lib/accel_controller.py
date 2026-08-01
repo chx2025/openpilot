@@ -23,9 +23,9 @@ ACCEL_PERSONALITY_OPTIONS = [AccelPersonality.eco, AccelPersonality.normal, Acce
 A_MAX_BP = [0.0,  0.5,  1.0,  4.0,   6.0,  9.0,  11.0, 16.0,  20.0, 25.0, 30.0, 55.0]
 # 各種個性化設定下的最大加速度值 (對應 A_MAX_BP)
 A_MAX_V = {
-  AccelPersonality.eco:       [1.00, 0.60, 1.00, 1.40,  1.20, 1.00, 0.80, 0.60,  0.50, 0.40, 0.12, 0.08],
-  AccelPersonality.normal:    [1.50, 0.80, 1.20, 1.80,  1.40, 1.20, 1.00, 0.80,  0.70, 0.60, 0.24, 0.10],
-  AccelPersonality.sport:     [2.00, 1.00, 1.40, 2.00,  1.60, 1.40, 1.20, 1.00,  0.90, 0.80, 0.36, 0.12],
+  AccelPersonality.eco:       [1.80, 1.60, 1.40, 1.30,  1.20, 1.00, 0.80, 0.60,  0.50, 0.40, 0.12, 0.08],
+  AccelPersonality.normal:    [2.00, 1.80, 1.60, 1.50,  1.40, 1.20, 1.00, 0.80,  0.70, 0.60, 0.24, 0.10],
+  AccelPersonality.sport:     [2.00, 1.80, 1.60, 2.00,  1.60, 1.40, 1.20, 1.00,  0.90, 0.80, 0.36, 0.12],
 }
 
 # 滑行阻力 (Coast Drag) 的中斷點 (車速, 單位: m/s)
@@ -56,7 +56,7 @@ RAMP_OFF_RANGE = 3.0    # 接近巡航速度時，加速度上限開始線性遞
 # 非對稱變化率限制 (Rate Limiting)
 A_MIN_TIGHTEN_RATE = 1.5  # 煞車加重時的變化率上限 (m/s³，對應原本的 MAX_DECEL_INCREASE_RATE)
 A_MIN_RELAX_RATE = 0.6    # 煞車放鬆時的變化率上限 (m/s³，對應原本的 MAX_DECEL_DECREASE_RATE)
-A_MAX_RATE = 0.8          # 加速度上限的變化率 (m/s³)
+A_MAX_RATE = 1.2          # 加速度上限的變化率 (m/s³)
 
 # 動態安全廊道間距 (Dynamic Safety Corridor Gap)
 # 確保最小加速度永遠嚴格小於最大加速度，防止解算器崩潰 (Solver Crash)
