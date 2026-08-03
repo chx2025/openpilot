@@ -194,18 +194,13 @@ def get_lead_ext(
   if selected_track is not None:
     cache['track'] = selected_track
     cache['absent'] = 0
-  elif cache['track'] is not None and cache['track'].identifier in tracks:
-    # 只有在該 track 仍存活於 self.tracks（雷達持續有更新）時才能續命；
-    # 若其 ID 已被移除，快取物件只是一個不再收到 .update() 的凍結快照，不應繼續使用。
+  elif cache['track'] is not None:
     cache['absent'] += 1
     if cache['absent'] <= SELECT_HOLDOVER_FRAMES:
       selected_track = cache['track']
     else:
       cache['track'] = None
       cache['absent'] = 0
-  else:
-    cache['track'] = None
-    cache['absent'] = 0
 
   lead_dict = {'status': False}
   if selected_track is not None:
