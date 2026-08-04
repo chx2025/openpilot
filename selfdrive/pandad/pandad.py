@@ -51,6 +51,27 @@ def flash_panda(panda_serial: str):
   panda.close()
 
 
+def wait_for_internal_panda_boot(timeout: float = 8.0, poll_interval: float = 0.5) -> bool:
+  """
+  After a GPIO reset, the internal panda takes a few seconds to boot its app.
+  Poll until it comes back in normal mode (not bootstub) instead of immediately
+  querying it and mistaking the reset boot window for a genuine firmware problem.
+  Returns True if the panda came back in normal (non-bootstub) mode.
+  """
+  attempts = max(1, int(timeout / poll_interval))
+  for _ in range(attempts):
+    panda_serials = Panda.list()
+    if len(panda_serials) == 1:
+      try:
+        with Panda(panda_serials[0]) as p:
+          if not p.bootstub:
+            return True
+      except Exception:
+        pass
+    time.sleep(poll_interval)
+  return False
+
+
 def main() -> None:
   # signal pandad to close the relay and exit
   def signal_handler(signum, frame):
@@ -76,14 +97,32 @@ def main() -> None:
     cloudlog.exception("pandad.uncaught_exception")
 
   count = 0
+  no_internal_panda_count = 0
   while not do_exit:
     try:
       cloudlog.event("pandad.flash_and_connect", count=count)
-      if (count % 2) == 0:
-        HARDWARE.reset_internal_panda()
-      else:
-        HARDWARE.recover_internal_panda()
       count += 1
+
+      panda_serials = Panda.list()
+
+      # Only touch the internal panda's reset/DFU lines when it's actually
+      # missing. Previously this ran unconditionally every loop (alternating
+      # reset/recover), which meant panda was reset or forced into DFU on
+      # every single pass even when it was already up and running fine -
+      # this was the main cause of the slow "Panda online" time.
+      if len(panda_serials) == 0:
+        no_internal_panda_count += 1
+        if no_internal_panda_count >= 3:
+          cloudlog.info("No pandas found, putting internal panda into DFU")
+          HARDWARE.recover_internal_panda()
+          time.sleep(3)  # wait to come back up
+          no_internal_panda_count = 0
+        else:
+          cloudlog.info("No pandas found, resetting internal panda")
+          HARDWARE.reset_internal_panda()
+          # Wait for the panda to boot back into its normal (non-bootstub) app
+          # before deciding whether it actually needs to be reflashed.
+          wait_for_internal_panda_boot()
 
       # Flash all Pandas in DFU mode
       for serial in PandaDFU.list():
@@ -94,6 +133,7 @@ def main() -> None:
       panda_serials = Panda.list()
       if len(panda_serials):
         assert len(panda_serials) == 1
+        no_internal_panda_count = 0
         cloudlog.info(f"{len(panda_serials)} panda found, connecting - {panda_serials}")
         flash_panda(panda_serials[0])
 
