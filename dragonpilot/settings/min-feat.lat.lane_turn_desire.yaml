@@ -1,0 +1,30 @@
+settings:
+  - key: dp_lane_turn_desire
+    type: toggle_item
+    title: "啟用低速轉彎輔助 (LTD)"
+    description: "當車速低於設定值且打方向燈時，車輛將會在最近的可行駛路徑上自動規劃轉彎。這可避免（如停紅燈時）車輛規劃錯誤的轉彎方向。來自SunnyPilot"
+    category: "Lateral"
+    flags: PERSISTENT
+    param_type: BOOL
+    default: "0"
+    on_change:
+      - target: dp_lane_turn_value
+        action: set_visible
+        condition: "value"
+
+  - key: dp_lane_turn_value
+    type: spin_button_item
+    title: "轉彎觸發最高車速"
+    description: "設定觸發自動轉彎輔助的最高車速限制 (預設為 20 km/h)。"
+    category: "Lateral"
+    flags: PERSISTENT
+    param_type: INT
+    default: "20"
+    min_val: 10
+    max_val: 35
+    step: 5
+    suffix: " km/h"
+    initially_visible_by:
+      param: dp_lane_turn_desire
+      condition: "value == True"
+      default: "0"
