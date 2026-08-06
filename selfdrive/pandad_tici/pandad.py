@@ -61,6 +61,27 @@ def flash_panda(panda_serial: str) -> Panda:
   return panda
 
 
+def wait_for_internal_panda_boot(timeout: float = 8.0, poll_interval: float = 0.5) -> bool:
+  """
+  After a GPIO reset, the internal panda takes a few seconds to boot its app.
+  Poll until it comes back in normal mode (not bootstub) instead of immediately
+  querying it and mistaking the reset boot window for a genuine firmware problem.
+  Returns True if the panda came back in normal (non-bootstub) mode.
+  """
+  attempts = max(1, int(timeout / poll_interval))
+  for _ in range(attempts):
+    panda_serials = Panda.list()
+    if len(panda_serials) >= 1:
+      try:
+        with Panda(panda_serials[0]) as p:
+          if not p.bootstub:
+            return True
+      except Exception:
+        pass
+    time.sleep(poll_interval)
+  return False
+
+
 def main() -> None:
   # signal pandad to close the relay and exit
   def signal_handler(signum, frame):
@@ -86,13 +107,17 @@ def main() -> None:
 
       # Handle missing internal panda
       if no_internal_panda_count > 0:
-        if no_internal_panda_count == 3:
+        if no_internal_panda_count >= 3:
           cloudlog.info("No pandas found, putting internal panda into DFU")
           HARDWARE.recover_internal_panda()
+          time.sleep(3)  # wait to come back up
         else:
           cloudlog.info("No pandas found, resetting internal panda")
           HARDWARE.reset_internal_panda()
-        time.sleep(3)  # wait to come back up
+          # Wait for the panda to boot back into its normal (non-bootstub) app
+          # before deciding whether it actually needs to be reflashed. Without
+          # this, we'd catch it mid-boot every time and flash unnecessarily.
+          wait_for_internal_panda_boot()
 
       # Flash all Pandas in DFU mode
       dfu_serials = PandaDFU.list()
