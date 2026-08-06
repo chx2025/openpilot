@@ -6,8 +6,8 @@ from cereal import log
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 
-# 最大值改為 35 km/h
-LANE_CHANGE_SPEED_MIN = 35 * CV.KPH_TO_MS
+# 最大值改為 30 km/h
+LANE_CHANGE_SPEED_MIN = 30 * CV.KPH_TO_MS
 
 class LaneTurnController:
   def __init__(self):
