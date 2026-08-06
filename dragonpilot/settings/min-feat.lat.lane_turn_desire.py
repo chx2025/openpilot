@@ -26,7 +26,7 @@ ITEMS = [
     "param_type": "INT",
     "default": "20",
     "min_val": 10,
-    "max_val": 35,
+    "max_val": 30,
     "step": 5,
     "suffix": lambda: tr(" km/h"),
     "initially_visible_by": {
