@@ -9,8 +9,8 @@ from dragonpilot.selfdrive.controls.lib.lane_turn_desire import LaneTurnControll
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
-# 最大值改為 35 km/h
-LANE_CHANGE_SPEED_MIN = 35 * CV.KPH_TO_MS
+# 最大值改為 30 km/h
+LANE_CHANGE_SPEED_MIN = 30 * CV.KPH_TO_MS
 LANE_CHANGE_TIME_MAX = 10.
 
 DESIRES = {
