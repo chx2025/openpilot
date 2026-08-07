@@ -23,6 +23,8 @@ from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 # 導入 DP 的 HTD (人工轉向偵測) 模組
 from dragonpilot.selfdrive.controls.lib.human_turn_detection import HumanTurnDetection, HTDState
+# 導入 DP 的車道居中修正模組 (LCC)，獨立於 latcontrol，不影響原本 PID/torque 控制邏輯
+from dragonpilot.selfdrive.controls.lib.lane_centering_corrector import LaneCenteringCorrector
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -69,6 +71,9 @@ class Controls:
     # 初始化 HTD
     self.htd = HumanTurnDetection()
     self.htd_state = HTDState.INACTIVE
+
+    # 初始化 LCC (車道居中修正)
+    self.lcc = LaneCenteringCorrector()
 
   def update(self):
     self.sm.update(15)
@@ -146,6 +151,7 @@ class Controls:
 
     if not CC.latActive:
       self.LaC.reset()
+      self.lcc.reset()
     if not CC.longActive:
       self.LoC.reset()
 
@@ -159,6 +165,12 @@ class Controls:
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+
+    # dp - LCC: 疊加車道居中修正量。僅影響曲率來源，latcontrol 完全不變，
+    # 下游 clip_curvature() 的曲率/側向加速度/jerk 限幅照樣完整作用於疊加後的結果。
+    lcc_correction = self.lcc.update(model_v2, CS.vEgo, CC.latActive, DT_CTRL)
+    new_desired_curvature += lcc_correction
+
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
