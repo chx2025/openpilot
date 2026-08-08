@@ -31,8 +31,8 @@ PARAM_REFRESH_SEC = 2.0
 #   - v >= 50 km/h 才「開啟」車道居中修正
 #   - v <= 40 km/h 就「關閉」，退回原本 openpilot model 的橫向控制
 #   - 40~50 km/h 之間維持前一個狀態，避免在門檻附近來回抖動 on/off
-SPEED_ON_KPH = 40.0
-SPEED_OFF_KPH = 30.0
+SPEED_ON_KPH = 50.0
+SPEED_OFF_KPH = 40.0
 KPH_TO_MS = 1000.0 / 3600.0
 
 LOOKAHEAD_DIST_M = 15.0     # 用來算車道中心 offset 的前視距離
@@ -56,7 +56,12 @@ SHARP_TURN_CURVATURE = 0.06  # 1/m，約等於路徑半徑 17m 以下的轉彎
 PROB_MIN = 0.3
 PROB_FULL = 0.6
 
-MAX_CORRECTION = 0.005  # 修正量曲率上限 (1/m)，寫死在程式碼內，刻意抓很保守的值
+MAX_CORRECTION = 0.015  # 修正量曲率上限 (1/m)，寫死在程式碼內
+# 校準依據：下游 clip_curvature() 本身有側向加速度上限 3.0 m/s²（drive_helpers.py
+# MAX_LATERAL_ACCEL_NO_ROLL），換算成曲率上限 = 3.0/v²。LCC 生效速域下限是 50km/h
+# (13.9 m/s)，此時物理曲率上限 ≈ 0.0155 1/m。這裡取 0.015，幾乎用滿這個速度下的
+# 物理安全空間但不超過它；高速時 clip_curvature 的物理限制會先生效，此上限不是瓶頸。
+# 15m 前視距離下，這個上限可以完全修正掉的車道中心誤差 ≈ 1.69m（一般車道寬 3~3.5m）。
 
 # 「方向燈+出力」讓開判斷的去彈跳時間：條件要連續成立超過這個時間才真的觸發讓開，
 # 用來濾掉打方向燈瞬間、手還沒真的出力就先閃一下 steeringPressed 的雜訊/短暫誤觸
