@@ -1,0 +1,9 @@
+settings:
+  - key: dp_lcc_enabled
+    type: toggle_item
+    title: "啟用車道居中修正 (LCC)"
+    description: "根據車道線幾何計算居中誤差，疊加一個很小的曲率修正量。僅在車速 50 km/h 以上生效，車速降到 40 km/h 以下時退回原本 openpilot 橫向控制；遇到急彎（例如十字路口右轉）時也會自動停用。若有打方向燈且駕駛手上有出力，修正量會立即淡出讓開；沒打方向燈的話即使手上有出力仍會維持修正。尚未實際路測，請謹慎開啟。"
+    category: "Lateral"
+    flags: PERSISTENT
+    param_type: BOOL
+    default: "0"
