@@ -31,8 +31,8 @@ PARAM_REFRESH_SEC = 2.0
 #   - v >= 50 km/h 才「開啟」車道居中修正
 #   - v <= 40 km/h 就「關閉」，退回原本 openpilot model 的橫向控制
 #   - 40~50 km/h 之間維持前一個狀態，避免在門檻附近來回抖動 on/off
-SPEED_ON_KPH = 50.0
-SPEED_OFF_KPH = 40.0
+SPEED_ON_KPH = 40.0
+SPEED_OFF_KPH = 30.0
 KPH_TO_MS = 1000.0 / 3600.0
 
 LOOKAHEAD_DIST_M = 15.0     # 用來算車道中心 offset 的前視距離
