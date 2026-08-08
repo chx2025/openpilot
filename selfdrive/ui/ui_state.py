@@ -100,6 +100,7 @@ class UIState:
 
     # dp - ALKA
     self.dp_alka_active: bool = False
+    self.dp_lcc_correction: float = 0.0
 
 
     # dp
@@ -193,6 +194,7 @@ class UIState:
     # dp - ALKA
     if self.sm.updated["controlsStateExt"]:
       self.dp_alka_active = self.sm["controlsStateExt"].alkaActive
+      self.dp_lcc_correction = self.sm["controlsStateExt"].lccCorrection
 
     # dp
     self.dp_ui_display_mode = int(self.params.get("dp_ui_display_mode") or 0)
