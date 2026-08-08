@@ -1980,3 +1980,18 @@ msgstr "設定觸發自動轉彎輔助的最高車速限制 (預設為 20 km/h)�
 
 msgid " km/h"
 msgstr " km/h"
+#: dragonpilot/settings/min-feat.lat.lcc.py:8
+#, python-format
+msgid "Enable Lane Centering Correction"
+msgstr "啟用車道居中修正 (LCC)"
+
+#: dragonpilot/settings/min-feat.lat.lcc.py:9
+#, python-format
+msgid ""
+"Adds a small curvature trim based on lane line geometry to keep the car "
+"centered in its lane. Only active above 50 km/h; drops back to stock openpilot "
+"lateral control at or below 40 km/h, and also disables automatically on sharp "
+"turns (e.g. intersection right turns). If the turn signal is on and you apply "
+"steering torque, the correction yields immediately; without a signal it stays "
+"engaged even if you nudge the wheel. Not yet road tested — enable with caution."
+msgstr "根據車道線幾何計算居中誤差，疊加一個很小的曲率修正量，讓車輛更貼近車道中心。僅在車速 50 km/h 以上生效，車速降到 40 km/h 以下時退回原本 openpilot 橫向控制，遇到急彎（例如十字路口右轉）時也會自動停用。若方向燈已開啟且駕駛手上有出力，修正量會立即讓開；沒有方向燈的情況下，即使手上有出力仍會維持修正。尚未實際路測，請謹慎開啟。"
