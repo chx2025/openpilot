@@ -260,6 +260,7 @@ class Controls:
     dat = messaging.new_message('controlsStateExt')
     dat.valid = True
     dat.controlsStateExt.alkaActive = self.alka_active
+    dat.controlsStateExt.lccCorrection = float(self.lcc.correction)
     self.pm.send('controlsStateExt', dat)
 
     # carControl
