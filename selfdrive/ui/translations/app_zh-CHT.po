@@ -1553,18 +1553,3 @@ msgstr "前車距離"
 
 msgid "其他放殊話交阻斷施零一二三四五六七八九十百千萬公尺里段巷弄號街大中小型長短重嚴度量況局標誌網收費站休息服務東西南北上下左右內外側前後雙向匝交系統主端市區縣鄉鎮村國省台臺路道線快橋高架基隆新桃竹苗彰投嘉屏宜花澎金馬雄福爾摩沙蔣渭水支聯絡機濱事件故禍肇拋錨工維護管制封閉壅塞回堵多緩慢順暢異警示注意提醒通安全危險保持距離停止禁速限最低超照相雷達測取締降減行掉落散物障礙動犬狗貓豬牛羊砂石車輪皮鐵件塑膠木材樹枝貨垃圾排除理天候氣象晴雲陰雨陣豪積淹濃霧起霾強風坍方土流視不佳濕滑結冰特報災客拖板遊覽腳踏種救消防備發生處完畢束影響占用肩避彎槽化步人汽口箱櫃坑洞漏油燃燒火冒煙察政部更資訊顯告情"
 msgstr ""
-#: dragonpilot/settings/min-feat.lat.lcc.py:8
-#, python-format
-msgid "Enable Lane Centering Correction"
-msgstr "啟用車道居中修正 (LCC)"
-
-#: dragonpilot/settings/min-feat.lat.lcc.py:9
-#, python-format
-msgid ""
-"Adds a small curvature trim based on lane line geometry to keep the car "
-"centered in its lane. Only active above 50 km/h; drops back to stock openpilot "
-"lateral control at or below 40 km/h, and also disables automatically on sharp "
-"turns (e.g. intersection right turns). If the turn signal is on and you apply "
-"steering torque, the correction yields immediately; without a signal it stays "
-"engaged even if you nudge the wheel. Not yet road tested — enable with caution."
-msgstr "根據車道線幾何計算居中誤差，疊加一個很小的曲率修正量，讓車輛更貼近車道中心。僅在車速 50 km/h 以上生效，車速降到 40 km/h 以下時退回原本 openpilot 橫向控制，遇到急彎（例如十字路口右轉）時也會自動停用。若方向燈已開啟且駕駛手上有出力，修正量會立即讓開；沒有方向燈的情況下，即使手上有出力仍會維持修正。尚未實際路測，請謹慎開啟。"
