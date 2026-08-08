@@ -12,6 +12,7 @@ $Cxx.namespace("cereal");
 
 struct ControlsStateExt @0x81c2f05a394cf4af {
   alkaActive @0 :Bool;
+  lccCorrection @1 :Float32;  # dp - LCC: 目前套用的曲率修正量 (1/m)，未生效時為 0
 }
 
 struct CarStateExt @0xaedffd8f31e7b55d {
