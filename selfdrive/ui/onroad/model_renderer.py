@@ -16,6 +16,12 @@ CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
 MAX_DRAW_DISTANCE = 100.0
 
+# dp - LCC 疊加軌跡
+MAIN_PATH_HALF_WIDTH = 0.9  # 主路徑（綠色）半寬，跟 _update_model 裡用的值保持一致
+LCC_PATH_WIDTH_RATIO = 0.2  # LCC 疊加線寬度 = 主路徑寬度的 20%
+LCC_PATH_HALF_WIDTH = MAIN_PATH_HALF_WIDTH * LCC_PATH_WIDTH_RATIO
+LCC_PATH_COLOR = rl.Color(255, 0, 0, 180)  # 鮮紅色
+
 THROTTLE_COLORS = [
   rl.Color(13, 248, 122, 102),   # HSLF(148/360, 0.94, 0.51, 0.4)
   rl.Color(114, 255, 92, 89),    # HSLF(112/360, 1.0, 0.68, 0.35)
@@ -76,6 +82,7 @@ class ModelRenderer(Widget):
 
     # Initialize ModelPoints objects
     self._path = ModelPoints()
+    self._path_corrected = ModelPoints()  # dp - LCC: model path bent by the LCC curvature trim
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
     self._acceleration_x = np.empty((0,), dtype=np.float32)
@@ -154,6 +161,7 @@ class ModelRenderer(Widget):
     # Draw elements
     self._draw_lane_lines()
     self._draw_path(sm)
+    self._draw_lcc_path()  # dp - LCC: overlay of the actually-commanded (corrected) path
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
@@ -161,6 +169,18 @@ class ModelRenderer(Widget):
   def _update_raw_points(self, model):
     """Update raw 3D points from model data"""
     self._path.raw_points = np.array([model.position.x, model.position.y, model.position.z], dtype=np.float32).T
+
+    # dp - LCC: 疊加軌跡 = 原始 model 路徑 + LCC 修正量造成的橫向偏移
+    # y = 0.5 * curvature * x^2 是計算修正量時用的 pure-pursuit 近似 (curvature = 2y/L^2) 的反函數，
+    # 純視覺化用途，跟實際下發給方向盤的曲率命令方向一致，但不代表精確物理路徑。
+    correction = ui_state.dp_lcc_correction
+    if abs(correction) > 1e-5 and self._path.raw_points.shape[0] > 0:
+      corrected = self._path.raw_points.copy()
+      x = corrected[:, 0]
+      corrected[:, 1] += 0.5 * correction * x ** 2
+      self._path_corrected.raw_points = corrected
+    else:
+      self._path_corrected.raw_points = np.empty((0, 3), dtype=np.float32)
 
     for i, lane_line in enumerate(model.laneLines):
       self._lane_lines[i].raw_points = np.array([lane_line.x, lane_line.y, lane_line.z], dtype=np.float32).T
@@ -210,8 +230,18 @@ class ModelRenderer(Widget):
 
     max_idx = self._get_path_length_idx(path_x_array, max_distance)
     self._path.projected_points = self._map_line_to_polygon(
-      self._path.raw_points, 0.9, self._path_offset_z, max_idx, max_distance, allow_invert=False
+      self._path.raw_points, MAIN_PATH_HALF_WIDTH, self._path_offset_z, max_idx, max_distance, allow_invert=False
     )
+
+    # dp - LCC: 疊加軌跡寬度 = 主路徑寬度的 20%，跟主路徑一樣經過同一套透視投影，
+    # 畫面上自然會呈現「越遠越細」的效果，不需要額外處理
+    if self._path_corrected.raw_points.shape[0] > 0:
+      corrected_max_idx = self._get_path_length_idx(self._path_corrected.raw_points[:, 0], max_distance)
+      self._path_corrected.projected_points = self._map_line_to_polygon(
+        self._path_corrected.raw_points, LCC_PATH_HALF_WIDTH, self._path_offset_z, corrected_max_idx, max_distance, allow_invert=False
+      )
+    else:
+      self._path_corrected.projected_points = np.empty((0, 2), dtype=np.float32)
 
     self._update_experimental_gradient()
 
@@ -334,6 +364,12 @@ class ModelRenderer(Widget):
         stops=[0.0, 0.5, 1.0],
       )
       draw_polygon(self._rect, self._path.projected_points, gradient=gradient)
+
+  def _draw_lcc_path(self):
+    """dp - LCC: 疊加畫出 LCC 修正後的實際命令路徑（半透明鮮紅色細線）"""
+    if not self._path_corrected.projected_points.size:
+      return
+    draw_polygon(self._rect, self._path_corrected.projected_points, LCC_PATH_COLOR)
 
   def _draw_lead_indicator(self):
     # Draw lead vehicles if available
@@ -594,4 +630,3 @@ class ModelRenderer(Widget):
 
         for i, line in enumerate(lines):
           rl.draw_text_ex(font, line, rl.Vector2(text_x, text_y + i * line_height), font_size, 0, rl.WHITE)
-
