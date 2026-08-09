@@ -1,70 +1,53 @@
 #!/usr/bin/env python3
 """
-Lane Centering Corrector (LCC) - 多點曲線擬合與動態融合版 (高速優化)
+Lane Centering Corrector (LCC) - 基於 Starpilot 演算法精簡版
 
-將 10~50m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
-y = ax^2 + bx + c 的二次曲線。藉此精準分離「道路曲率(a)」、「航向誤差(b)」與「橫向偏移(c)」。
-針對高速公路行駛優化：引入動態前視距離 (車速 x 1.5秒)，車速越快看得越遠。
-隨後算出目標居中曲率，並依據標線信心度與 Model 原始輸出的 desiredCurvature 進行按比例融合，
-提供極度平滑且不會因座標系旋轉而自激振盪的居中修正。
+1. 誤差計算基準改為 target_y (車道中心) 與 model_y (E2E模型預測路徑) 的差值，自然解耦航向角。
+2. 引入 Deadband (8cm 死區)，過濾微小視覺雜訊。
+3. 嚴格的車道寬度與放寬後的標準差 (Std) 過濾。
+* 已移除 E2E Authority 避讓機制，全程嚴格置中。
+* 內建獨立的低通濾波器，徹底避免 API 相容性問題。
 """
 
 import os
 import time
 import numpy as np
 
+from cereal import log
 from openpilot.common.params import Params
-from openpilot.common.filter_simple import FirstOrderFilter
 
 PARAM_REFRESH_SEC = 2.0
 
-# --- Debug log 設定（獨立 CSV，供路測後回傳分析用） ---
+# --- Debug log 設定 ---
 LOG_PATH = "/data/media/0/realdata/lcc_debug.csv"
 LOG_INTERVAL_SEC = 0.1  
 LOG_COLUMNS = [
   "t", "dt", "v_kph", "state",
-  "lat_active", "speed_gate", "sharp_turn", "model_curvature",
-  "yield_hold_timer", "engage_ramp_timer", "ramp_factor",
-  "weight", "poly_a", "poly_b", "poly_c", "lane_target_curv",
+  "lat_active", "speed_gate", "lane_width", "target_y",
+  "model_y", "error", 
   "raw_correction", "correction",
 ]
 
-# --- 系統內建參數 ---
+# --- Starpilot 演算法核心常數 ---
+_MIN_V_EGO = 5.0             # 最低作動速度 (約 18 km/h)
+_MIN_LANE_PROB = 0.5         # 最低標線信心度 (已放寬為 0.5)
+_MAX_LANE_STD = 0.4          # 最大標線標準差 (已放寬為 0.4)
+_MIN_LANE_WIDTH = 2.6        # 最小合理車道寬度
+_MAX_LANE_WIDTH = 4.8        # 最大合理車道寬度
+_MAX_OFFSET = 0.3            # 允許的最大自訂偏移量
+_MIN_CENTER_TO_LINE = 1.1    # 車道中心到邊線的最短安全距離
+_MAX_RAW_CORRECTION = 0.004  # 原始修正曲率上限
+_MAX_GAIN = 0.30             # 最終輸出的增益比例
+_SMOOTH_TAU = 0.4            # 修正量的低通濾波時間常數 (秒)
+_SIGNAL_RELEASE_TAU = 0.20   # 打方向燈時淡出的時間常數
+_CONFIDENCE_RELEASE_TAU = 0.20 # 信心不足時淡出的時間常數
+_CENTER_ERROR_DEADBAND = 0.08  # 誤差死區 (8公分內不修正，避免抖動)
+
+# 系統自訂常數
 SPEED_ON_KPH = 40.0
 SPEED_OFF_KPH = 30.0
 KPH_TO_MS = 1000.0 / 3600.0
-
-# 高速優化：將採樣點向遠處延伸 (10m ~ 50m)
-FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
-
-# 動態前視距離參數
-MIN_LOOKAHEAD_M = 15.0      # 低速時最低保底前視距離
-LOOKAHEAD_TIME_SEC = 1.5    # 依據車速計算前視距離的秒數 (110km/h 約等於看 45m)
-
-FILTER_RC_SEC = 0.5      
-SHARP_TURN_CURVATURE = 0.06 
-
-PROB_MIN = 0.3
-PROB_FULL = 0.6
-
-# 融合權重上限：當車道線極度清晰時，LCC 修正量最高佔最終軌跡的比例
-# 例如 0.25 代表 25% 依賴車道線幾何，75% 依賴 E2E 模型預測
-LANE_WEIGHT_MAX = 0.50 
-MAX_CORRECTION = 0.006  # 修正量曲率上限 (1/m)
-
 YIELD_CONFIRM_SEC = 0.15
-ENGAGE_RAMP_SEC = 1.5
-
-
-def _clip_interp(x, xp, fp):
-  """對 modelV2 XYZTData 的 x/y 陣列做前視距離內插，資料異常時回傳 None"""
-  if len(xp) < 2:
-    return None
-  if xp[-1] <= xp[0]:
-    return None
-  if x < xp[0] or x > xp[-1]:
-    return None
-  return float(np.interp(x, xp, fp))
 
 
 class LaneCenteringCorrector:
@@ -73,16 +56,10 @@ class LaneCenteringCorrector:
     self._last_params_read = 0.0
     self._enabled = False
 
-    # --- 狀態 ---
-    self._filter = FirstOrderFilter(0.0, FILTER_RC_SEC, 0.01)
-    self.correction = 0.0
-    self.weight = 0.0
-    self._active = False
+    self.correction = 0.0  # 供 controlsd.py 讀取的公開變數
     self._speed_gate = False  
     self._yield_hold_timer = 0.0  
-    self._engage_ramp_timer = 0.0  
 
-    # --- debug log 狀態 ---
     self._last_log_time = 0.0
     self._last_logged_state = None
     self._log_header_written = os.path.exists(LOG_PATH)
@@ -95,13 +72,14 @@ class LaneCenteringCorrector:
     self._enabled = self._params.get_bool("dp_lcc_enabled")
 
   def reset(self) -> None:
-    self._filter.x = 0.0
     self.correction = 0.0
-    self.weight = 0.0
-    self._active = False
     self._speed_gate = False
     self._yield_hold_timer = 0.0
-    self._engage_ramp_timer = 0.0
+
+  def _smooth(self, target: float, current: float, tau: float, dt: float) -> float:
+    """獨立計算的低通濾波，避免依賴外部 Filter 元件造成當機"""
+    alpha = dt / max(tau + dt, 1e-5)
+    return (1.0 - alpha) * current + alpha * target
 
   def _log_row(self, state: str, **fields) -> None:
     now = time.monotonic()
@@ -127,20 +105,24 @@ class LaneCenteringCorrector:
     except Exception:
       pass
 
-  def _log_fallback(self, state: str, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor):
-    """簡化提早 return 時的預設 log 記錄"""
+  def _log_fallback(self, state: str, dt: float, v_ego_kph: float, lat_active: bool):
     self._log_row(state, dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
-                  speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                  model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
-                  engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
-                  weight=0.0, poly_a=0.0, poly_b=0.0, poly_c=0.0, 
-                  lane_target_curv=0.0, raw_correction=0.0, correction=self.correction)
+                  speed_gate=self._speed_gate, lane_width=0, target_y=0,
+                  model_y=0, error=0,
+                  raw_correction=0, correction=self.correction)
+
+  @staticmethod
+  def _valid_path(x, y) -> bool:
+    return x.size >= 2 and x.size == y.size and np.isfinite(x).all() and np.isfinite(y).all() and np.all(np.diff(x) > 0)
+
+  @staticmethod
+  def _covers(x, distance: float) -> bool:
+    return bool(x[0] <= distance <= x[-1])
 
   def update(self, model_v2, v_ego: float, lat_active: bool, dt: float,
              left_blinker: bool = False, right_blinker: bool = False,
              steering_pressed: bool = False) -> float:
     self._read_params()
-    self._filter.dt = dt
 
     v_ego_kph = v_ego / KPH_TO_MS
     if v_ego_kph >= SPEED_ON_KPH:
@@ -148,100 +130,106 @@ class LaneCenteringCorrector:
     elif v_ego_kph <= SPEED_OFF_KPH:
       self._speed_gate = False
 
-    model_curvature = getattr(model_v2.action, "desiredCurvature", 0.0) if lat_active else 0.0
-    is_sharp_turn = abs(model_curvature) > SHARP_TURN_CURVATURE
-
-    hard_invalid = (not self._enabled or not lat_active or not self._speed_gate or is_sharp_turn)
-    if hard_invalid:
-      _state = "DISABLED" if not self._enabled else \
-               "NOT_LAT_ACTIVE" if not lat_active else \
-               "SPEED_GATE_OFF" if not self._speed_gate else "SHARP_TURN"
+    if not self._enabled or not lat_active or not self._speed_gate or v_ego < _MIN_V_EGO:
       self.reset()
-      self._log_fallback(_state, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, 0.0)
+      self._log_fallback("DISABLED_OR_SLOW", dt, v_ego_kph, lat_active)
       return 0.0
-
-    self._engage_ramp_timer += dt
-    ramp_factor = float(np.clip(self._engage_ramp_timer / ENGAGE_RAMP_SEC, 0.0, 1.0))
 
     raw_yield_condition = (left_blinker or right_blinker) and steering_pressed
     if raw_yield_condition:
       self._yield_hold_timer += dt
     else:
       self._yield_hold_timer = 0.0
-    is_yielding = self._yield_hold_timer >= YIELD_CONFIRM_SEC
-
-    if is_yielding:
-      self._active = False
-      self.weight = 0.0
-      self.correction = self._filter.update(0.0)
-      self._log_fallback("YIELDING", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
+    
+    # 方向燈與駕駛出力介入時，快速淡出修正量
+    if self._yield_hold_timer >= YIELD_CONFIRM_SEC:
+      self.correction = self._smooth(0.0, self.correction, _SIGNAL_RELEASE_TAU, dt)
+      self._log_fallback("YIELDING_OR_SIGNAL", dt, v_ego_kph, lat_active)
       return self.correction
 
-    lane_lines = model_v2.laneLines
-    lane_line_probs = model_v2.laneLineProbs
-
-    if len(lane_lines) < 3 or len(lane_line_probs) < 3:
+    try:
+      if model_v2.meta.laneChangeState != log.LaneChangeState.off:
+        self.reset()
+        self._log_fallback("LANE_CHANGE", dt, v_ego_kph, lat_active)
+        return 0.0
+    except (AttributeError, TypeError, ValueError):
       self.reset()
-      self._log_fallback("NO_LANE_DATA", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return 0.0
 
-    lll_prob = lane_line_probs[1]
-    rll_prob = lane_line_probs[2]
-    min_prob = min(lll_prob, rll_prob)
-
-    # 動態權重：信心度決定融合比例 (最高 LANE_WEIGHT_MAX)
-    confidence = float(np.clip((min_prob - PROB_MIN) / (PROB_FULL - PROB_MIN), 0.0, 1.0))
-    self.weight = confidence * LANE_WEIGHT_MAX
-
-    if self.weight <= 0.0:
-      self._active = False
-      self.correction = self._filter.update(0.0)
-      self._log_fallback("LOW_CONFIDENCE", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
+    # 執行 Starpilot 核心誤差計算
+    valid, raw_correction, log_data = self._calculate_raw_correction(model_v2, v_ego)
+    
+    if not valid:
+      # 當信心不足或無法計算時，平滑淡出
+      self.correction = self._smooth(0.0, self.correction, _CONFIDENCE_RELEASE_TAU, dt)
+      self._log_row("INVALID_LANE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active, speed_gate=self._speed_gate, **log_data)
       return self.correction
 
-    lll = lane_lines[1]
-    rll = lane_lines[2]
-    
-    # 取樣 10~50m 多個座標點計算中心
-    valid_x = []
-    center_y = []
-    for x in FIT_X:
-      l_y = _clip_interp(x, lll.x, lll.y)
-      r_y = _clip_interp(x, rll.x, rll.y)
-      if l_y is not None and r_y is not None:
-        valid_x.append(x)
-        center_y.append((l_y + r_y) / 2.0)
+    # 計算最終修正量並進行平滑處理
+    target = float(np.clip(raw_correction, -_MAX_RAW_CORRECTION, _MAX_RAW_CORRECTION)) * _MAX_GAIN
+    self.correction = self._smooth(target, self.correction, _SMOOTH_TAU, dt)
 
-    # 二次曲線擬合需要至少 3 個有效點
-    if len(valid_x) < 3:
-      self._active = False
-      self.correction = self._filter.update(0.0)
-      self._log_fallback("INTERP_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
-      return self.correction
-
-    # 擬合二次曲線方程式 y = ax^2 + bx + c
-    coeffs = np.polyfit(valid_x, center_y, 2)
-    a, b, c = coeffs[0], coeffs[1], coeffs[2]
-
-    # 高速優化：依據車速計算動態前視距離 (L)
-    L = max(MIN_LOOKAHEAD_M, v_ego * LOOKAHEAD_TIME_SEC)
-    
-    # 利用公式：曲率 = 2a + 2b/L + 2c/L^2，算出最符合車道中心的理論曲率
-    lane_target_curvature = (2.0 * a) + (2.0 * b / L) + (2.0 * c / (L ** 2))
-
-    # 動態路徑融合 (Path Fusion):
-    raw_correction = self.weight * ramp_factor * (lane_target_curvature - model_curvature)
-    raw_correction = float(np.clip(raw_correction, -MAX_CORRECTION, MAX_CORRECTION))
-
-    self.correction = self._filter.update(raw_correction)
-    self._active = True
-
-    self._log_row("ACTIVE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
-                  speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                  model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
-                  engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
-                  weight=self.weight, poly_a=a, poly_b=b, poly_c=c,
-                  lane_target_curv=lane_target_curvature, 
-                  raw_correction=raw_correction, correction=self.correction)
+    self._log_row("ACTIVE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active, speed_gate=self._speed_gate, 
+                  raw_correction=raw_correction, correction=self.correction, **log_data)
     
     return self.correction
+
+  def _calculate_raw_correction(self, model_v2, v_ego: float):
+    log_data = {"lane_width": 0, "target_y": 0, "model_y": 0, "error": 0}
+
+    try:
+      lane_lines = model_v2.laneLines
+      probs = np.asarray(model_v2.laneLineProbs, dtype=float)
+      stds = np.asarray(model_v2.laneLineStds, dtype=float)
+      
+      if len(lane_lines) < 3 or probs.size < 3 or stds.size < 3:
+        return False, 0.0, log_data
+      if not np.isfinite(probs[[1, 2]]).all() or not np.isfinite(stds[[1, 2]]).all():
+        return False, 0.0, log_data
+      
+      if np.any(probs[[1, 2]] < _MIN_LANE_PROB) or np.any(probs[[1, 2]] > 1.0):
+        return False, 0.0, log_data
+      if np.any(stds[[1, 2]] < 0.0) or np.any(stds[[1, 2]] > _MAX_LANE_STD):
+        return False, 0.0, log_data
+
+      left_x = np.asarray(lane_lines[1].x, dtype=float)
+      left_y = np.asarray(lane_lines[1].y, dtype=float)
+      right_x = np.asarray(lane_lines[2].x, dtype=float)
+      right_y = np.asarray(lane_lines[2].y, dtype=float)
+      pos_x = np.asarray(model_v2.position.x, dtype=float)
+      pos_y = np.asarray(model_v2.position.y, dtype=float)
+      
+      if not (self._valid_path(left_x, left_y) and self._valid_path(right_x, right_y) and self._valid_path(pos_x, pos_y)):
+        return False, 0.0, log_data
+
+      lookahead = float(np.clip(v_ego, 8.0, 35.0))
+      if not all(self._covers(x, lookahead) for x in (left_x, right_x, pos_x)):
+        return False, 0.0, log_data
+
+      left = float(np.interp(lookahead, left_x, left_y))
+      right = float(np.interp(lookahead, right_x, right_y))
+      width = right - left
+      log_data["lane_width"] = width
+      
+      if not _MIN_LANE_WIDTH <= width <= _MAX_LANE_WIDTH:
+        return False, 0.0, log_data
+
+      target_y = 0.5 * (left + right)
+      model_y = float(np.interp(lookahead, pos_x, pos_y))
+      error = target_y - model_y
+      
+      log_data["target_y"] = target_y
+      log_data["model_y"] = model_y
+
+      error_abs = abs(error)
+      if error_abs <= _CENTER_ERROR_DEADBAND:
+        error = 0.0
+      else:
+        error = np.copysign(error_abs - _CENTER_ERROR_DEADBAND, error)
+
+      log_data["error"] = error
+
+      return True, float(2.0 * error / lookahead ** 2), log_data
+
+    except (AttributeError, IndexError, TypeError, ValueError):
+      return False, 0.0, log_data
