@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Lane Centering Corrector (LCC) - 多點曲線擬合與動態融合版
+Lane Centering Corrector (LCC) - 多點曲線擬合與動態融合版 (高速優化)
 
-將 5~30m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
+將 10~50m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
 y = ax^2 + bx + c 的二次曲線。藉此精準分離「道路曲率(a)」、「航向誤差(b)」與「橫向偏移(c)」。
+針對高速公路行駛優化：引入動態前視距離 (車速 x 1.5秒)，車速越快看得越遠。
 隨後算出目標居中曲率，並依據標線信心度與 Model 原始輸出的 desiredCurvature 進行按比例融合，
 提供極度平滑且不會因座標系旋轉而自激振盪的居中修正。
 """
@@ -33,11 +34,14 @@ SPEED_ON_KPH = 40.0
 SPEED_OFF_KPH = 30.0
 KPH_TO_MS = 1000.0 / 3600.0
 
-# 用於擬合車道中心曲線的採樣點 (公尺)
-FIT_X = np.array([5.0, 10.0, 15.0, 20.0, 25.0, 30.0])
-LOOKAHEAD_DIST_M = 15.0  # 作為基準的目標前視距離
-FILTER_RC_SEC = 0.5      
+# 高速優化：將採樣點向遠處延伸 (10m ~ 50m)
+FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
 
+# 動態前視距離參數
+MIN_LOOKAHEAD_M = 15.0      # 低速時最低保底前視距離
+LOOKAHEAD_TIME_SEC = 1.5    # 依據車速計算前視距離的秒數 (110km/h 約等於看 45m)
+
+FILTER_RC_SEC = 0.5      
 SHARP_TURN_CURVATURE = 0.06 
 
 PROB_MIN = 0.3
@@ -198,7 +202,7 @@ class LaneCenteringCorrector:
     lll = lane_lines[1]
     rll = lane_lines[2]
     
-    # 取樣 5~30m 多個座標點計算中心
+    # 取樣 10~50m 多個座標點計算中心
     valid_x = []
     center_y = []
     for x in FIT_X:
@@ -219,14 +223,13 @@ class LaneCenteringCorrector:
     coeffs = np.polyfit(valid_x, center_y, 2)
     a, b, c = coeffs[0], coeffs[1], coeffs[2]
 
+    # 高速優化：依據車速計算動態前視距離 (L)
+    L = max(MIN_LOOKAHEAD_M, v_ego * LOOKAHEAD_TIME_SEC)
+    
     # 利用公式：曲率 = 2a + 2b/L + 2c/L^2，算出最符合車道中心的理論曲率
-    L = LOOKAHEAD_DIST_M
     lane_target_curvature = (2.0 * a) + (2.0 * b / L) + (2.0 * c / (L ** 2))
 
     # 動態路徑融合 (Path Fusion):
-    # final_curvature = model_curvature * (1 - weight) + lane_target_curvature * weight
-    # 因為在 controlsd.py 裡，最終是 new_desired_curvature = model_curvature + correction
-    # 所以我們的修正量 = final_curvature - model_curvature = weight * (lane_target_curvature - model_curvature)
     raw_correction = self.weight * ramp_factor * (lane_target_curvature - model_curvature)
     raw_correction = float(np.clip(raw_correction, -MAX_CORRECTION, MAX_CORRECTION))
 
