@@ -168,7 +168,7 @@ class Controls:
 
     # dp - LCC: 疊加車道居中修正量。僅影響曲率來源，latcontrol 完全不變，
     # 下游 clip_curvature() 的曲率/側向加速度/jerk 限幅照樣完整作用於疊加後的結果。
-    lcc_correction = self.lcc.update(model_v2, CS.vEgo, self.curvature, CC.latActive, DT_CTRL,
+    lcc_correction = self.lcc.update(model_v2, CS.vEgo, CC.latActive, DT_CTRL,
                                       left_blinker=CS.leftBlinker, right_blinker=CS.rightBlinker,
                                       steering_pressed=CS.steeringPressed)
     new_desired_curvature += lcc_correction
