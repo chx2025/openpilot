@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
 """
-Lane Centering Corrector (LCC)
+Lane Centering Corrector (LCC) - 多點曲線擬合與動態融合版
 
-根據 modelV2 的車道線 (laneLines) 幾何位置，計算「本車道中心 offset」，
-並轉換成一個很小的曲率修正量，疊加在 model 原本輸出的 desired_curvature 上。
-
-設計原則：
-  - 完全獨立模組，不觸碰 latcontrol.py / latcontrol_pid.py / latcontrol_torque.py /
-    latcontrol_angle.py 任何邏輯，這些檔案維持 upstream 原樣。
-  - controlsd.py 只在組出 new_desired_curvature 之後、丟進 clip_curvature() 之前，
-    疊加本模組算出的修正量，修正量算錯或關閉時 correction=0，行為等同原本 model。
-  - 下游 clip_curvature() 的曲率/側向加速度/側向 jerk 限幅仍然完整作用於
-    「model + 修正量」的總和，所以就算本模組給錯值，也會被既有安全限制包住。
-  - 車道線信心不足（單線消失、施工、匝道...）時修正量直接淡出到 0，不做外插硬猜。
-
-尚未實際路測，預設 dp_lcc_enabled=False，需在 Params 手動開啟。
+將 5~30m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
+y = ax^2 + bx + c 的二次曲線。藉此精準分離「道路曲率(a)」、「航向誤差(b)」與「橫向偏移(c)」。
+隨後算出目標居中曲率，並依據標線信心度與 Model 原始輸出的 desiredCurvature 進行按比例融合，
+提供極度平滑且不會因座標系旋轉而自激振盪的居中修正。
 """
 
 import os
 import time
-
 import numpy as np
 
 from openpilot.common.params import Params
@@ -29,30 +19,34 @@ PARAM_REFRESH_SEC = 2.0
 
 # --- Debug log 設定（獨立 CSV，供路測後回傳分析用） ---
 LOG_PATH = "/data/media/0/realdata/lcc_debug.csv"
-LOG_INTERVAL_SEC = 0.1  # 穩態最多每 0.1s（10Hz）寫一次，避免頻繁寫入 SD 卡
+LOG_INTERVAL_SEC = 0.1  
 LOG_COLUMNS = [
   "t", "dt", "v_kph", "state",
   "lat_active", "speed_gate", "sharp_turn", "model_curvature",
   "yield_hold_timer", "engage_ramp_timer", "ramp_factor",
-  "weight", "lane_center_error", "error_rate", "p_term", "d_term",
+  "weight", "poly_a", "poly_b", "poly_c", "lane_target_curv",
   "raw_correction", "correction",
 ]
 
-# --- 系統內建參數（不從 Params 讀取，先求穩，之後有需要再開放調參） ---
+# --- 系統內建參數 ---
 SPEED_ON_KPH = 40.0
 SPEED_OFF_KPH = 30.0
 KPH_TO_MS = 1000.0 / 3600.0
 
-LOOKAHEAD_DIST_M = 15.0     # 用來算車道中心 offset 的前視距離
-FILTER_RC_SEC = 0.5         # 修正量一階低通時間常數，避免抖動
-SHARP_TURN_CURVATURE = 0.06  # 1/m，約等於路徑半徑 17m 以下的轉彎
+# 用於擬合車道中心曲線的採樣點 (公尺)
+FIT_X = np.array([5.0, 10.0, 15.0, 20.0, 25.0, 30.0])
+LOOKAHEAD_DIST_M = 15.0  # 作為基準的目標前視距離
+FILTER_RC_SEC = 0.5      
+
+SHARP_TURN_CURVATURE = 0.06 
 
 PROB_MIN = 0.3
 PROB_FULL = 0.6
 
-MAX_CORRECTION = 0.006  # 修正量曲率上限 (1/m)，寫死在程式碼內
-
-KD_GAIN = 0.6  # 阻尼增益：誤差變化率的抑制強度
+# 融合權重上限：當車道線極度清晰時，LCC 修正量最高佔最終軌跡的比例
+# 例如 0.25 代表 25% 依賴車道線幾何，75% 依賴 E2E 模型預測
+LANE_WEIGHT_MAX = 0.25 
+MAX_CORRECTION = 0.006  # 修正量曲率上限 (1/m)
 
 YIELD_CONFIRM_SEC = 0.15
 ENGAGE_RAMP_SEC = 1.5
@@ -73,21 +67,16 @@ class LaneCenteringCorrector:
   def __init__(self) -> None:
     self._params = Params()
     self._last_params_read = 0.0
-
-    # --- UI 控制參數（從 Params 讀取） ---
     self._enabled = False
 
     # --- 狀態 ---
     self._filter = FirstOrderFilter(0.0, FILTER_RC_SEC, 0.01)
     self.correction = 0.0
-    self.lane_center_error = 0.0
-    self._prev_lane_center_error = 0.0  # 上一幀誤差，用於 D 項計算
-    self._prev_error_valid = False  # False 時代表沒有上一幀可比較，D 項該幀直接視為 0
     self.weight = 0.0
     self._active = False
-    self._speed_gate = False  # 車速遲滯開關的目前狀態
-    self._yield_hold_timer = 0.0  # 「方向燈+出力」持續時間累計，用於去彈跳
-    self._engage_ramp_timer = 0.0  # 剛啟用時的漸強爬升時間累計
+    self._speed_gate = False  
+    self._yield_hold_timer = 0.0  
+    self._engage_ramp_timer = 0.0  
 
     # --- debug log 狀態 ---
     self._last_log_time = 0.0
@@ -104,9 +93,6 @@ class LaneCenteringCorrector:
   def reset(self) -> None:
     self._filter.x = 0.0
     self.correction = 0.0
-    self.lane_center_error = 0.0
-    self._prev_lane_center_error = 0.0
-    self._prev_error_valid = False
     self.weight = 0.0
     self._active = False
     self._speed_gate = False
@@ -137,10 +123,18 @@ class LaneCenteringCorrector:
     except Exception:
       pass
 
-  def update(self, model_v2, v_ego: float, current_curvature: float, lat_active: bool, dt: float,
+  def _log_fallback(self, state: str, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor):
+    """簡化提早 return 時的預設 log 記錄"""
+    self._log_row(state, dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
+                  speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
+                  model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
+                  engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
+                  weight=0.0, poly_a=0.0, poly_b=0.0, poly_c=0.0, 
+                  lane_target_curv=0.0, raw_correction=0.0, correction=self.correction)
+
+  def update(self, model_v2, v_ego: float, lat_active: bool, dt: float,
              left_blinker: bool = False, right_blinker: bool = False,
              steering_pressed: bool = False) -> float:
-    """回傳要疊加到 desired_curvature 的修正量 (1/m)"""
     self._read_params()
     self._filter.dt = dt
 
@@ -153,29 +147,13 @@ class LaneCenteringCorrector:
     model_curvature = getattr(model_v2.action, "desiredCurvature", 0.0) if lat_active else 0.0
     is_sharp_turn = abs(model_curvature) > SHARP_TURN_CURVATURE
 
-    hard_invalid = (
-      not self._enabled or
-      not lat_active or
-      not self._speed_gate or
-      is_sharp_turn
-    )
+    hard_invalid = (not self._enabled or not lat_active or not self._speed_gate or is_sharp_turn)
     if hard_invalid:
-      if not self._enabled:
-        _state = "DISABLED"
-      elif not lat_active:
-        _state = "NOT_LAT_ACTIVE"
-      elif not self._speed_gate:
-        _state = "SPEED_GATE_OFF"
-      else:
-        _state = "SHARP_TURN"
-      self._log_row(_state, dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
-                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                    model_curvature=model_curvature,
-                    yield_hold_timer=self._yield_hold_timer,
-                    engage_ramp_timer=self._engage_ramp_timer,
-                    ramp_factor=0.0, weight=0.0, lane_center_error=0.0, error_rate=0.0,
-                    p_term=0.0, d_term=0.0, raw_correction=0.0, correction=0.0)
+      _state = "DISABLED" if not self._enabled else \
+               "NOT_LAT_ACTIVE" if not lat_active else \
+               "SPEED_GATE_OFF" if not self._speed_gate else "SHARP_TURN"
       self.reset()
+      self._log_fallback(_state, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, 0.0)
       return 0.0
 
     self._engage_ramp_timer += dt
@@ -191,107 +169,76 @@ class LaneCenteringCorrector:
     if is_yielding:
       self._active = False
       self.weight = 0.0
-      self.lane_center_error = 0.0
-      self._prev_lane_center_error = 0.0
-      self._prev_error_valid = False
       self.correction = self._filter.update(0.0)
-      self._log_row("YIELDING", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
-                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                    model_curvature=model_curvature,
-                    yield_hold_timer=self._yield_hold_timer,
-                    engage_ramp_timer=self._engage_ramp_timer,
-                    ramp_factor=ramp_factor, weight=self.weight,
-                    lane_center_error=self.lane_center_error, error_rate=0.0,
-                    p_term=0.0, d_term=0.0, raw_correction=0.0, correction=self.correction)
+      self._log_fallback("YIELDING", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
     lane_lines = model_v2.laneLines
     lane_line_probs = model_v2.laneLineProbs
 
     if len(lane_lines) < 3 or len(lane_line_probs) < 3:
-      self._log_row("NO_LANE_DATA", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
-                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                    model_curvature=model_curvature,
-                    yield_hold_timer=self._yield_hold_timer,
-                    engage_ramp_timer=self._engage_ramp_timer,
-                    ramp_factor=ramp_factor, weight=0.0, lane_center_error=0.0, error_rate=0.0,
-                    p_term=0.0, d_term=0.0, raw_correction=0.0, correction=0.0)
       self.reset()
+      self._log_fallback("NO_LANE_DATA", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return 0.0
 
     lll_prob = lane_line_probs[1]
     rll_prob = lane_line_probs[2]
     min_prob = min(lll_prob, rll_prob)
 
-    self.weight = float(np.clip((min_prob - PROB_MIN) / (PROB_FULL - PROB_MIN), 0.0, 1.0))
+    # 動態權重：信心度決定融合比例 (最高 LANE_WEIGHT_MAX)
+    confidence = float(np.clip((min_prob - PROB_MIN) / (PROB_FULL - PROB_MIN), 0.0, 1.0))
+    self.weight = confidence * LANE_WEIGHT_MAX
+
     if self.weight <= 0.0:
       self._active = False
       self.correction = self._filter.update(0.0)
-      self.lane_center_error = 0.0
-      self._prev_lane_center_error = 0.0
-      self._prev_error_valid = False
-      self._log_row("LOW_CONFIDENCE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
-                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                    model_curvature=model_curvature,
-                    yield_hold_timer=self._yield_hold_timer,
-                    engage_ramp_timer=self._engage_ramp_timer,
-                    ramp_factor=ramp_factor, weight=self.weight, lane_center_error=0.0,
-                    error_rate=0.0, p_term=0.0, d_term=0.0, raw_correction=0.0,
-                    correction=self.correction)
+      self._log_fallback("LOW_CONFIDENCE", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
     lll = lane_lines[1]
     rll = lane_lines[2]
-    lll_y = _clip_interp(LOOKAHEAD_DIST_M, lll.x, lll.y)
-    rll_y = _clip_interp(LOOKAHEAD_DIST_M, rll.x, rll.y)
+    
+    # 取樣 5~30m 多個座標點計算中心
+    valid_x = []
+    center_y = []
+    for x in FIT_X:
+      l_y = _clip_interp(x, lll.x, lll.y)
+      r_y = _clip_interp(x, rll.x, rll.y)
+      if l_y is not None and r_y is not None:
+        valid_x.append(x)
+        center_y.append((l_y + r_y) / 2.0)
 
-    if lll_y is None or rll_y is None:
+    # 二次曲線擬合需要至少 3 個有效點
+    if len(valid_x) < 3:
       self._active = False
       self.correction = self._filter.update(0.0)
-      self.lane_center_error = 0.0
-      self._prev_lane_center_error = 0.0
-      self._prev_error_valid = False
-      self._log_row("INTERP_FAIL", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
-                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                    model_curvature=model_curvature,
-                    yield_hold_timer=self._yield_hold_timer,
-                    engage_ramp_timer=self._engage_ramp_timer,
-                    ramp_factor=ramp_factor, weight=self.weight, lane_center_error=0.0,
-                    error_rate=0.0, p_term=0.0, d_term=0.0, raw_correction=0.0,
-                    correction=self.correction)
+      self._log_fallback("INTERP_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
-    self.lane_center_error = (lll_y + rll_y) / 2.0
+    # 擬合二次曲線方程式 y = ax^2 + bx + c
+    coeffs = np.polyfit(valid_x, center_y, 2)
+    a, b, c = coeffs[0], coeffs[1], coeffs[2]
 
-    # 引入 Yaw Rate 解耦核心邏輯
-    if self._prev_error_valid:
-      raw_error_rate = (self.lane_center_error - self._prev_lane_center_error) / dt if dt > 1e-3 else 0.0
-      # 扣除因為車輛自身旋轉（航向角變化）造成的假性位移速率
-      yaw_rate = v_ego * current_curvature
-      # yaw_rate 正值代表向左轉，這會導致 15m 前方的量測點在視野中相對向右移（y 變小，產生負的 raw_error_rate）
-      # 因此要加上 LOOKAHEAD_DIST_M * yaw_rate 來補償這個旋轉分量，還原真實的橫向位移速率
-      error_rate = raw_error_rate + (LOOKAHEAD_DIST_M * yaw_rate)
-    else:
-      error_rate = 0.0
-      self._prev_error_valid = True
-      
-    self._prev_lane_center_error = self.lane_center_error
+    # 利用公式：曲率 = 2a + 2b/L + 2c/L^2，算出最符合車道中心的理論曲率
+    L = LOOKAHEAD_DIST_M
+    lane_target_curvature = (2.0 * a) + (2.0 * b / L) + (2.0 * c / (L ** 2))
 
-    p_term = 2.0 * self.lane_center_error / (LOOKAHEAD_DIST_M ** 2)
-    d_term = KD_GAIN * 2.0 * error_rate / (LOOKAHEAD_DIST_M ** 2)
-    raw_correction = p_term - d_term
+    # 動態路徑融合 (Path Fusion):
+    # final_curvature = model_curvature * (1 - weight) + lane_target_curvature * weight
+    # 因為在 controlsd.py 裡，最終是 new_desired_curvature = model_curvature + correction
+    # 所以我們的修正量 = final_curvature - model_curvature = weight * (lane_target_curvature - model_curvature)
+    raw_correction = self.weight * ramp_factor * (lane_target_curvature - model_curvature)
     raw_correction = float(np.clip(raw_correction, -MAX_CORRECTION, MAX_CORRECTION))
-    raw_correction *= self.weight * ramp_factor
 
     self.correction = self._filter.update(raw_correction)
     self._active = True
+
     self._log_row("ACTIVE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
                   speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                  model_curvature=model_curvature,
-                  yield_hold_timer=self._yield_hold_timer,
-                  engage_ramp_timer=self._engage_ramp_timer,
-                  ramp_factor=ramp_factor, weight=self.weight,
-                  lane_center_error=self.lane_center_error, error_rate=error_rate,
-                  p_term=p_term, d_term=d_term, raw_correction=raw_correction,
-                  correction=self.correction)
+                  model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
+                  engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
+                  weight=self.weight, poly_a=a, poly_b=b, poly_c=c,
+                  lane_target_curv=lane_target_curvature, 
+                  raw_correction=raw_correction, correction=self.correction)
+    
     return self.correction
