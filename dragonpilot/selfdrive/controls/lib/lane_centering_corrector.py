@@ -17,6 +17,7 @@ Lane Centering Corrector (LCC)
 尚未實際路測，預設 dp_lcc_enabled=False，需在 Params 手動開啟。
 """
 
+import os
 import time
 
 import numpy as np
@@ -25,6 +26,17 @@ from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
 
 PARAM_REFRESH_SEC = 2.0
+
+# --- Debug log 設定（獨立 CSV，供路測後回傳分析用） ---
+LOG_PATH = "/data/media/0/realdata/lcc_debug.csv"
+LOG_INTERVAL_SEC = 0.1  # 穩態最多每 0.1s（10Hz）寫一次，避免頻繁寫入 SD 卡
+LOG_COLUMNS = [
+  "t", "dt", "v_kph", "state",
+  "lat_active", "speed_gate", "sharp_turn", "model_curvature",
+  "yield_hold_timer", "engage_ramp_timer", "ramp_factor",
+  "weight", "lane_center_error", "error_rate", "p_term", "d_term",
+  "raw_correction", "correction",
+]
 
 # --- 系統內建參數（不從 Params 讀取，先求穩，之後有需要再開放調參） ---
 # 車速遲滯開關（單位 km/h）：
@@ -106,6 +118,11 @@ class LaneCenteringCorrector:
     self._yield_hold_timer = 0.0  # 「方向燈+出力」持續時間累計，用於去彈跳
     self._engage_ramp_timer = 0.0  # 剛啟用時的漸強爬升時間累計
 
+    # --- debug log 狀態 ---
+    self._last_log_time = 0.0
+    self._last_logged_state = None
+    self._log_header_written = os.path.exists(LOG_PATH)
+
   def _read_params(self) -> None:
     now = time.monotonic()
     if now - self._last_params_read < PARAM_REFRESH_SEC:
@@ -124,6 +141,32 @@ class LaneCenteringCorrector:
     self._speed_gate = False
     self._yield_hold_timer = 0.0
     self._engage_ramp_timer = 0.0
+
+  def _log_row(self, state: str, **fields) -> None:
+    """寫一行 debug log。狀態轉換一定會寫（不受 throttle 限制），穩態時每
+    LOG_INTERVAL_SEC 最多寫一次，避免高頻寫入 SD 卡。失敗直接吞掉，不影響控制迴路。"""
+    now = time.monotonic()
+    state_changed = state != self._last_logged_state
+    if not state_changed and (now - self._last_log_time) < LOG_INTERVAL_SEC:
+      return
+    self._last_log_time = now
+    self._last_logged_state = state
+    try:
+      row = {"t": f"{time.time():.3f}", "state": state}
+      for col in LOG_COLUMNS:
+        if col in ("t", "state"):
+          continue
+        val = fields.get(col, "")
+        row[col] = f"{val:.5f}" if isinstance(val, float) else str(val)
+      os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+      write_header = not self._log_header_written
+      with open(LOG_PATH, "a", encoding="utf-8") as f:
+        if write_header:
+          f.write(",".join(LOG_COLUMNS) + "\n")
+          self._log_header_written = True
+        f.write(",".join(row.get(col, "") for col in LOG_COLUMNS) + "\n")
+    except Exception:
+      pass
 
   def update(self, model_v2, v_ego: float, lat_active: bool, dt: float,
              left_blinker: bool = False, right_blinker: bool = False,
@@ -152,6 +195,21 @@ class LaneCenteringCorrector:
       is_sharp_turn
     )
     if hard_invalid:
+      if not self._enabled:
+        _state = "DISABLED"
+      elif not lat_active:
+        _state = "NOT_LAT_ACTIVE"
+      elif not self._speed_gate:
+        _state = "SPEED_GATE_OFF"
+      else:
+        _state = "SHARP_TURN"
+      self._log_row(_state, dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
+                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
+                    model_curvature=model_curvature,
+                    yield_hold_timer=self._yield_hold_timer,
+                    engage_ramp_timer=self._engage_ramp_timer,
+                    ramp_factor=0.0, weight=0.0, lane_center_error=0.0, error_rate=0.0,
+                    p_term=0.0, d_term=0.0, raw_correction=0.0, correction=0.0)
       self.reset()
       return 0.0
 
@@ -179,12 +237,27 @@ class LaneCenteringCorrector:
       self._prev_lane_center_error = 0.0
       self._prev_error_valid = False
       self.correction = self._filter.update(0.0)
+      self._log_row("YIELDING", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
+                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
+                    model_curvature=model_curvature,
+                    yield_hold_timer=self._yield_hold_timer,
+                    engage_ramp_timer=self._engage_ramp_timer,
+                    ramp_factor=ramp_factor, weight=self.weight,
+                    lane_center_error=self.lane_center_error, error_rate=0.0,
+                    p_term=0.0, d_term=0.0, raw_correction=0.0, correction=self.correction)
       return self.correction
 
     lane_lines = model_v2.laneLines
     lane_line_probs = model_v2.laneLineProbs
 
     if len(lane_lines) < 3 or len(lane_line_probs) < 3:
+      self._log_row("NO_LANE_DATA", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
+                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
+                    model_curvature=model_curvature,
+                    yield_hold_timer=self._yield_hold_timer,
+                    engage_ramp_timer=self._engage_ramp_timer,
+                    ramp_factor=ramp_factor, weight=0.0, lane_center_error=0.0, error_rate=0.0,
+                    p_term=0.0, d_term=0.0, raw_correction=0.0, correction=0.0)
       self.reset()
       return 0.0
 
@@ -200,6 +273,14 @@ class LaneCenteringCorrector:
       self.lane_center_error = 0.0
       self._prev_lane_center_error = 0.0
       self._prev_error_valid = False
+      self._log_row("LOW_CONFIDENCE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
+                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
+                    model_curvature=model_curvature,
+                    yield_hold_timer=self._yield_hold_timer,
+                    engage_ramp_timer=self._engage_ramp_timer,
+                    ramp_factor=ramp_factor, weight=self.weight, lane_center_error=0.0,
+                    error_rate=0.0, p_term=0.0, d_term=0.0, raw_correction=0.0,
+                    correction=self.correction)
       return self.correction
 
     lll = lane_lines[1]
@@ -213,6 +294,14 @@ class LaneCenteringCorrector:
       self.lane_center_error = 0.0
       self._prev_lane_center_error = 0.0
       self._prev_error_valid = False
+      self._log_row("INTERP_FAIL", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
+                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
+                    model_curvature=model_curvature,
+                    yield_hold_timer=self._yield_hold_timer,
+                    engage_ramp_timer=self._engage_ramp_timer,
+                    ramp_factor=ramp_factor, weight=self.weight, lane_center_error=0.0,
+                    error_rate=0.0, p_term=0.0, d_term=0.0, raw_correction=0.0,
+                    correction=self.correction)
       return self.correction
 
     # device frame：y 正值為左側。lane_center_error > 0 代表車道中心在車輛左邊，
@@ -239,4 +328,13 @@ class LaneCenteringCorrector:
 
     self.correction = self._filter.update(raw_correction)
     self._active = True
+    self._log_row("ACTIVE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
+                  speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
+                  model_curvature=model_curvature,
+                  yield_hold_timer=self._yield_hold_timer,
+                  engage_ramp_timer=self._engage_ramp_timer,
+                  ramp_factor=ramp_factor, weight=self.weight,
+                  lane_center_error=self.lane_center_error, error_rate=error_rate,
+                  p_term=p_term, d_term=d_term, raw_correction=raw_correction,
+                  correction=self.correction)
     return self.correction
