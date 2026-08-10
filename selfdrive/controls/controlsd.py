@@ -21,9 +21,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
-# 導入 DP 的 HTD (人工轉向偵測) 模組
 from dragonpilot.selfdrive.controls.lib.human_turn_detection import HumanTurnDetection, HTDState
-# 導入 DP 的車道居中修正模組 (LCC)，獨立於 latcontrol，不影響原本 PID/torque 控制邏輯
 from dragonpilot.selfdrive.controls.lib.lane_centering_corrector import LaneCenteringCorrector
 
 State = log.SelfdriveState.OpenpilotState
@@ -64,15 +62,12 @@ class Controls:
     elif self.CP.lateralTuning.which() == 'torque':
       self.LaC = LatControlTorque(self.CP, self.CI, DT_CTRL)
 
-    # dp - ALKA: cache enabled state (CP doesn't change after init)
     self.alka_enabled = bool(self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA)
     self.alka_active = False
 
-    # 初始化 HTD
     self.htd = HumanTurnDetection()
     self.htd_state = HTDState.INACTIVE
 
-    # 初始化 LCC (車道居中修正)
     self.lcc = LaneCenteringCorrector()
 
   def update(self):
@@ -86,7 +81,6 @@ class Controls:
   def state_control(self):
     CS = self.sm['carState']
 
-    # Update VehicleModel
     lp = self.sm['liveParameters']
     x = max(lp.stiffnessFactor, 0.1)
     sr = max(lp.steerRatio, 0.1)
@@ -95,7 +89,6 @@ class Controls:
     steer_angle_without_offset = math.radians(CS.steeringAngleDeg - lp.angleOffsetDeg)
     self.curvature = -self.VM.calc_curvature(steer_angle_without_offset, CS.vEgo, lp.roll)
 
-    # Update Torque Params
     if self.CP.lateralTuning.which() == 'torque':
       torque_params = self.sm['liveTorqueParameters']
       if self.sm.all_checks(['liveTorqueParameters']) and torque_params.useParams:
@@ -108,21 +101,15 @@ class Controls:
     CC = car.CarControl.new_message()
     CC.enabled = self.sm['selfdriveState'].enabled
 
-    # Check which actuators can be enabled
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
-    # dp - ALKA: check conditions (alka_enabled is cached in __init__)
     if self.alka_enabled:
-      # Read lkas_on state from carstate (published via carStateExt)
       lkas_on = self.sm['carStateExt'].lkasOn
-      # Conditions: lkas_on, gear not in P/N/R, calibration complete, seatbelt latched, doors closed
       calibrated = self.sm['liveCalibration'].calStatus == log.LiveCalibrationData.Status.calibrated
       gear_ok = CS.gearShifter not in (car.CarState.GearShifter.park, car.CarState.GearShifter.neutral, car.CarState.GearShifter.reverse)
       self.alka_active = lkas_on and gear_ok and calibrated and not CS.seatbeltUnlatched and not CS.doorOpen
 
-    # 取出橫向控制啟用的初始狀態
     lat_active = self.sm['selfdriveState'].active or self.alka_active
 
-    # --- 防呆開關判斷 (HTD) ---
     htd_allowed, self.htd_state = self.htd.update(
         lat_active,
         CS.cruiseState.enabled,
@@ -132,10 +119,8 @@ class Controls:
         CS.steeringPressed
     )
 
-    # 只有當車主在介面開啟 HTD 功能時，才真正允許 HTD 切斷自動轉向
     if self.htd._enabled:
         lat_active = lat_active and htd_allowed
-    # ---------------------------
 
     CC.latActive = lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
@@ -144,7 +129,6 @@ class Controls:
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
 
-    # Enable blinkers while lane changing
     if model_v2.meta.laneChangeState != LaneChangeState.off:
       CC.leftBlinker = model_v2.meta.laneChangeDirection == LaneChangeDirection.left
       CC.rightBlinker = model_v2.meta.laneChangeDirection == LaneChangeDirection.right
@@ -155,19 +139,14 @@ class Controls:
     if not CC.longActive:
       self.LoC.reset()
 
-    # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
 
-    # Steering PID loop and lateral MPC
-    # Reset desired curvature to current to avoid violating the limits on engage
     if self.sm.valid['lateralManeuverPlan']:
       new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if CC.latActive else self.curvature
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
 
-    # dp - LCC: 疊加車道居中修正量。僅影響曲率來源，latcontrol 完全不變，
-    # 下游 clip_curvature() 的曲率/側向加速度/jerk 限幅照樣完整作用於疊加後的結果。
     lcc_correction = self.lcc.update(model_v2, CS.vEgo, CC.latActive, DT_CTRL,
                                       left_blinker=CS.leftBlinker, right_blinker=CS.rightBlinker,
                                       steering_pressed=CS.steeringPressed)
@@ -182,12 +161,11 @@ class Controls:
                                                        curvature_limited, lat_delay)
     actuators.torque = float(steer)
     actuators.steeringAngleDeg = float(steeringAngleDeg)
-    # Ensure no NaNs/Infs
+
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)
       if not isinstance(attr, Number):
         continue
-
       if not math.isfinite(attr):
         cloudlog.error(f"actuators.{p} not finite {actuators.to_dict()}")
         setattr(actuators, p, 0.0)
@@ -197,8 +175,6 @@ class Controls:
   def publish(self, CC, lac_log):
     CS = self.sm['carState']
 
-    # Orientation and angle rates can be useful for carcontroller
-    # Only calibrated (car) frame is relevant for the carcontroller
     CC.currentCurvature = self.curvature
     if self.calibrated_pose is not None:
       CC.orientationNED = self.calibrated_pose.orientation.xyz.tolist()
@@ -230,7 +206,6 @@ class Controls:
       else:
         self.steer_limited_by_safety = abs(CC.actuators.torque - CO.actuatorsOutput.torque) > 1e-2
 
-    # controlsState
     dat = messaging.new_message('controlsState')
     dat.valid = CS.canValid
     cs = dat.controlsState
@@ -256,14 +231,16 @@ class Controls:
 
     self.pm.send('controlsState', dat)
 
-    # controlsStateExt
+    # 包含新加入的三個多點擬合曲線參數 (Poly A, B, C) 供 UI 讀取
     dat = messaging.new_message('controlsStateExt')
     dat.valid = True
     dat.controlsStateExt.alkaActive = self.alka_active
     dat.controlsStateExt.lccCorrection = float(self.lcc.correction)
+    dat.controlsStateExt.lccPolyA = float(self.lcc.poly_a)
+    dat.controlsStateExt.lccPolyB = float(self.lcc.poly_b)
+    dat.controlsStateExt.lccPolyC = float(self.lcc.poly_c)
     self.pm.send('controlsStateExt', dat)
 
-    # carControl
     cc_send = messaging.new_message('carControl')
     cc_send.valid = CS.canValid
     cc_send.carControl = CC
