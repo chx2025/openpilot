@@ -58,7 +58,7 @@ FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
 
 # 動態前視距離參數
 MIN_LOOKAHEAD_M = 15.0      # 低速時最低保底前視距離
-LOOKAHEAD_TIME_SEC = 1.5    # 依據車速計算前視距離的秒數 (110km/h 約等於看 45m)
+LOOKAHEAD_TIME_SEC = 1.2    # 依據車速計算前視距離的秒數 (110km/h 約等於看 45m)
 
 FILTER_RC_SEC = 0.5      
 SHARP_TURN_CURVATURE = 0.06 
@@ -73,7 +73,7 @@ MAX_CORRECTION = 0.012  # 修正量曲率上限 (1/m)
 
 # 修正量變化率限制：不論目標修正量多大，每秒最多只能朝該方向移動這麼多曲率，
 # 用來抑制單幀雜訊點或權重/yield 切換造成的方向盤震盪
-MAX_CORRECTION_RATE = 0.004  # 1/m per sec
+MAX_CORRECTION_RATE = 0.008  # 1/m per sec
 
 YIELD_CONFIRM_SEC = 0.15
 ENGAGE_RAMP_SEC = 1.5
@@ -84,9 +84,9 @@ ENGAGE_RAMP_SEC = 1.5
 YIELD_MAX_PATH_STD = 0.35
 # pos_error（E2E 路徑與車道中心線在前視距離處的差距，單位公尺）小於此值時，
 # 視為正常誤差雜訊，不啟動 yield。
-YIELD_BREAK_IN_START = 0.15
+YIELD_BREAK_IN_START = 0.30
 # pos_error 大於等於此值時，break_in 比例封頂在 1.0（等於用滿 e2e_authority）。
-YIELD_BREAK_IN_FULL = 0.50
+YIELD_BREAK_IN_FULL = 0.60
 # 預設 e2e_authority：yield 機制最多能把 raw_correction 壓低的比例上限。
 # 1.0 代表信心度與偏移量都拉滿時，可以把 LCC 修正完全讓給 model。
 DEFAULT_E2E_AUTHORITY = 1.0
