@@ -18,7 +18,8 @@ from openpilot.common.filter_simple import FirstOrderFilter
 
 PARAM_REFRESH_SEC = 2.0
 
-# --- Debug log 設定（獨立 CSV，供路測後回傳分析用） ---
+# --- Debug log 設定 ---
+ENABLE_CSV_LOG = False  # <--- 新增：Log 記錄開關 (預設為 False 關閉)
 LOG_PATH = "/data/media/0/realdata/lcc_debug.csv"
 LOG_INTERVAL_SEC = 0.1  
 LOG_COLUMNS = [
@@ -31,8 +32,8 @@ LOG_COLUMNS = [
 ]
 
 # --- 系統內建參數 ---
-SPEED_ON_KPH = 20.0
-SPEED_OFF_KPH = 10.0
+SPEED_ON_KPH = 50.0
+SPEED_OFF_KPH = 40.0
 KPH_TO_MS = 1000.0 / 3600.0
 
 FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
@@ -43,7 +44,7 @@ LOOKAHEAD_TIME_SEC = 1.2    # 1.2 秒，進出彎更專注眼前的中心
 FILTER_RC_SEC = 0.5      
 SHARP_TURN_CURVATURE = 0.06 
 
-PROB_MIN = 0.3
+PROB_MIN = 0.4   # <--- 修改：標線最低信心度提升至 0.4 (低於此值 LCC 完全放手)
 PROB_FULL = 0.6
 
 LANE_WEIGHT_MAX = 0.90 
@@ -161,6 +162,9 @@ class LaneCenteringCorrector:
       return 1.0, -1.0, -1.0
 
   def _log_row(self, state: str, **fields) -> None:
+    if not ENABLE_CSV_LOG:
+      return
+    
     now = time.monotonic()
     state_changed = state != self._last_logged_state
     if not state_changed and (now - self._last_log_time) < LOG_INTERVAL_SEC:
@@ -185,6 +189,8 @@ class LaneCenteringCorrector:
       pass
 
   def _log_fallback(self, state: str, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor):
+    if not ENABLE_CSV_LOG:
+      return
     self._log_row(state, dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
                   speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
                   model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
@@ -313,15 +319,15 @@ class LaneCenteringCorrector:
     self.correction = self._filter.update(rate_limited_correction)
     self._active = True
 
-    # Log 內記錄的是最原始的 a, b, c (方便除錯抓漏)，傳給 UI 的是平滑後的 self.poly_a, b, c
-    self._log_row("ACTIVE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
-                  speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
-                  model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
-                  engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
-                  weight=self.weight, poly_a=a, poly_b=b, poly_c=c,
-                  lane_target_curv=lane_target_curvature,
-                  path_std=path_std, pos_error=pos_error, yield_factor=yield_factor,
-                  raw_correction=raw_correction, rate_limited_correction=rate_limited_correction,
-                  correction=self.correction)
+    if ENABLE_CSV_LOG:
+      self._log_row("ACTIVE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
+                    speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
+                    model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
+                    engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
+                    weight=self.weight, poly_a=a, poly_b=b, poly_c=c,
+                    lane_target_curv=lane_target_curvature,
+                    path_std=path_std, pos_error=pos_error, yield_factor=yield_factor,
+                    raw_correction=raw_correction, rate_limited_correction=rate_limited_correction,
+                    correction=self.correction)
     
     return self.correction
