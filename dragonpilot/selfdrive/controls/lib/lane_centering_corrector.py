@@ -49,8 +49,8 @@ LOG_COLUMNS = [
 ]
 
 # --- 系統內建參數 ---
-SPEED_ON_KPH = 40.0
-SPEED_OFF_KPH = 30.0
+SPEED_ON_KPH = 20.0
+SPEED_OFF_KPH = 10.0
 KPH_TO_MS = 1000.0 / 3600.0
 
 # 高速優化：將採樣點向遠處延伸 (10m ~ 50m)
