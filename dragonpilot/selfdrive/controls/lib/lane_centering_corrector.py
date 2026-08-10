@@ -38,7 +38,7 @@ KPH_TO_MS = 1000.0 / 3600.0
 FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
 
 MIN_LOOKAHEAD_M = 15.0
-LOOKAHEAD_TIME_SEC = 1.2    # 改為 1.2 秒，進出彎更專注眼前的中心
+LOOKAHEAD_TIME_SEC = 1.2    # 1.2 秒，進出彎更專注眼前的中心
 
 FILTER_RC_SEC = 0.5      
 SHARP_TURN_CURVATURE = 0.06 
@@ -56,10 +56,13 @@ YIELD_CONFIRM_SEC = 0.15
 ENGAGE_RAMP_SEC = 1.5
 
 YIELD_MAX_PATH_STD = 0.35
-# 大幅提高退讓門檻：偏離 20 公分才開始退讓，60 公分才完全放棄
 YIELD_BREAK_IN_START = 0.20
 YIELD_BREAK_IN_FULL = 0.60
 DEFAULT_E2E_AUTHORITY = 1.0
+
+# --- UI 視覺優化參數 ---
+UI_SMOOTH_TAU = 0.2          # UI 紅線的平滑濾波時間常數 (秒)，數值越大越平滑但會稍微延遲
+UI_MIN_DRAW_WEIGHT = 0.4     # 標線信心度低於此值時，直接隱藏紅線避免亂畫
 
 
 def _clip_interp(x, xp, fp):
@@ -118,6 +121,11 @@ class LaneCenteringCorrector:
   def _rate_limit(self, target: float, dt: float) -> float:
     max_delta = MAX_CORRECTION_RATE * dt
     return float(np.clip(target, self.correction - max_delta, self.correction + max_delta))
+
+  def _smooth(self, target: float, current: float, tau: float, dt: float) -> float:
+    """獨立計算的低通濾波，專門用來平滑 UI 的顯示軌跡"""
+    alpha = dt / max(tau + dt, 1e-5)
+    return (1.0 - alpha) * current + alpha * target
 
   def _yield_factor(self, model_v2, center_y_l: float, l: float, e2e_authority: float) -> tuple[float, float, float]:
     try:
@@ -222,6 +230,7 @@ class LaneCenteringCorrector:
     if is_yielding:
       self._active = False
       self.weight = 0.0
+      self.poly_a = self.poly_b = self.poly_c = 0.0  # 打方向燈退讓時隱藏 UI 紅線
       limited = self._rate_limit(0.0, dt)
       self.correction = self._filter.update(limited)
       self._log_fallback("YIELDING", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
@@ -244,6 +253,7 @@ class LaneCenteringCorrector:
 
     if self.weight <= 0.0:
       self._active = False
+      self.poly_a = self.poly_b = self.poly_c = 0.0  # 完全沒有信心時隱藏 UI 紅線
       limited = self._rate_limit(0.0, dt)
       self.correction = self._filter.update(limited)
       self._log_fallback("LOW_CONFIDENCE", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
@@ -263,6 +273,7 @@ class LaneCenteringCorrector:
 
     if len(valid_x) < 3:
       self._active = False
+      self.poly_a = self.poly_b = self.poly_c = 0.0  # 內插失敗時隱藏 UI 紅線
       limited = self._rate_limit(0.0, dt)
       self.correction = self._filter.update(limited)
       self._log_fallback("INTERP_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
@@ -271,10 +282,23 @@ class LaneCenteringCorrector:
     coeffs = np.polyfit(valid_x, center_y, 2)
     a, b, c = coeffs[0], coeffs[1], coeffs[2]
     
-    # 將擬合的真實參數存入 class 變數，供 controlsd 讀取
-    self.poly_a = float(a)
-    self.poly_b = float(b)
-    self.poly_c = float(c)
+    # --- UI 雙效合一：平滑過濾與信心度隱藏 ---
+    if self.weight >= UI_MIN_DRAW_WEIGHT:
+      if abs(self.poly_c) < 1e-7:  
+        # 當紅線剛從隱形變為出現的第一幀，直接賦值避免產生「從中間滑動過去」的動畫
+        self.poly_a = float(a)
+        self.poly_b = float(b)
+        self.poly_c = float(c)
+      else:
+        # 標線清晰時，對座標加上 UI 專屬低通濾波，確保螢幕上的紅線如絲綢般平滑
+        self.poly_a = self._smooth(float(a), self.poly_a, UI_SMOOTH_TAU, dt)
+        self.poly_b = self._smooth(float(b), self.poly_b, UI_SMOOTH_TAU, dt)
+        self.poly_c = self._smooth(float(c), self.poly_c, UI_SMOOTH_TAU, dt)
+    else:
+      # 當標線爛到讓信心度低於門檻時，直接歸零隱藏紅線
+      self.poly_a = 0.0
+      self.poly_b = 0.0
+      self.poly_c = 0.0
 
     L = max(MIN_LOOKAHEAD_M, v_ego * LOOKAHEAD_TIME_SEC)
     lane_target_curvature = (2.0 * a) + (2.0 * b / L) + (2.0 * c / (L ** 2))
@@ -289,6 +313,7 @@ class LaneCenteringCorrector:
     self.correction = self._filter.update(rate_limited_correction)
     self._active = True
 
+    # Log 內記錄的是最原始的 a, b, c (方便除錯抓漏)，傳給 UI 的是平滑後的 self.poly_a, b, c
     self._log_row("ACTIVE", dt=dt, v_kph=v_ego_kph, lat_active=lat_active,
                   speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
                   model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
