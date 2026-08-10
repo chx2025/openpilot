@@ -49,7 +49,7 @@ PROB_FULL = 0.6
 
 # 融合權重上限：當車道線極度清晰時，LCC 修正量最高佔最終軌跡的比例
 # 例如 0.25 代表 25% 依賴車道線幾何，75% 依賴 E2E 模型預測
-LANE_WEIGHT_MAX = 0.50 
+LANE_WEIGHT_MAX = 0.75 
 MAX_CORRECTION = 0.006  # 修正量曲率上限 (1/m)
 
 YIELD_CONFIRM_SEC = 0.15
