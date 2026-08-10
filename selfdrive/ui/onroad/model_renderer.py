@@ -17,21 +17,21 @@ MIN_DRAW_DISTANCE = 10.0
 MAX_DRAW_DISTANCE = 100.0
 
 # dp - LCC 疊加軌跡
-MAIN_PATH_HALF_WIDTH = 0.9  # 主路徑（綠色）半寬，跟 _update_model 裡用的值保持一致
-LCC_PATH_WIDTH_RATIO = 0.2  # LCC 疊加線寬度 = 主路徑寬度的 20%
+MAIN_PATH_HALF_WIDTH = 0.9  
+LCC_PATH_WIDTH_RATIO = 0.2  
 LCC_PATH_HALF_WIDTH = MAIN_PATH_HALF_WIDTH * LCC_PATH_WIDTH_RATIO
 LCC_PATH_COLOR = rl.Color(255, 0, 0, 180)  # 鮮紅色
 
 THROTTLE_COLORS = [
-  rl.Color(13, 248, 122, 102),   # HSLF(148/360, 0.94, 0.51, 0.4)
-  rl.Color(114, 255, 92, 89),    # HSLF(112/360, 1.0, 0.68, 0.35)
-  rl.Color(114, 255, 92, 0),     # HSLF(112/360, 1.0, 0.68, 0.0)
+  rl.Color(13, 248, 122, 102),   
+  rl.Color(114, 255, 92, 89),    
+  rl.Color(114, 255, 92, 0),     
 ]
 
 NO_THROTTLE_COLORS = [
-  rl.Color(242, 242, 242, 102), # HSLF(148/360, 0.0, 0.95, 0.4)
-  rl.Color(242, 242, 242, 89),  # HSLF(112/360, 0.0, 0.95, 0.35)
-  rl.Color(242, 242, 242, 0),   # HSLF(112/360, 0.0, 0.95, 0.0)
+  rl.Color(242, 242, 242, 102), 
+  rl.Color(242, 242, 242, 89),  
+  rl.Color(242, 242, 242, 0),   
 ]
 
 # dp
@@ -53,7 +53,6 @@ class LeadVehicle:
   glow: list[float] = field(default_factory=list)
   chevron: list[float] = field(default_factory=list)
   fill_alpha: int = 0
-  # dp
   v_rel: float = 0.0
   d_rel: float = 0.0
   x: float = 0.0
@@ -80,31 +79,27 @@ class ModelRenderer(Widget):
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
     self._path_offset_z = HEIGHT_INIT[0]
 
-    # Initialize ModelPoints objects
     self._path = ModelPoints()
-    self._path_corrected = ModelPoints()  # dp - LCC: model path bent by the LCC curvature trim
+    self._path_corrected = ModelPoints() 
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
     self._acceleration_x = np.empty((0,), dtype=np.float32)
 
-    # Transform matrix (3x3 for car space to screen space)
     self._car_space_transform = np.zeros((3, 3), dtype=np.float32)
     self._transform_dirty = True
     self._clip_region = None
 
     self._exp_gradient = Gradient(
-      start=(0.0, 1.0),  # Bottom of path
-      end=(0.0, 0.0),  # Top of path
+      start=(0.0, 1.0),  
+      end=(0.0, 0.0),  
       colors=[],
       stops=[],
     )
 
-    # Get longitudinal control setting from car parameters
     if car_params := Params().get("CarParams"):
       cp = messaging.log_from_bytes(car_params, car.CarParams)
       self._longitudinal_control = cp.openpilotLongitudinalControl
 
-    # dp
     self._dp_ui_rainbow_rotation = 0.0
     self._dp_ui_rainbow_gradient = None
 
@@ -115,17 +110,14 @@ class ModelRenderer(Widget):
   def _render(self, rect: rl.Rectangle):
     sm = ui_state.sm
 
-    # Check if data is up-to-date
     if (sm.recv_frame["liveCalibration"] < ui_state.started_frame or
         sm.recv_frame["modelV2"] < ui_state.started_frame):
       return
 
-    # Set up clipping region
     self._clip_region = rl.Rectangle(
       rect.x - CLIP_MARGIN, rect.y - CLIP_MARGIN, rect.width + 2 * CLIP_MARGIN, rect.height + 2 * CLIP_MARGIN
     )
 
-    # Update state
     self._experimental_mode = sm['selfdriveState'].experimentalMode
 
     live_calib = sm['liveCalibration']
@@ -139,11 +131,11 @@ class ModelRenderer(Widget):
     lead_one = radar_state.leadOne if radar_state else None
     render_lead_indicator = self._longitudinal_control and radar_state is not None
 
-    # Update model data when needed
     model_updated = sm.updated['modelV2']
     if model_updated or sm.updated['radarState'] or self._transform_dirty:
       if model_updated:
-        self._update_raw_points(model)
+        # 修改：將 sm 傳入，才能讀取到 ControlsStateExt 的即時係數
+        self._update_raw_points(model, sm)
 
       path_x_array = self._path.raw_points[:, 0]
       if path_x_array.size == 0:
@@ -154,31 +146,37 @@ class ModelRenderer(Widget):
         self._update_leads(radar_state, path_x_array)
       self._transform_dirty = False
 
-    # dp - draw live tracks before everything
     if ui_state.dp_ui_lead in [DpUiLeadMode.radar, DpUiLeadMode.all] and sm.valid['liveTracks']:
       self._draw_live_tracks(sm)
 
-    # Draw elements
     self._draw_lane_lines()
     self._draw_path(sm)
-    self._draw_lcc_path()  # dp - LCC: overlay of the actually-commanded (corrected) path
+    self._draw_lcc_path()  
 
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
 
-  def _update_raw_points(self, model):
+  # 修改：加入 sm 參數
+  def _update_raw_points(self, model, sm):
     """Update raw 3D points from model data"""
     self._path.raw_points = np.array([model.position.x, model.position.y, model.position.z], dtype=np.float32).T
 
-    # dp - LCC: 疊加軌跡 = 原始 model 路徑 + LCC 修正量造成的橫向偏移
-    # y = 0.5 * curvature * x^2 是計算修正量時用的 pure-pursuit 近似 (curvature = 2y/L^2) 的反函數，
-    # 純視覺化用途，跟實際下發給方向盤的曲率命令方向一致，但不代表精確物理路徑。
-    correction = ui_state.dp_lcc_correction
-    if abs(correction) > 1e-5 and self._path.raw_points.shape[0] > 0:
-      corrected = self._path.raw_points.copy()
-      x = corrected[:, 0]
-      corrected[:, 1] += 0.5 * correction * x ** 2
-      self._path_corrected.raw_points = corrected
+    # dp - LCC: 畫出真實的多點擬合目標曲線
+    ext = sm['controlsStateExt'] if sm.valid.get('controlsStateExt', False) else None
+    
+    # 只要 poly_a, poly_b, poly_c 有任一數值非零，就代表 LCC 有抓到真實車道曲線
+    if ext is not None and (abs(ext.lccPolyA) > 1e-7 or abs(ext.lccPolyB) > 1e-7 or abs(ext.lccPolyC) > 1e-7):
+      if self._path.raw_points.shape[0] > 0:
+        corrected = self._path.raw_points.copy()
+        x = corrected[:, 0]
+        
+        # 直接套用最真實的車道中心線幾何參數: y = ax^2 + bx + c
+        # 這條線將精準代表 LCC 認定的「完美置中軌跡」，這就是真正的所見即所得
+        corrected[:, 1] = (ext.lccPolyA * (x ** 2)) + (ext.lccPolyB * x) + ext.lccPolyC
+        
+        self._path_corrected.raw_points = corrected
+      else:
+        self._path_corrected.raw_points = np.empty((0, 3), dtype=np.float32)
     else:
       self._path_corrected.raw_points = np.empty((0, 3), dtype=np.float32)
 
@@ -193,7 +191,6 @@ class ModelRenderer(Widget):
     self._acceleration_x = np.array(model.acceleration.x, dtype=np.float32)
 
   def _update_leads(self, radar_state, path_x_array):
-    """Update positions of lead vehicles"""
     self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
     leads = [radar_state.leadOne, radar_state.leadTwo]
 
@@ -202,28 +199,23 @@ class ModelRenderer(Widget):
         d_rel, y_rel, v_rel = lead_data.dRel, lead_data.yRel, lead_data.vRel
         idx = self._get_path_length_idx(path_x_array, d_rel)
 
-        # Get z-coordinate from path at the lead vehicle position
         z = self._path.raw_points[idx, 2] if idx < len(self._path.raw_points) else 0.0
         point = self._map_to_screen(d_rel, -y_rel, z + self._path_offset_z)
         if point:
           self._lead_vehicles[i] = self._update_lead_vehicle(d_rel, v_rel, point, self._rect)
 
   def _update_model(self, lead, path_x_array):
-    """Update model visualization data based on model message"""
     max_distance = np.clip(path_x_array[-1], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
     max_idx = self._get_path_length_idx(self._lane_lines[0].raw_points[:, 0], max_distance)
 
-    # Update lane lines using raw points
     for i, lane_line in enumerate(self._lane_lines):
       lane_line.projected_points = self._map_line_to_polygon(
         lane_line.raw_points, 0.025 * self._lane_line_probs[i], 0.0, max_idx, max_distance
       )
 
-    # Update road edges using raw points
     for road_edge in self._road_edges:
       road_edge.projected_points = self._map_line_to_polygon(road_edge.raw_points, 0.025, 0.0, max_idx, max_distance)
 
-    # Update path using raw points
     if lead and lead.status:
       lead_d = lead.dRel * 2.0
       max_distance = np.clip(lead_d - min(lead_d * 0.35, 10.0), 0.0, max_distance)
@@ -233,8 +225,6 @@ class ModelRenderer(Widget):
       self._path.raw_points, MAIN_PATH_HALF_WIDTH, self._path_offset_z, max_idx, max_distance, allow_invert=False
     )
 
-    # dp - LCC: 疊加軌跡寬度 = 主路徑寬度的 20%，跟主路徑一樣經過同一套透視投影，
-    # 畫面上自然會呈現「越遠越細」的效果，不需要額外處理
     if self._path_corrected.raw_points.shape[0] > 0:
       corrected_max_idx = self._get_path_length_idx(self._path_corrected.raw_points[:, 0], max_distance)
       self._path_corrected.projected_points = self._map_line_to_polygon(
@@ -246,7 +236,6 @@ class ModelRenderer(Widget):
     self._update_experimental_gradient()
 
   def _update_experimental_gradient(self):
-    """Pre-calculate experimental mode gradient colors"""
     if not self._experimental_mode:
       return
 
@@ -257,35 +246,28 @@ class ModelRenderer(Widget):
 
     i = 0
     while i < max_len:
-      # Some points (screen space) are out of frame (rect space)
       track_y = self._path.projected_points[i][1]
       if track_y < self._rect.y or track_y > (self._rect.y + self._rect.height):
         i += 1
         continue
 
-      # Calculate color based on acceleration (0 is bottom, 1 is top)
       lin_grad_point = 1 - (track_y - self._rect.y) / self._rect.height
-
-      # speed up: 120, slow down: 0
       path_hue = np.clip(60 + self._acceleration_x[i] * 35, 0, 120)
 
       saturation = min(abs(self._acceleration_x[i] * 1.5), 1)
       lightness = np.interp(saturation, [0.0, 1.0], [0.95, 0.62])
       alpha = np.interp(lin_grad_point, [0.75 / 2.0, 0.75], [0.4, 0.0])
 
-      # Use HSL to RGB conversion
       color = self._hsla_to_color(path_hue / 360.0, saturation, lightness, alpha)
 
       gradient_stops.append(lin_grad_point)
       segment_colors.append(color)
 
-      # Skip a point, unless next is last
       i += 1 + (1 if (i + 2) < max_len else 0)
 
-    # Store the gradient in the path object
     self._exp_gradient = Gradient(
-      start=(0.0, 1.0),  # Bottom of path
-      end=(0.0, 0.0),  # Top of path
+      start=(0.0, 1.0),
+      end=(0.0, 0.0),
       colors=segment_colors,
       stops=gradient_stops,
     )
@@ -293,7 +275,6 @@ class ModelRenderer(Widget):
   def _update_lead_vehicle(self, d_rel, v_rel, point, rect):
     speed_buff, lead_buff = 10.0, 40.0
 
-    # Calculate fill alpha
     fill_alpha = 0
     if d_rel < lead_buff:
       fill_alpha = 255 * (1.0 - (d_rel / lead_buff))
@@ -301,7 +282,6 @@ class ModelRenderer(Widget):
         fill_alpha += 255 * (-1 * (v_rel / speed_buff))
       fill_alpha = min(fill_alpha, 255)
 
-    # Calculate size and position
     sz = np.clip((25 * 30) / (d_rel / 3 + 30), 15.0, 30.0) * 2.35
     x = np.clip(point[0], 0.0, rect.width - sz / 2)
     y = min(point[1], rect.height - sz * 0.6)
@@ -315,7 +295,6 @@ class ModelRenderer(Widget):
     return LeadVehicle(glow=glow, chevron=chevron, fill_alpha=int(fill_alpha), d_rel=d_rel, x=x, y=y, sz=sz, v_rel=v_rel)
 
   def _draw_lane_lines(self):
-    """Draw lane lines and road edges"""
     for i, lane_line in enumerate(self._lane_lines):
       if lane_line.projected_points.size == 0:
         continue
@@ -333,7 +312,6 @@ class ModelRenderer(Widget):
       draw_polygon(self._rect, road_edge.projected_points, color)
 
   def _draw_path(self, sm):
-    """Draw path with dynamic coloring based on mode and throttle state."""
     if not self._path.projected_points.size:
       return
 
@@ -348,31 +326,27 @@ class ModelRenderer(Widget):
     self._blend_filter.update(int(allow_throttle))
 
     if self._experimental_mode:
-      # Draw with acceleration coloring
       if len(self._exp_gradient.colors) > 1:
         draw_polygon(self._rect, self._path.projected_points, gradient=self._exp_gradient)
       else:
         draw_polygon(self._rect, self._path.projected_points, rl.Color(255, 255, 255, 30))
     else:
-      # Blend throttle/no throttle colors based on transition
       blend_factor = round(self._blend_filter.x * 100) / 100
       blended_colors = self._blend_colors(NO_THROTTLE_COLORS, THROTTLE_COLORS, blend_factor)
       gradient = Gradient(
-        start=(0.0, 1.0),  # Bottom of path
-        end=(0.0, 0.0),  # Top of path
+        start=(0.0, 1.0),
+        end=(0.0, 0.0),
         colors=blended_colors,
         stops=[0.0, 0.5, 1.0],
       )
       draw_polygon(self._rect, self._path.projected_points, gradient=gradient)
 
   def _draw_lcc_path(self):
-    """dp - LCC: 疊加畫出 LCC 修正後的實際命令路徑（半透明鮮紅色細線）"""
     if not self._path_corrected.projected_points.size:
       return
     draw_polygon(self._rect, self._path_corrected.projected_points, LCC_PATH_COLOR)
 
   def _draw_lead_indicator(self):
-    # Draw lead vehicles if available
     for lead in self._lead_vehicles:
       if not lead.glow or not lead.chevron:
         continue
@@ -384,15 +358,12 @@ class ModelRenderer(Widget):
         start_y = lead.y
 
         car_state = ui_state.sm['carState']
-        # v
         v = lead.v_rel + car_state.vEgo
         v_str = f"{v * 3.6:.0f} kph" if ui_state.is_metric else f"{v * 2.237:.0f} mph"
-        # d_rel
         dist_str = f"{lead.d_rel:.1f} m" if ui_state.is_metric else f"{lead.d_rel * 3.28084:.1f} ft"
 
         self._dp_paint_centered_lead_text(f"{v_str} | {dist_str}", 40, lead.x, start_y + lead.sz)
 
-        # ttc
         ttc = (lead.d_rel / car_state.vEgo) if car_state.vEgo > 0 else float("NaN")
         if ttc < 5.:
           ttc_str = f"{ttc:.1f}s"
@@ -400,14 +371,12 @@ class ModelRenderer(Widget):
 
   @staticmethod
   def _get_path_length_idx(pos_x_array: np.ndarray, path_distance: float) -> int:
-    """Get the index corresponding to the given path distance"""
     if len(pos_x_array) == 0:
       return 0
     indices = np.where(pos_x_array <= path_distance)[0]
     return indices[-1] if indices.size > 0 else 0
 
   def _map_to_screen(self, in_x, in_y, in_z):
-    """Project a point in car space to screen space"""
     input_pt = np.array([in_x, in_y, in_z])
     pt = self._car_space_transform @ input_pt
 
@@ -423,14 +392,11 @@ class ModelRenderer(Widget):
     return (x, y)
 
   def _map_line_to_polygon(self, line: np.ndarray, y_off: float, z_off: float, max_idx: int, max_distance: float, allow_invert: bool = True) -> np.ndarray:
-    """Convert 3D line to 2D polygon for rendering."""
     if line.shape[0] == 0:
       return np.empty((0, 2), dtype=np.float32)
 
-    # Slice points and filter non-negative x-coordinates
     points = line[:max_idx + 1]
 
-    # Interpolate around max_idx so path end is smooth (max_distance is always >= p0.x)
     if 0 < max_idx < line.shape[0] - 1:
       p0 = line[max_idx]
       p1 = line[max_idx + 1]
@@ -445,32 +411,26 @@ class ModelRenderer(Widget):
       return np.empty((0, 2), dtype=np.float32)
 
     N = points.shape[0]
-    # Generate left and right 3D points in one array using broadcasting
     offsets = np.array([[0, -y_off, z_off], [0, y_off, z_off]], dtype=np.float32)
-    points_3d = points[None, :, :] + offsets[:, None, :]  # Shape: 2xNx3
-    points_3d = points_3d.reshape(2 * N, 3)  # Shape: (2*N)x3
+    points_3d = points[None, :, :] + offsets[:, None, :] 
+    points_3d = points_3d.reshape(2 * N, 3) 
 
-    # Transform all points to projected space in one operation
-    proj = self._car_space_transform @ points_3d.T  # Shape: 3x(2*N)
+    proj = self._car_space_transform @ points_3d.T 
     proj = proj.reshape(3, 2, N)
     left_proj = proj[:, 0, :]
     right_proj = proj[:, 1, :]
 
-    # Filter points where z is sufficiently large
     valid_proj = (np.abs(left_proj[2]) >= 1e-6) & (np.abs(right_proj[2]) >= 1e-6)
     if not np.any(valid_proj):
       return np.empty((0, 2), dtype=np.float32)
 
-    # Compute screen coordinates
     left_screen = left_proj[:2, valid_proj] / left_proj[2, valid_proj][None, :]
     right_screen = right_proj[:2, valid_proj] / right_proj[2, valid_proj][None, :]
 
-    # Define clip region bounds
     clip = self._clip_region
     x_min, x_max = clip.x, clip.x + clip.width
     y_min, y_max = clip.y, clip.y + clip.height
 
-    # Filter points within clip region
     left_in_clip = (
       (left_screen[0] >= x_min) & (left_screen[0] <= x_max) &
       (left_screen[1] >= y_min) & (left_screen[1] <= y_max)
@@ -484,13 +444,11 @@ class ModelRenderer(Widget):
     if not np.any(both_in_clip):
       return np.empty((0, 2), dtype=np.float32)
 
-    # Select valid and clipped points
     left_screen = left_screen[:, both_in_clip]
     right_screen = right_screen[:, both_in_clip]
 
-    # Handle Y-coordinate inversion on hills
     if not allow_invert and left_screen.shape[1] > 1:
-      y = left_screen[1, :]  # y-coordinates
+      y = left_screen[1, :] 
       keep = y == np.minimum.accumulate(y)
       if not np.any(keep):
         return np.empty((0, 2), dtype=np.float32)
@@ -525,7 +483,6 @@ class ModelRenderer(Widget):
     ) for start, end in zip(begin_colors, end_colors, strict=True)]
 
   def _update_rainbow_gradient(self, v_ego):
-    # Scroll speed
     rotation_speed = max(0.01, v_ego) / gui_app.target_fps / DP_RAINBOW_SCROLL_SPEED_FACTOR
     self._dp_ui_rainbow_rotation += rotation_speed
     if self._dp_ui_rainbow_rotation > 1.0:
@@ -535,7 +492,6 @@ class ModelRenderer(Widget):
 
     hues = (gradient_stops * DP_RAINBOW_NUM_REPEATS + self._dp_ui_rainbow_rotation) % 1.0
 
-    # Vectorized hsv_to_rgb
     i = np.floor(hues * DP_RAINBOW_HUE_SECTORS).astype(np.uint8)
     f = hues * DP_RAINBOW_HUE_SECTORS - i
     q = 1 - f
