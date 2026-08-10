@@ -3,13 +3,10 @@
 Lane Centering Corrector (LCC) - 多點曲線擬合與動態融合版 (高速優化)
 
 將 10~50m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
-y = ax^2 + bx + c 的二次曲線，分離出「道路曲率(a)」、「航向相關斜率(b)」與「橫向偏移(c)」。
-隨後算出目標居中曲率，並依據標線信心度與 Model 原始輸出的 desiredCurvature 進行按比例融合。
-針對高速公路行駛優化：引入動態前視距離 (車速 x 1.5秒，夾在取樣範圍內)，車速越快看得越遠。
-
-注意：最終目標曲率仍是在 L 處對擬合曲線取值（2a + 2b/L + 2c/L²），b 項並未被捨棄，
-所以航向雜訊沒有被數學上完全消除，只是靠多點擬合的平均效果 + 與 model 曲率做差值融合
-（且封頂 50% 權重）大幅降低了對單一雜訊點的敏感度，實測比單點量測穩定很多。
+y = ax^2 + bx + c 的二次曲線。藉此精準分離「道路曲率(a)」、「航向誤差(b)」與「橫向偏移(c)」。
+針對高速公路行駛優化：引入動態前視距離 (車速 x 1.5秒)，車速越快看得越遠。
+隨後算出目標居中曲率，並依據標線信心度與 Model 原始輸出的 desiredCurvature 進行按比例融合，
+提供極度平滑且不會因座標系旋轉而自激振盪的居中修正。
 """
 
 import os
@@ -28,7 +25,7 @@ LOG_COLUMNS = [
   "t", "dt", "v_kph", "state",
   "lat_active", "speed_gate", "sharp_turn", "model_curvature",
   "yield_hold_timer", "engage_ramp_timer", "ramp_factor",
-  "weight", "poly_a", "poly_b", "poly_c", "lane_target_curv", "lane_width",
+  "weight", "poly_a", "poly_b", "poly_c", "lane_target_curv",
   "raw_correction", "correction",
 ]
 
@@ -42,7 +39,6 @@ FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
 
 # 動態前視距離參數
 MIN_LOOKAHEAD_M = 15.0      # 低速時最低保底前視距離
-MAX_LOOKAHEAD_M = 50.0      # 上限夾在 FIT_X 取樣範圍內（10~50m），避免高速時二次曲線外插失真
 LOOKAHEAD_TIME_SEC = 1.5    # 依據車速計算前視距離的秒數 (110km/h 約等於看 45m)
 
 FILTER_RC_SEC = 0.5      
@@ -50,12 +46,6 @@ SHARP_TURN_CURVATURE = 0.06
 
 PROB_MIN = 0.3
 PROB_FULL = 0.6
-
-# 車道寬度合理性檢查（借用 starpilot 版）：任一取樣點算出的車道寬度超出這個範圍，
-# 該點視為異常（可能是鄰車道線混入、匝道分岔、標線斷裂錯誤配對等），直接丟棄該點
-# 不納入曲線擬合，不是整幀直接放棄——只要還有 >=3 個合理點，其餘邏輯照常運作。
-MIN_LANE_WIDTH = 2.6  # m
-MAX_LANE_WIDTH = 4.8  # m
 
 # 融合權重上限：當車道線極度清晰時，LCC 修正量最高佔最終軌跡的比例
 # 例如 0.25 代表 25% 依賴車道線幾何，75% 依賴 E2E 模型預測
@@ -143,8 +133,8 @@ class LaneCenteringCorrector:
                   speed_gate=self._speed_gate, sharp_turn=is_sharp_turn,
                   model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
                   engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
-                  weight=0.0, poly_a=0.0, poly_b=0.0, poly_c=0.0,
-                  lane_target_curv=0.0, lane_width=0.0, raw_correction=0.0, correction=self.correction)
+                  weight=0.0, poly_a=0.0, poly_b=0.0, poly_c=0.0, 
+                  lane_target_curv=0.0, raw_correction=0.0, correction=self.correction)
 
   def update(self, model_v2, v_ego: float, lat_active: bool, dt: float,
              left_blinker: bool = False, right_blinker: bool = False,
@@ -211,24 +201,18 @@ class LaneCenteringCorrector:
 
     lll = lane_lines[1]
     rll = lane_lines[2]
-
-    # 取樣 10~50m 多個座標點計算中心，並用車道寬度合理性檢查濾掉異常點
-    # （device frame y 正值為左側，左線 y 應該大於右線 y，width = l_y - r_y）
+    
+    # 取樣 10~50m 多個座標點計算中心
     valid_x = []
     center_y = []
-    lane_width_sample = 0.0
     for x in FIT_X:
       l_y = _clip_interp(x, lll.x, lll.y)
       r_y = _clip_interp(x, rll.x, rll.y)
       if l_y is not None and r_y is not None:
-        width = l_y - r_y
-        if MIN_LANE_WIDTH <= width <= MAX_LANE_WIDTH:
-          valid_x.append(x)
-          center_y.append((l_y + r_y) / 2.0)
-          if lane_width_sample == 0.0:
-            lane_width_sample = width  # 記錄第一個通過檢查的取樣點寬度，供 log 參考
+        valid_x.append(x)
+        center_y.append((l_y + r_y) / 2.0)
 
-    # 二次曲線擬合需要至少 3 個有效點（含車道寬度合理性檢查後）
+    # 二次曲線擬合需要至少 3 個有效點
     if len(valid_x) < 3:
       self._active = False
       self.correction = self._filter.update(0.0)
@@ -239,8 +223,8 @@ class LaneCenteringCorrector:
     coeffs = np.polyfit(valid_x, center_y, 2)
     a, b, c = coeffs[0], coeffs[1], coeffs[2]
 
-    # 高速優化：依據車速計算動態前視距離 (L)，夾在 FIT_X 取樣範圍內避免外插失真
-    L = float(np.clip(v_ego * LOOKAHEAD_TIME_SEC, MIN_LOOKAHEAD_M, MAX_LOOKAHEAD_M))
+    # 高速優化：依據車速計算動態前視距離 (L)
+    L = max(MIN_LOOKAHEAD_M, v_ego * LOOKAHEAD_TIME_SEC)
     
     # 利用公式：曲率 = 2a + 2b/L + 2c/L^2，算出最符合車道中心的理論曲率
     lane_target_curvature = (2.0 * a) + (2.0 * b / L) + (2.0 * c / (L ** 2))
@@ -257,7 +241,7 @@ class LaneCenteringCorrector:
                   model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
                   engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
                   weight=self.weight, poly_a=a, poly_b=b, poly_c=c,
-                  lane_target_curv=lane_target_curvature, lane_width=lane_width_sample,
+                  lane_target_curv=lane_target_curvature, 
                   raw_correction=raw_correction, correction=self.correction)
     
     return self.correction
