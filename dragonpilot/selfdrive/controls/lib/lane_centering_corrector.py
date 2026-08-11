@@ -32,8 +32,8 @@ LOG_COLUMNS = [
 ]
 
 # --- 系統內建參數 ---
-SPEED_ON_KPH = 50.0
-SPEED_OFF_KPH = 40.0
+SPEED_ON_KPH = 20.0
+SPEED_OFF_KPH = 10.0
 KPH_TO_MS = 1000.0 / 3600.0
 
 FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
