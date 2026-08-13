@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Lane Centering Corrector (LCC) v2.1 - 多點曲線擬合與動態融合版 (高速優化 + Hysteresis + Soft Decay + Rate Limiter + E2E Yield)
+Lane Centering Corrector (LCC) v2.2 - 台灣道路在地化特調版 
+(混合信心度演算法 + 快速重啟 + Soft Decay + E2E Yield)
 
 將 10~50m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
 y = ax^2 + bx + c 的二次曲線。藉此精準分離「道路曲率(a)」、「航向誤差(b)」與「橫向偏移(c)」。
-針對高速公路行駛優化：引入動態前視距離 (車速 x 1.2秒)，車速越快看得越遠。
-隨後算出目標居中曲率，並依據標線信心度與 Model 原始輸出的 desiredCurvature 進行按比例融合，
-提供極度平滑且不會因座標系旋轉而自激振盪的居中修正。
+針對台灣複雜路況優化：
+1. 引入「平均信心度 + 單邊可靠性限制」，處理單側標線不清或斑駁的問題。
+2. NO_LANE_DATA 改為平滑退場 (Soft Decay) 並保留 Ramp，適應無標線大路口。
+3. 縮短 ENGAGE_RAMP_SEC 至 0.8s，提升閃避機車/障礙物後的恢復敏捷度。
 """
 
 import os
@@ -19,7 +21,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 PARAM_REFRESH_SEC = 2.0
 
 # --- Debug log 設定 ---
-ENABLE_CSV_LOG = False  # <--- 新增：Log 記錄開關 (預設為 False 關閉)
+ENABLE_CSV_LOG = False
 LOG_PATH = "/data/media/0/realdata/lcc_debug.csv"
 LOG_INTERVAL_SEC = 0.1  
 LOG_COLUMNS = [
@@ -39,29 +41,24 @@ KPH_TO_MS = 1000.0 / 3600.0
 FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
 
 MIN_LOOKAHEAD_M = 15.0
-LOOKAHEAD_TIME_SEC = 1.2    # 1.2 秒，進出彎更專注眼前的中心
+LOOKAHEAD_TIME_SEC = 1.2
 
 FILTER_RC_SEC = 0.5      
 
-# --- 急彎判定：改用 hysteresis (進彎/出彎門檻分開)，避免在門檻附近抖動
-# 造成 LCC 反覆 enable/disable、correction 反覆歸零重爬 ramp
-SHARP_TURN_CURVATURE_ENTER = 0.06   # 高於此值才判定為急彎，開始放手
-SHARP_TURN_CURVATURE_EXIT = 0.05    # 低於此值才判定彎已出完，允許重新介入
+# --- 急彎判定：Hysteresis (遲滯) 機制 ---
+SHARP_TURN_CURVATURE_ENTER = 0.06
+SHARP_TURN_CURVATURE_EXIT = 0.05
 
-PROB_MIN = 0.4   # <--- 修改：標線最低信心度提升至 0.4 (低於此值 LCC 完全放手)
+PROB_MIN = 0.4
 PROB_FULL = 0.6
 
 LANE_WEIGHT_MAX = 0.90 
 MAX_CORRECTION = 0.012  
-
-# 加快方向盤回正的反應速度
 MAX_CORRECTION_RATE = 0.008  
 
 YIELD_CONFIRM_SEC = 0.15
-ENGAGE_RAMP_SEC = 0.8  # 台灣優化：縮短為 0.8 秒，讓閃避障礙物後 LCC 更快接回中心
+ENGAGE_RAMP_SEC = 0.8  # 縮短至 0.8 秒，提升重新介入的敏捷度
 
-# 暫時性放手 (急彎 / 車速門檻) 持續超過這麼久，才真正歸零 engage ramp 計時器，
-# 避免短暫抖動讓 1.5 秒的 ramp 每次都要重爬
 SOFT_DISABLE_HOLD_SEC = 0.4
 
 YIELD_MAX_PATH_STD = 0.35
@@ -70,8 +67,8 @@ YIELD_BREAK_IN_FULL = 0.60
 DEFAULT_E2E_AUTHORITY = 1.0
 
 # --- UI 視覺優化參數 ---
-UI_SMOOTH_TAU = 0.2          # UI 紅線的平滑濾波時間常數 (秒)，數值越大越平滑但會稍微延遲
-UI_MIN_DRAW_WEIGHT = 0.4     # 標線信心度低於此值時，直接隱藏紅線避免亂畫
+UI_SMOOTH_TAU = 0.2
+UI_MIN_DRAW_WEIGHT = 0.4
 
 
 def _clip_interp(x, xp, fp):
@@ -93,7 +90,6 @@ class LaneCenteringCorrector:
     self._filter = FirstOrderFilter(0.0, FILTER_RC_SEC, 0.01)
     self.correction = 0.0
     
-    # 曝露多點擬合參數供 UI 畫線使用
     self.poly_a = 0.0
     self.poly_b = 0.0
     self.poly_c = 0.0
@@ -136,12 +132,10 @@ class LaneCenteringCorrector:
     return float(np.clip(target, self.correction - max_delta, self.correction + max_delta))
 
   def _smooth(self, target: float, current: float, tau: float, dt: float) -> float:
-    """獨立計算的低通濾波，專門用來平滑 UI 的顯示軌跡"""
     alpha = dt / max(tau + dt, 1e-5)
     return (1.0 - alpha) * current + alpha * target
 
   def _update_sharp_turn(self, model_curvature: float) -> bool:
-    """帶 hysteresis 的急彎判定，避免在單一門檻附近抖動導致反覆 enable/disable"""
     c = abs(model_curvature)
     if self._sharp_turn_latched:
       if c < SHARP_TURN_CURVATURE_EXIT:
@@ -152,8 +146,6 @@ class LaneCenteringCorrector:
     return self._sharp_turn_latched
 
   def _decay(self, dt: float) -> float:
-    """暫時性放手 (soft invalid) 時，correction 走 rate limiter + filter 平滑退場，
-    而非瞬間歸零，避免對下游 LaC 造成階躍輸入 ('扭過頭' 的成因之一)"""
     limited = self._rate_limit(0.0, dt)
     return self._filter.update(limited)
 
@@ -242,7 +234,7 @@ class LaneCenteringCorrector:
 
     model_curvature = getattr(model_v2.action, "desiredCurvature", 0.0) if lat_active else 0.0
 
-    # --- 硬性停用：使用者關閉 / 尚未接管，直接完全歸零重置狀態 ---
+    # --- 硬性停用 ---
     hard_invalid = (not self._enabled or not lat_active)
     if hard_invalid:
       _state = "DISABLED" if not self._enabled else "NOT_LAT_ACTIVE"
@@ -252,11 +244,7 @@ class LaneCenteringCorrector:
 
     is_sharp_turn = self._update_sharp_turn(model_curvature)
 
-    # --- 暫時性放手：車速門檻 / 急彎，correction 一律平滑衰減到 0。
-    #
-    # 重要：急彎本身「不」重設 engage ramp。急彎可能持續數秒，若每次
-    # 出彎都從 0 開始爬 1.5 秒，會再次造成「大彎後方向盤反應慢」的感覺。
-    # 車速 gate 則維持原本的保守行為：低速持續超過 HOLD 時才重設 ramp。
+    # --- 暫時性放手 (Soft Invalid) ---
     soft_invalid = (not self._speed_gate) or is_sharp_turn
     if soft_invalid:
       _state = "SPEED_GATE_OFF" if not self._speed_gate else "SHARP_TURN"
@@ -266,7 +254,6 @@ class LaneCenteringCorrector:
         if self._inactive_timer >= SOFT_DISABLE_HOLD_SEC:
           self._engage_ramp_timer = 0.0
       else:
-        # 急彎不是「重新接管」；保留 ramp，避免出彎後重新爬 0.8 秒。
         self._inactive_timer = 0.0
 
       self._active = False
@@ -281,7 +268,7 @@ class LaneCenteringCorrector:
     self._engage_ramp_timer += dt
     ramp_factor = float(np.clip(self._engage_ramp_timer / ENGAGE_RAMP_SEC, 0.0, 1.0))
 
-    raw_yield_condition = (left_blinker or right_blinker) and steering_pressed
+    raw_yield_condition = steering_pressed  # 閃避障礙物不強求方向燈
     if raw_yield_condition:
       self._yield_hold_timer += dt
     else:
@@ -291,7 +278,7 @@ class LaneCenteringCorrector:
     if is_yielding:
       self._active = False
       self.weight = 0.0
-      self.poly_a = self.poly_b = self.poly_c = 0.0  # 打方向燈退讓時隱藏 UI 紅線
+      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
       self._log_fallback("YIELDING", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
@@ -299,9 +286,8 @@ class LaneCenteringCorrector:
     lane_lines = model_v2.laneLines
     lane_line_probs = model_v2.laneLineProbs
 
+    # --- NO_LANE_DATA 改為 Soft Decay 平滑退場 ---
     if len(lane_lines) < 3 or len(lane_line_probs) < 3:
-      # 暫時缺資料不是硬 disengage。保持 ramp / hysteresis 狀態，讓 correction
-      # 平滑退出，避免大彎中偶發一幀資料不足就把 LCC 整個 reset。
       self._active = False
       self.weight = 0.0
       self.poly_a = self.poly_b = self.poly_c = 0.0
@@ -309,17 +295,22 @@ class LaneCenteringCorrector:
       self._log_fallback("NO_LANE_DATA", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
-    lll_prob = lane_line_probs[1]
-    rll_prob = lane_line_probs[2]
+    # --- 混合信心度算法 (平均值 + 單邊可靠性限制) ---
+    lll_prob = float(np.clip(lane_line_probs[1], 0.0, 1.0))
+    rll_prob = float(np.clip(lane_line_probs[2], 0.0, 1.0))
     
-    # 台灣優化：改為平均信心度。當單邊標線模糊但另一邊清晰時，仍能維持一定權重，避免直接放手
-    mean_prob = (lll_prob + rll_prob) / 2.0
-    confidence = float(np.clip((mean_prob - PROB_MIN) / (PROB_FULL - PROB_MIN), 0.0, 1.0))
+    mean_prob = 0.5 * (lll_prob + rll_prob)
+    min_prob = min(lll_prob, rll_prob)
+    
+    confidence_mean = float(np.clip((mean_prob - PROB_MIN) / (PROB_FULL - PROB_MIN), 0.0, 1.0))
+    single_side_factor = float(np.clip(min_prob / PROB_MIN, 0.0, 1.0))
+    
+    confidence = confidence_mean * (0.65 + 0.35 * single_side_factor)
     self.weight = confidence * LANE_WEIGHT_MAX
 
     if self.weight <= 0.0:
       self._active = False
-      self.poly_a = self.poly_b = self.poly_c = 0.0  # 完全沒有信心時隱藏 UI 紅線
+      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
       self._log_fallback("LOW_CONFIDENCE", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
@@ -338,7 +329,7 @@ class LaneCenteringCorrector:
 
     if len(valid_x) < 3:
       self._active = False
-      self.poly_a = self.poly_b = self.poly_c = 0.0  # 內插失敗時隱藏 UI 紅線
+      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
       self._log_fallback("INTERP_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
@@ -349,7 +340,6 @@ class LaneCenteringCorrector:
         raise ValueError("invalid lane polynomial")
       a, b, c = (float(coeffs[0]), float(coeffs[1]), float(coeffs[2]))
     except (TypeError, ValueError, np.linalg.LinAlgError):
-      # 擬合失敗同樣視為暫時性資料問題，不清掉 engage ramp。
       self._active = False
       self.weight = 0.0
       self.poly_a = self.poly_b = self.poly_c = 0.0
@@ -357,20 +347,17 @@ class LaneCenteringCorrector:
       self._log_fallback("POLYFIT_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
     
-    # --- UI 雙效合一：平滑過濾與信心度隱藏 ---
+    # --- UI 平滑過濾 ---
     if self.weight >= UI_MIN_DRAW_WEIGHT:
       if abs(self.poly_c) < 1e-7:  
-        # 當紅線剛從隱形變為出現的第一幀，直接賦值避免產生「從中間滑動過去」的動畫
         self.poly_a = float(a)
         self.poly_b = float(b)
         self.poly_c = float(c)
       else:
-        # 標線清晰時，對座標加上 UI 專屬低通濾波，確保螢幕上的紅線如絲綢般平滑
         self.poly_a = self._smooth(float(a), self.poly_a, UI_SMOOTH_TAU, dt)
         self.poly_b = self._smooth(float(b), self.poly_b, UI_SMOOTH_TAU, dt)
         self.poly_c = self._smooth(float(c), self.poly_c, UI_SMOOTH_TAU, dt)
     else:
-      # 當標線爛到讓信心度低於門檻時，直接歸零隱藏紅線
       self.poly_a = 0.0
       self.poly_b = 0.0
       self.poly_c = 0.0
