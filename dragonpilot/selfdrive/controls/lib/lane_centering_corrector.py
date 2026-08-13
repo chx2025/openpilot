@@ -42,7 +42,11 @@ MIN_LOOKAHEAD_M = 15.0
 LOOKAHEAD_TIME_SEC = 1.2    # 1.2 秒，進出彎更專注眼前的中心
 
 FILTER_RC_SEC = 0.5      
-SHARP_TURN_CURVATURE = 0.06 
+
+# --- 急彎判定：改用 hysteresis (進彎/出彎門檻分開)，避免在門檻附近抖動
+# 造成 LCC 反覆 enable/disable、correction 反覆歸零重爬 ramp
+SHARP_TURN_CURVATURE_ENTER = 0.06   # 高於此值才判定為急彎，開始放手
+SHARP_TURN_CURVATURE_EXIT = 0.05    # 低於此值才判定彎已出完，允許重新介入
 
 PROB_MIN = 0.4   # <--- 修改：標線最低信心度提升至 0.4 (低於此值 LCC 完全放手)
 PROB_FULL = 0.6
@@ -55,6 +59,10 @@ MAX_CORRECTION_RATE = 0.008
 
 YIELD_CONFIRM_SEC = 0.15
 ENGAGE_RAMP_SEC = 1.5
+
+# 暫時性放手 (急彎 / 車速門檻) 持續超過這麼久，才真正歸零 engage ramp 計時器，
+# 避免短暫抖動讓 1.5 秒的 ramp 每次都要重爬
+SOFT_DISABLE_HOLD_SEC = 0.4
 
 YIELD_MAX_PATH_STD = 0.35
 YIELD_BREAK_IN_START = 0.20
@@ -95,6 +103,8 @@ class LaneCenteringCorrector:
     self._speed_gate = False  
     self._yield_hold_timer = 0.0  
     self._engage_ramp_timer = 0.0  
+    self._sharp_turn_latched = False
+    self._inactive_timer = 0.0
 
     self._last_log_time = 0.0
     self._last_logged_state = None
@@ -118,6 +128,8 @@ class LaneCenteringCorrector:
     self._speed_gate = False
     self._yield_hold_timer = 0.0
     self._engage_ramp_timer = 0.0
+    self._sharp_turn_latched = False
+    self._inactive_timer = 0.0
 
   def _rate_limit(self, target: float, dt: float) -> float:
     max_delta = MAX_CORRECTION_RATE * dt
@@ -127,6 +139,23 @@ class LaneCenteringCorrector:
     """獨立計算的低通濾波，專門用來平滑 UI 的顯示軌跡"""
     alpha = dt / max(tau + dt, 1e-5)
     return (1.0 - alpha) * current + alpha * target
+
+  def _update_sharp_turn(self, model_curvature: float) -> bool:
+    """帶 hysteresis 的急彎判定，避免在單一門檻附近抖動導致反覆 enable/disable"""
+    c = abs(model_curvature)
+    if self._sharp_turn_latched:
+      if c < SHARP_TURN_CURVATURE_EXIT:
+        self._sharp_turn_latched = False
+    else:
+      if c > SHARP_TURN_CURVATURE_ENTER:
+        self._sharp_turn_latched = True
+    return self._sharp_turn_latched
+
+  def _decay(self, dt: float) -> float:
+    """暫時性放手 (soft invalid) 時，correction 走 rate limiter + filter 平滑退場，
+    而非瞬間歸零，避免對下游 LaC 造成階躍輸入 ('扭過頭' 的成因之一)"""
+    limited = self._rate_limit(0.0, dt)
+    return self._filter.update(limited)
 
   def _yield_factor(self, model_v2, center_y_l: float, l: float, e2e_authority: float) -> tuple[float, float, float]:
     try:
@@ -212,17 +241,34 @@ class LaneCenteringCorrector:
       self._speed_gate = False
 
     model_curvature = getattr(model_v2.action, "desiredCurvature", 0.0) if lat_active else 0.0
-    is_sharp_turn = abs(model_curvature) > SHARP_TURN_CURVATURE
 
-    hard_invalid = (not self._enabled or not lat_active or not self._speed_gate or is_sharp_turn)
+    # --- 硬性停用：使用者關閉 / 尚未接管，直接完全歸零重置狀態 ---
+    hard_invalid = (not self._enabled or not lat_active)
     if hard_invalid:
-      _state = "DISABLED" if not self._enabled else \
-               "NOT_LAT_ACTIVE" if not lat_active else \
-               "SPEED_GATE_OFF" if not self._speed_gate else "SHARP_TURN"
+      _state = "DISABLED" if not self._enabled else "NOT_LAT_ACTIVE"
       self.reset()
-      self._log_fallback(_state, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, 0.0)
+      self._log_fallback(_state, dt, v_ego_kph, lat_active, False, model_curvature, 0.0)
       return 0.0
 
+    is_sharp_turn = self._update_sharp_turn(model_curvature)
+
+    # --- 暫時性放手：車速門檻 / 急彎，correction 平滑衰減到 0，
+    # 且只有持續超過 SOFT_DISABLE_HOLD_SEC 才重置 engage ramp 計時器，
+    # 避免門檻附近抖動或短暫急彎，讓修正力道每次都要重新爬 1.5 秒 ramp
+    # (這正是「大彎時方向盤比較慢才轉動」的成因)
+    soft_invalid = (not self._speed_gate) or is_sharp_turn
+    if soft_invalid:
+      _state = "SPEED_GATE_OFF" if not self._speed_gate else "SHARP_TURN"
+      self._inactive_timer += dt
+      if self._inactive_timer >= SOFT_DISABLE_HOLD_SEC:
+        self._engage_ramp_timer = 0.0
+      self._active = False
+      self.poly_a = self.poly_b = self.poly_c = 0.0
+      self.correction = self._decay(dt)
+      self._log_fallback(_state, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, 0.0)
+      return self.correction
+
+    self._inactive_timer = 0.0
     self._engage_ramp_timer += dt
     ramp_factor = float(np.clip(self._engage_ramp_timer / ENGAGE_RAMP_SEC, 0.0, 1.0))
 
@@ -237,8 +283,7 @@ class LaneCenteringCorrector:
       self._active = False
       self.weight = 0.0
       self.poly_a = self.poly_b = self.poly_c = 0.0  # 打方向燈退讓時隱藏 UI 紅線
-      limited = self._rate_limit(0.0, dt)
-      self.correction = self._filter.update(limited)
+      self.correction = self._decay(dt)
       self._log_fallback("YIELDING", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
@@ -260,8 +305,7 @@ class LaneCenteringCorrector:
     if self.weight <= 0.0:
       self._active = False
       self.poly_a = self.poly_b = self.poly_c = 0.0  # 完全沒有信心時隱藏 UI 紅線
-      limited = self._rate_limit(0.0, dt)
-      self.correction = self._filter.update(limited)
+      self.correction = self._decay(dt)
       self._log_fallback("LOW_CONFIDENCE", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
@@ -280,8 +324,7 @@ class LaneCenteringCorrector:
     if len(valid_x) < 3:
       self._active = False
       self.poly_a = self.poly_b = self.poly_c = 0.0  # 內插失敗時隱藏 UI 紅線
-      limited = self._rate_limit(0.0, dt)
-      self.correction = self._filter.update(limited)
+      self.correction = self._decay(dt)
       self._log_fallback("INTERP_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
