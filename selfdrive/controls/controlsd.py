@@ -30,6 +30,15 @@ LaneChangeDirection = log.LaneChangeDirection
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 
+# modelV2.confidence (red/yellow/green) 反映 e2e 路徑規劃對當前場景的信心程度，
+# 拿來當作 LCC 的 e2e_authority 動態輸入：模型信心越低，yield 機制介入權重越低，
+# 避免在彎道 (yStd 通常升高) 時被過度收斂而外拋。
+E2E_AUTHORITY_BY_CONFIDENCE = {
+  'green': 1.0,
+  'yellow': 0.6,
+  'red': 0.3,
+}
+
 
 class Controls:
   def __init__(self) -> None:
@@ -147,9 +156,10 @@ class Controls:
     else:
       new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
 
+    e2e_authority = E2E_AUTHORITY_BY_CONFIDENCE.get(str(model_v2.confidence), 1.0)
     lcc_correction = self.lcc.update(model_v2, CS.vEgo, CC.latActive, DT_CTRL,
                                       left_blinker=CS.leftBlinker, right_blinker=CS.rightBlinker,
-                                      steering_pressed=CS.steeringPressed)
+                                      steering_pressed=CS.steeringPressed, e2e_authority=e2e_authority)
     new_desired_curvature += lcc_correction
 
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
