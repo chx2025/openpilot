@@ -23,9 +23,9 @@ ACCEL_PERSONALITY_OPTIONS = [AccelPersonality.eco, AccelPersonality.normal, Acce
 A_MAX_BP = [0.0,  0.5,  1.0,  4.0,   6.0,  9.0,  11.0, 16.0,  20.0, 25.0, 30.0, 55.0]
 # 各種個性化設定下的最大加速度值 (對應 A_MAX_BP)
 A_MAX_V = {
-  AccelPersonality.eco:       [1.80, 1.60, 1.40, 1.30,  1.20, 1.00, 0.80, 0.60,  0.50, 0.40, 0.12, 0.08],
-  AccelPersonality.normal:    [2.00, 1.80, 1.60, 1.50,  1.40, 1.20, 1.00, 0.80,  0.70, 0.60, 0.24, 0.10],
-  AccelPersonality.sport:     [2.00, 1.80, 1.60, 2.00,  1.60, 1.40, 1.20, 1.00,  0.90, 0.80, 0.36, 0.12],
+  AccelPersonality.eco:       [1.50, 0.60, 1.00, 1.20,  1.20, 1.00, 0.80, 0.60,  0.50, 0.40, 0.12, 0.08],
+  AccelPersonality.normal:    [1.80, 0.80, 1.20, 1.60,  1.40, 1.20, 1.00, 0.80,  0.70, 0.60, 0.24, 0.10],
+  AccelPersonality.sport:     [2.00, 1.00, 1.40, 2.00,  1.60, 1.40, 1.20, 1.00,  0.90, 0.80, 0.36, 0.12],
 }
 
 # 滑行阻力 (Coast Drag) 的中斷點 (車速, 單位: m/s)
@@ -38,12 +38,12 @@ COAST_DRAG_V = {
 }
 
 # 煞車底線 (A_MIN Floor) 的中斷點 (車速, 單位: m/s)
-A_MIN_FLOOR_BP =    [3., 4.5, 7.,  9., 25]
+A_MIN_FLOOR_BP =    [3,     4.5,   7.,    9.,     25]
 # 各種個性化設定下的最大允許減速度值 (對應 A_MIN_FLOOR_BP)
 A_MIN_FLOOR_V = {
-  AccelPersonality.eco:    [-0.16, -0.25, -0.35, -0.48, -2.0],
-  AccelPersonality.normal: [-0.17, -0.27, -0.37, -0.50, -2.0],
-  AccelPersonality.sport:  [-0.18, -0.29, -0.39, -0.52, -2.0],
+  AccelPersonality.eco:    [-.003, -0.25, -0.35, -0.44, -2.0],
+  AccelPersonality.normal: [-.004, -0.27, -0.37, -0.46, -2.0],
+  AccelPersonality.sport:  [-.005, -0.29, -0.39, -0.48, -2.0],
 }
 
 # ==============================================================================
@@ -56,7 +56,7 @@ RAMP_OFF_RANGE = 3.0    # 接近巡航速度時，加速度上限開始線性遞
 # 非對稱變化率限制 (Rate Limiting)
 A_MIN_TIGHTEN_RATE = 1.5  # 煞車加重時的變化率上限 (m/s³，對應原本的 MAX_DECEL_INCREASE_RATE)
 A_MIN_RELAX_RATE = 0.6    # 煞車放鬆時的變化率上限 (m/s³，對應原本的 MAX_DECEL_DECREASE_RATE)
-A_MAX_RATE = 1.2          # 加速度上限的變化率 (m/s³)
+A_MAX_RATE = 0.8          # 加速度上限的變化率 (m/s³)
 
 # 動態安全廊道間距 (Dynamic Safety Corridor Gap)
 # 確保最小加速度永遠嚴格小於最大加速度，防止解算器崩潰 (Solver Crash)
@@ -105,38 +105,11 @@ class AccelPersonalityController:
     self._cache_v = None
     self._cache_v_cruise = None
 
-    # 每個週期重設滑行狀態，確保條件不滿足或進入低速精準跟車時能恢復正常控制
-    self._force_early_coast = False
-
     # 從開源車輛狀態 (carState) 獲取設定的巡航速度，並將時速 (km/h) 轉換為秒速 (m/s)
     if sm is not None:
       try:
         # 取得巡航速度
         self._v_cruise = float(sm['carState'].vCruise) * CV.KPH_TO_MS
-
-        # 取得前車狀態
-        if 'radarState' in sm:
-          lead_one = sm['radarState'].leadOne
-
-          # ==============================================================================
-          # [修改] 導入動態相對速度閾值 (使用 np.interp 線性插值)
-          # ==============================================================================
-          # 獲取當前車速 (v_ego)
-          v_ego = float(sm['carState'].vEgo)
-
-          # 根據車速動態計算逼近閾值：
-          # 當 v_ego <= 16 m/s 時，逼近速差門檻為 0.5 m/s
-          # 當 v_ego >= 22 m/s 時，逼近速差門檻為 1.0 m/s
-          # 介於 16 ~ 22 m/s 之間時，則以線性插值平滑平移
-          v_rel_thresh = float(np.interp(v_ego, [16.0, 22.0], [0.5, 1.0]))
-
-          # 條件包含：
-          # 1. 雷達鎖定前車 (lead_one.status)
-          # 2. 相對速度小於動態計算出的負向閾值 (lead_one.vRel < -v_rel_thresh，負值代表正在逼近)
-          # 3. 距離前車大於 10 公尺 (lead_one.dRel > 10.0)，避開低速蠕行與精準煞停死區
-          self._force_early_coast = bool(lead_one.status and lead_one.vRel < -v_rel_thresh and lead_one.dRel > 10.0)
-          # ==============================================================================
-
       except Exception:
         pass
 
@@ -300,18 +273,6 @@ class AccelPersonalityController:
 
     # 2. 應用巡航死區修正
     t_min, t_max = self._apply_coast_deadband(v_ego, t_min, t_max)
-
-    # ==============================================================================
-    # [修改開始] 提早滑行攔截邏輯 (配置於死區修正後，確保最高執行優先權)
-    # ==============================================================================
-    # 如果滿足觸發條件（有前車、正逼近、且車距超過 10 公尺）
-    if self._force_early_coast:
-        # 強制將加速上限壓至 -1e-3 (Toyota 專屬純引擎煞車滑行數值)
-        # 這會阻斷 Planner 在中高速接近慢車時試圖補油門的動作，釋放動能完美滑行
-        t_max = -1e-3
-    # ==============================================================================
-    # [修改結束]
-    # ==============================================================================
 
     # 3. 首次執行直接賦值
     if self._first:
