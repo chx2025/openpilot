@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Lane Centering Corrector (LCC) - 多點曲線擬合與動態融合版 (高速優化 + Rate Limiter + E2E Yield)
+Lane Centering Corrector (LCC) v2.1 - 多點曲線擬合與動態融合版 (高速優化 + Hysteresis + Soft Decay + Rate Limiter + E2E Yield)
 
 將 10~50m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
 y = ax^2 + bx + c 的二次曲線。藉此精準分離「道路曲率(a)」、「航向誤差(b)」與「橫向偏移(c)」。
@@ -58,7 +58,7 @@ MAX_CORRECTION = 0.012
 MAX_CORRECTION_RATE = 0.008  
 
 YIELD_CONFIRM_SEC = 0.15
-ENGAGE_RAMP_SEC = 1.5
+ENGAGE_RAMP_SEC = 0.8  # 台灣優化：縮短為 0.8 秒，讓閃避障礙物後 LCC 更快接回中心
 
 # 暫時性放手 (急彎 / 車速門檻) 持續超過這麼久，才真正歸零 engage ramp 計時器，
 # 避免短暫抖動讓 1.5 秒的 ramp 每次都要重爬
@@ -252,20 +252,29 @@ class LaneCenteringCorrector:
 
     is_sharp_turn = self._update_sharp_turn(model_curvature)
 
-    # --- 暫時性放手：車速門檻 / 急彎，correction 平滑衰減到 0，
-    # 且只有持續超過 SOFT_DISABLE_HOLD_SEC 才重置 engage ramp 計時器，
-    # 避免門檻附近抖動或短暫急彎，讓修正力道每次都要重新爬 1.5 秒 ramp
-    # (這正是「大彎時方向盤比較慢才轉動」的成因)
+    # --- 暫時性放手：車速門檻 / 急彎，correction 一律平滑衰減到 0。
+    #
+    # 重要：急彎本身「不」重設 engage ramp。急彎可能持續數秒，若每次
+    # 出彎都從 0 開始爬 1.5 秒，會再次造成「大彎後方向盤反應慢」的感覺。
+    # 車速 gate 則維持原本的保守行為：低速持續超過 HOLD 時才重設 ramp。
     soft_invalid = (not self._speed_gate) or is_sharp_turn
     if soft_invalid:
       _state = "SPEED_GATE_OFF" if not self._speed_gate else "SHARP_TURN"
-      self._inactive_timer += dt
-      if self._inactive_timer >= SOFT_DISABLE_HOLD_SEC:
-        self._engage_ramp_timer = 0.0
+
+      if not self._speed_gate:
+        self._inactive_timer += dt
+        if self._inactive_timer >= SOFT_DISABLE_HOLD_SEC:
+          self._engage_ramp_timer = 0.0
+      else:
+        # 急彎不是「重新接管」；保留 ramp，避免出彎後重新爬 0.8 秒。
+        self._inactive_timer = 0.0
+
       self._active = False
+      self.weight = 0.0
       self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
-      self._log_fallback(_state, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, 0.0)
+      self._log_fallback(_state, dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature,
+                         float(np.clip(self._engage_ramp_timer / ENGAGE_RAMP_SEC, 0.0, 1.0)))
       return self.correction
 
     self._inactive_timer = 0.0
@@ -291,15 +300,21 @@ class LaneCenteringCorrector:
     lane_line_probs = model_v2.laneLineProbs
 
     if len(lane_lines) < 3 or len(lane_line_probs) < 3:
-      self.reset()
+      # 暫時缺資料不是硬 disengage。保持 ramp / hysteresis 狀態，讓 correction
+      # 平滑退出，避免大彎中偶發一幀資料不足就把 LCC 整個 reset。
+      self._active = False
+      self.weight = 0.0
+      self.poly_a = self.poly_b = self.poly_c = 0.0
+      self.correction = self._decay(dt)
       self._log_fallback("NO_LANE_DATA", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
-      return 0.0
+      return self.correction
 
     lll_prob = lane_line_probs[1]
     rll_prob = lane_line_probs[2]
-    min_prob = min(lll_prob, rll_prob)
-
-    confidence = float(np.clip((min_prob - PROB_MIN) / (PROB_FULL - PROB_MIN), 0.0, 1.0))
+    
+    # 台灣優化：改為平均信心度。當單邊標線模糊但另一邊清晰時，仍能維持一定權重，避免直接放手
+    mean_prob = (lll_prob + rll_prob) / 2.0
+    confidence = float(np.clip((mean_prob - PROB_MIN) / (PROB_FULL - PROB_MIN), 0.0, 1.0))
     self.weight = confidence * LANE_WEIGHT_MAX
 
     if self.weight <= 0.0:
@@ -328,8 +343,19 @@ class LaneCenteringCorrector:
       self._log_fallback("INTERP_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
-    coeffs = np.polyfit(valid_x, center_y, 2)
-    a, b, c = coeffs[0], coeffs[1], coeffs[2]
+    try:
+      coeffs = np.polyfit(valid_x, center_y, 2)
+      if len(coeffs) != 3 or not np.isfinite(coeffs).all():
+        raise ValueError("invalid lane polynomial")
+      a, b, c = (float(coeffs[0]), float(coeffs[1]), float(coeffs[2]))
+    except (TypeError, ValueError, np.linalg.LinAlgError):
+      # 擬合失敗同樣視為暫時性資料問題，不清掉 engage ramp。
+      self._active = False
+      self.weight = 0.0
+      self.poly_a = self.poly_b = self.poly_c = 0.0
+      self.correction = self._decay(dt)
+      self._log_fallback("POLYFIT_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
+      return self.correction
     
     # --- UI 雙效合一：平滑過濾與信心度隱藏 ---
     if self.weight >= UI_MIN_DRAW_WEIGHT:
@@ -353,9 +379,26 @@ class LaneCenteringCorrector:
     lane_target_curvature = (2.0 * a) + (2.0 * b / L) + (2.0 * c / (L ** 2))
     center_y_l = a * (L ** 2) + b * L + c
 
+    if not (np.isfinite(L) and np.isfinite(lane_target_curvature) and np.isfinite(center_y_l)):
+      self._active = False
+      self.weight = 0.0
+      self.poly_a = self.poly_b = self.poly_c = 0.0
+      self.correction = self._decay(dt)
+      self._log_fallback("CURVATURE_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
+      return self.correction
+
     yield_factor, path_std, pos_error = self._yield_factor(model_v2, center_y_l, L, e2e_authority)
 
-    raw_correction = self.weight * ramp_factor * yield_factor * (lane_target_curvature - model_curvature)
+    curvature_error = lane_target_curvature - model_curvature
+    if not np.isfinite(curvature_error):
+      self._active = False
+      self.weight = 0.0
+      self.poly_a = self.poly_b = self.poly_c = 0.0
+      self.correction = self._decay(dt)
+      self._log_fallback("CURVATURE_ERROR_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
+      return self.correction
+
+    raw_correction = self.weight * ramp_factor * yield_factor * curvature_error
     raw_correction = float(np.clip(raw_correction, -MAX_CORRECTION, MAX_CORRECTION))
 
     rate_limited_correction = self._rate_limit(raw_correction, dt)
