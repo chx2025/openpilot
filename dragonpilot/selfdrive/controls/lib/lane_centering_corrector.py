@@ -268,7 +268,8 @@ class LaneCenteringCorrector:
     self._engage_ramp_timer += dt
     ramp_factor = float(np.clip(self._engage_ramp_timer / ENGAGE_RAMP_SEC, 0.0, 1.0))
 
-    raw_yield_condition = steering_pressed  # 閃避障礙物不強求方向燈
+    # 嚴格還原：必須有方向燈且轉動方向盤才退讓
+    raw_yield_condition = (left_blinker or right_blinker) and steering_pressed
     if raw_yield_condition:
       self._yield_hold_timer += dt
     else:
