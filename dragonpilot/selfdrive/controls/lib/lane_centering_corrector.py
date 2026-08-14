@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Lane Centering Corrector (LCC) v2.2 - 台灣道路在地化特調版 
-(混合信心度演算法 + 快速重啟 + Soft Decay + E2E Yield)
+Lane Centering Corrector (LCC) v2.3 - 台灣道路在地化特調版 
+(混合信心度演算法 + 快速重啟 + Soft Decay + E2E Yield + 收斂延遲修正)
 
 將 10~50m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
 y = ax^2 + bx + c 的二次曲線。藉此精準分離「道路曲率(a)」、「航向誤差(b)」與「橫向偏移(c)」。
@@ -9,6 +9,10 @@ y = ax^2 + bx + c 的二次曲線。藉此精準分離「道路曲率(a)」、�
 1. 引入「平均信心度 + 單邊可靠性限制」，處理單側標線不清或斑駁的問題。
 2. NO_LANE_DATA 改為平滑退場 (Soft Decay) 並保留 Ramp，適應無標線大路口。
 3. 縮短 ENGAGE_RAMP_SEC 至 0.8s，提升閃避機車/障礙物後的恢復敏捷度。
+4. v2.3: 修正「回中 7-8 秒」問題 —— yield 機制過去在偏移量最大、最需要修正的瞬間
+   反而壓制修正力道，形成自我拖延迴圈。改為加入 persistence gate (需持續偏移
+   一段時間才啟動 yield)，並放寬 break-in 區間；同時放寬 rate limiter 與濾波
+   時間常數，縮短「軟體造成」的啟動延遲。
 """
 
 import os
@@ -29,7 +33,7 @@ LOG_COLUMNS = [
   "lat_active", "speed_gate", "sharp_turn", "model_curvature",
   "yield_hold_timer", "engage_ramp_timer", "ramp_factor",
   "weight", "poly_a", "poly_b", "poly_c", "lane_target_curv",
-  "path_std", "pos_error", "yield_factor",
+  "path_std", "pos_error", "yield_persist_timer", "yield_factor", "yield_suppression_pct",
   "raw_correction", "rate_limited_correction", "correction",
 ]
 
@@ -43,7 +47,9 @@ FIT_X = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
 MIN_LOOKAHEAD_M = 15.0
 LOOKAHEAD_TIME_SEC = 1.2
 
-FILTER_RC_SEC = 0.5      
+# v2.3: RC 0.5s -> 0.35s，縮短低通濾波造成的啟動延遲 (約省 0.5~0.7s)。
+# 仍保留一定平滑量以避免座標系旋轉造成的自激振盪，如實測有抖動請調回 0.4~0.5。
+FILTER_RC_SEC = 0.35
 
 # --- 急彎判定：Hysteresis (遲滯) 機制 ---
 SHARP_TURN_CURVATURE_ENTER = 0.06
@@ -54,7 +60,8 @@ PROB_FULL = 0.6
 
 LANE_WEIGHT_MAX = 0.90 
 MAX_CORRECTION = 0.012  
-MAX_CORRECTION_RATE = 0.008  
+# v2.3: 0.008 -> 0.011，rate limiter 從 0 爬到 MAX_CORRECTION 的時間從 1.5s 縮短到 ~1.1s。
+MAX_CORRECTION_RATE = 0.011
 
 YIELD_CONFIRM_SEC = 0.15
 ENGAGE_RAMP_SEC = 0.8  # 縮短至 0.8 秒，提升重新介入的敏捷度
@@ -62,8 +69,15 @@ ENGAGE_RAMP_SEC = 0.8  # 縮短至 0.8 秒，提升重新介入的敏捷度
 SOFT_DISABLE_HOLD_SEC = 0.4
 
 YIELD_MAX_PATH_STD = 0.35
-YIELD_BREAK_IN_START = 0.20
-YIELD_BREAK_IN_FULL = 0.60
+# v2.3: 放寬 break-in 區間 (0.20~0.60 -> 0.35~0.85)，一般車道內小偏移不再被 yield 壓制，
+# 只有真正跟模型路徑分歧很大時才退讓。
+YIELD_BREAK_IN_START = 0.35
+YIELD_BREAK_IN_FULL = 0.85
+# v2.3: 新增 persistence gate —— 偏移量要持續超過 YIELD_BREAK_IN_START 這麼久，
+# 才真正啟動 yield 壓制。避免在偏移剛發生、最需要修正力道的瞬間反而被壓制，
+# 這是造成「回中 7-8 秒」的主因（yield 在偏移最大時抑制修正 -> 收斂變慢 ->
+# 偏移持續偏大 -> 繼續被壓制，形成自我拖延迴圈）。
+YIELD_PERSIST_SEC = 0.5
 DEFAULT_E2E_AUTHORITY = 1.0
 
 # --- UI 視覺優化參數 ---
@@ -101,6 +115,7 @@ class LaneCenteringCorrector:
     self._engage_ramp_timer = 0.0  
     self._sharp_turn_latched = False
     self._inactive_timer = 0.0
+    self._yield_persist_timer = 0.0
 
     self._last_log_time = 0.0
     self._last_logged_state = None
@@ -126,6 +141,7 @@ class LaneCenteringCorrector:
     self._engage_ramp_timer = 0.0
     self._sharp_turn_latched = False
     self._inactive_timer = 0.0
+    self._yield_persist_timer = 0.0
 
   def _rate_limit(self, target: float, dt: float) -> float:
     max_delta = MAX_CORRECTION_RATE * dt
@@ -149,38 +165,54 @@ class LaneCenteringCorrector:
     limited = self._rate_limit(0.0, dt)
     return self._filter.update(limited)
 
-  def _yield_factor(self, model_v2, center_y_l: float, l: float, e2e_authority: float) -> tuple[float, float, float]:
+  def _lookup_path_std_and_error(self, model_v2, center_y_l: float, l: float) -> tuple[float, float]:
+    """僅負責從 model_v2.position 內插出 path_std 與 pos_error，不含 yield 判斷邏輯。"""
     try:
       pos_x = np.asarray(model_v2.position.x, dtype=float)
       pos_y = np.asarray(model_v2.position.y, dtype=float)
       pos_y_std = np.asarray(model_v2.position.yStd, dtype=float)
 
       if pos_x.size < 2 or pos_x.size != pos_y.size or pos_x.size != pos_y_std.size:
-        return 1.0, -1.0, -1.0
+        return -1.0, 0.0
       if not (np.isfinite(pos_x).all() and np.isfinite(pos_y).all() and np.isfinite(pos_y_std).all()):
-        return 1.0, -1.0, -1.0
+        return -1.0, 0.0
       if not np.all(np.diff(pos_x) > 0):
-        return 1.0, -1.0, -1.0
+        return -1.0, 0.0
       if l < pos_x[0] or l > pos_x[-1]:
-        return 1.0, -1.0, -1.0
+        return -1.0, 0.0
 
       model_y = float(np.interp(l, pos_x, pos_y))
       path_std = float(np.interp(l, pos_x, pos_y_std))
-
       pos_error = center_y_l - model_y
-      error_abs = abs(pos_error)
-
-      if not (0.0 <= path_std <= YIELD_MAX_PATH_STD):
-        return 1.0, path_std, pos_error
-
-      break_in = float(np.clip(
-        (error_abs - YIELD_BREAK_IN_START) / (YIELD_BREAK_IN_FULL - YIELD_BREAK_IN_START),
-        0.0, 1.0,
-      ))
-      yield_factor = 1.0 - float(np.clip(e2e_authority, 0.0, 1.0)) * break_in
-      return yield_factor, path_std, pos_error
+      return path_std, pos_error
     except (AttributeError, TypeError, ValueError, IndexError):
-      return 1.0, -1.0, -1.0
+      return -1.0, 0.0
+
+  def _yield_factor(self, model_v2, center_y_l: float, l: float, e2e_authority: float, dt: float) -> tuple[float, float, float, float]:
+    """
+    v2.3: 加入 persistence gate。偏移量必須持續超過 YIELD_BREAK_IN_START 達
+    YIELD_PERSIST_SEC 秒，才真正啟動 yield 壓制。這避免了偏移剛發生、最需要
+    修正力道的當下就被 yield 壓制，導致收斂緩慢的自我拖延迴圈。
+    回傳: (yield_factor, path_std, pos_error, yield_persist_timer)
+    """
+    path_std, pos_error = self._lookup_path_std_and_error(model_v2, center_y_l, l)
+    error_abs = abs(pos_error)
+    std_valid = 0.0 <= path_std <= YIELD_MAX_PATH_STD
+
+    if std_valid and error_abs > YIELD_BREAK_IN_START:
+      self._yield_persist_timer += dt
+    else:
+      self._yield_persist_timer = 0.0
+
+    if not std_valid or self._yield_persist_timer < YIELD_PERSIST_SEC:
+      return 1.0, path_std, pos_error, self._yield_persist_timer
+
+    break_in = float(np.clip(
+      (error_abs - YIELD_BREAK_IN_START) / (YIELD_BREAK_IN_FULL - YIELD_BREAK_IN_START),
+      0.0, 1.0,
+    ))
+    yield_factor = 1.0 - float(np.clip(e2e_authority, 0.0, 1.0)) * break_in
+    return yield_factor, path_std, pos_error, self._yield_persist_timer
 
   def _log_row(self, state: str, **fields) -> None:
     if not ENABLE_CSV_LOG:
@@ -217,7 +249,8 @@ class LaneCenteringCorrector:
                   model_curvature=model_curvature, yield_hold_timer=self._yield_hold_timer,
                   engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
                   weight=0.0, poly_a=0.0, poly_b=0.0, poly_c=0.0, 
-                  lane_target_curv=0.0, path_std=-1.0, pos_error=0.0, yield_factor=1.0,
+                  lane_target_curv=0.0, path_std=-1.0, pos_error=0.0,
+                  yield_persist_timer=self._yield_persist_timer, yield_factor=1.0, yield_suppression_pct=0.0,
                   raw_correction=0.0, rate_limited_correction=0.0, correction=self.correction)
 
   def update(self, model_v2, v_ego: float, lat_active: bool, dt: float,
@@ -375,7 +408,7 @@ class LaneCenteringCorrector:
       self._log_fallback("CURVATURE_FAIL", dt, v_ego_kph, lat_active, is_sharp_turn, model_curvature, ramp_factor)
       return self.correction
 
-    yield_factor, path_std, pos_error = self._yield_factor(model_v2, center_y_l, L, e2e_authority)
+    yield_factor, path_std, pos_error, yield_persist_timer = self._yield_factor(model_v2, center_y_l, L, e2e_authority, dt)
 
     curvature_error = lane_target_curvature - model_curvature
     if not np.isfinite(curvature_error):
@@ -400,7 +433,9 @@ class LaneCenteringCorrector:
                     engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
                     weight=self.weight, poly_a=a, poly_b=b, poly_c=c,
                     lane_target_curv=lane_target_curvature,
-                    path_std=path_std, pos_error=pos_error, yield_factor=yield_factor,
+                    path_std=path_std, pos_error=pos_error,
+                    yield_persist_timer=yield_persist_timer, yield_factor=yield_factor,
+                    yield_suppression_pct=(1.0 - yield_factor) * 100.0,
                     raw_correction=raw_correction, rate_limited_correction=rate_limited_correction,
                     correction=self.correction)
     
