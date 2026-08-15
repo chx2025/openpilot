@@ -65,8 +65,12 @@ MIN_MAX_GAP = 0.05
 # 參數重新讀取的幀數間隔 (每秒更新一次 Params)
 PARAM_REFRESH_FRAMES = max(1, int(1.0 / DT_MDL))
 
-# 提前滑行觸發的持續時間 (約 0.5 秒)
-EARLY_COAST_TRIGGER_FRAMES = max(1, int(0.5 / DT_MDL))
+# ==============================================================================
+# 條件式雷達滑行常數設定 (Early Coast)
+# ==============================================================================
+EARLY_COAST_TRIGGER_FRAMES = max(1, int(0.5 / DT_MDL))  # 觸發持續時間 (約 0.5 秒)
+EARLY_COAST_MIN_DIST = 10.0                             # 最小觸發距離 (公尺)
+EARLY_COAST_MAX_DIST = 70.0                             # 最大觸發距離 (公尺)
 
 
 class AccelPersonalityController:
@@ -109,7 +113,6 @@ class AccelPersonalityController:
     self._cache_v = None
     self._cache_v_cruise = None
 
-    # 從開源車輛狀態 (carState) 獲取設定的巡航速度，並將時速 (km/h) 轉換為秒速 (m/s)
     if sm is not None:
       try:
         # 取得巡航速度
@@ -121,25 +124,17 @@ class AccelPersonalityController:
           v_ego = float(sm['carState'].vEgo)
 
           # ==============================================================================
-          # 條件式雷達滑行邏輯 (套用台灣交通法規：小型車法定安全距離)
+          # 條件式雷達滑行邏輯 (固定 10~70m 區間 + Hysteresis 遲滯機制)
           # ==============================================================================
           if lead_one.status:
             # 根據車速動態計算逼近速度閾值
             v_rel_thresh = float(np.interp(v_ego, [16.0, 22.0], [0.5, 1.0]))
             
-            # 台灣法規小型車安全跟車距離：時速 (km/h) 除以 2 (單位：公尺)
-            statutory_safe_dist = (v_ego * 3.6) / 2.0
-            
-            # 提前滑行判定距離上限：設定為法定安全距離的 1.5 倍
-            # 確保在逼近「法定底線」前，車輛就有足夠的空間先收油自然滑行
-            # 並設定最低下限 30.0 公尺，避免低速時判定區間過窄
-            d_rel_upper_bound = max(30.0, statutory_safe_dist * 1.5)
-
-            # 1. 判斷是否為「持續逼近」且在 10 ~ 動態法規距離上限 的合理範圍內
-            if lead_one.vRel < -v_rel_thresh and 10.0 < lead_one.dRel < d_rel_upper_bound:
+            # 1. 判斷是否為「持續逼近」且在固定的有效範圍內 (10m ~ 70m)
+            if lead_one.vRel < -v_rel_thresh and EARLY_COAST_MIN_DIST < lead_one.dRel < EARLY_COAST_MAX_DIST:
               self._approach_frames += 1
             else:
-              # 若未達逼近閾值或超出動態距離範圍，中斷連續計數
+              # 若未達逼近閾值或超出距離範圍，中斷連續計數
               self._approach_frames = 0
 
             # 2. 觸發條件：雷達必須連續確認前車逼近達設定時間 (約 0.5s)
@@ -147,6 +142,7 @@ class AccelPersonalityController:
               self._force_early_coast = True
 
             # 3. 立即解除條件：前車不再逼近 (vRel >= 0 代表前車速度等於或快於本車)
+            # 這裡形成了 Hysteresis (遲滯區間)：觸發需小於 -v_rel_thresh，但解除只需大於等於 0
             if lead_one.vRel >= 0.0:
               self._force_early_coast = False
               self._approach_frames = 0
@@ -158,7 +154,11 @@ class AccelPersonalityController:
           # ==============================================================================
 
       except Exception:
-        pass
+        # ==============================================================================
+        # 5. 例外處理 Fail-safe: 防止出現錯誤時狀態卡死在 True
+        # ==============================================================================
+        self._force_early_coast = False
+        self._approach_frames = 0
 
     # 定期刷新外部參數，避免每幀讀取 Params 造成 I/O 負擔
     if self.frame % PARAM_REFRESH_FRAMES == 0:
