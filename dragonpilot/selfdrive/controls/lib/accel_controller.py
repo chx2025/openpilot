@@ -65,6 +65,13 @@ MIN_MAX_GAP = 0.05
 # 參數重新讀取的幀數間隔 (每秒更新一次 Params)
 PARAM_REFRESH_FRAMES = max(1, int(1.0 / DT_MDL))
 
+# ==============================================================================
+# 條件式雷達滑行常數設定 (Early Coast)
+# ==============================================================================
+EARLY_COAST_TRIGGER_FRAMES = max(1, int(0.5 / DT_MDL))  # 觸發持續時間 (約 0.5 秒)
+EARLY_COAST_MIN_DIST = 10.0                             # 最小觸發距離 (公尺)
+EARLY_COAST_MAX_DIST = 70.0                             # 最大觸發距離 (公尺)
+
 
 class AccelPersonalityController:
   """
@@ -93,8 +100,9 @@ class AccelPersonalityController:
     self._cache_a_min = self._a_min
     self._cache_a_max = self._a_max
 
-    # 狀態標記：是否觸發提早滑行
+    # 狀態標記：是否觸發提早滑行與連續逼近幀數
     self._force_early_coast = False
+    self._approach_frames = 0
 
   def update(self, sm=None):
     """
@@ -105,10 +113,6 @@ class AccelPersonalityController:
     self._cache_v = None
     self._cache_v_cruise = None
 
-    # 每個週期重設滑行狀態，確保條件不滿足或進入低速精準跟車時能恢復正常控制
-    self._force_early_coast = False
-
-    # 從開源車輛狀態 (carState) 獲取設定的巡航速度，並將時速 (km/h) 轉換為秒速 (m/s)
     if sm is not None:
       try:
         # 取得巡航速度
@@ -117,28 +121,44 @@ class AccelPersonalityController:
         # 取得前車狀態
         if 'radarState' in sm:
           lead_one = sm['radarState'].leadOne
-
-          # ==============================================================================
-          # [修改] 導入動態相對速度閾值 (使用 np.interp 線性插值)
-          # ==============================================================================
-          # 獲取當前車速 (v_ego)
           v_ego = float(sm['carState'].vEgo)
 
-          # 根據車速動態計算逼近閾值：
-          # 當 v_ego <= 16 m/s 時，逼近速差門檻為 0.5 m/s
-          # 當 v_ego >= 22 m/s 時，逼近速差門檻為 1.0 m/s
-          # 介於 16 ~ 22 m/s 之間時，則以線性插值平滑平移
-          v_rel_thresh = float(np.interp(v_ego, [16.0, 22.0], [0.5, 1.0]))
+          # ==============================================================================
+          # 條件式雷達滑行邏輯 (固定 10~70m 區間 + Hysteresis 遲滯機制)
+          # ==============================================================================
+          if lead_one.status:
+            # 根據車速動態計算逼近速度閾值
+            v_rel_thresh = float(np.interp(v_ego, [16.0, 22.0], [0.5, 1.0]))
+            
+            # 1. 判斷是否為「持續逼近」且在固定的有效範圍內 (10m ~ 70m)
+            if lead_one.vRel < -v_rel_thresh and EARLY_COAST_MIN_DIST < lead_one.dRel < EARLY_COAST_MAX_DIST:
+              self._approach_frames += 1
+            else:
+              # 若未達逼近閾值或超出距離範圍，中斷連續計數
+              self._approach_frames = 0
 
-          # 條件包含：
-          # 1. 雷達鎖定前車 (lead_one.status)
-          # 2. 相對速度小於動態計算出的負向閾值 (lead_one.vRel < -v_rel_thresh，負值代表正在逼近)
-          # 3. 距離前車大於 10 公尺 (lead_one.dRel > 10.0)，避開低速蠕行與精準煞停死區
-          self._force_early_coast = bool(lead_one.status and lead_one.vRel < -v_rel_thresh and lead_one.dRel > 10.0)
+            # 2. 觸發條件：雷達必須連續確認前車逼近達設定時間 (約 0.5s)
+            if self._approach_frames >= EARLY_COAST_TRIGGER_FRAMES:
+              self._force_early_coast = True
+
+            # 3. 立即解除條件：前車不再逼近 (vRel >= 0 代表前車速度等於或快於本車)
+            # 這裡形成了 Hysteresis (遲滯區間)：觸發需小於 -v_rel_thresh，但解除只需大於等於 0
+            if lead_one.vRel >= 0.0:
+              self._force_early_coast = False
+              self._approach_frames = 0
+              
+          else:
+            # 4. Fail-safe: 雷達未鎖定前車，重設所有滑行狀態
+            self._force_early_coast = False
+            self._approach_frames = 0
           # ==============================================================================
 
       except Exception:
-        pass
+        # ==============================================================================
+        # 5. 例外處理 Fail-safe: 防止出現錯誤時狀態卡死在 True
+        # ==============================================================================
+        self._force_early_coast = False
+        self._approach_frames = 0
 
     # 定期刷新外部參數，避免每幀讀取 Params 造成 I/O 負擔
     if self.frame % PARAM_REFRESH_FRAMES == 0:
@@ -148,58 +168,34 @@ class AccelPersonalityController:
 
   @property
   def accel_personality(self) -> int:
-    """
-    獲取當前的加速度個性化設定型態
-    """
     return self._personality
 
   def get_accel_personality(self) -> int:
-    """
-    以整數形式獲取當前個性化設定
-    """
     return int(self._personality)
 
   def set_accel_personality(self, personality: int):
-    """
-    設定新的加速度個性化設定並寫入系統參數
-    """
     if personality in ACCEL_PERSONALITY_OPTIONS:
       self._personality = personality
       self.params.put('AccelPersonality', personality)
 
   def cycle_accel_personality(self) -> int:
-    """
-    循環切換加速個性化設定 (Eco -> Normal -> Sport -> Eco)
-    """
     idx = ACCEL_PERSONALITY_OPTIONS.index(self._personality) if self._personality in ACCEL_PERSONALITY_OPTIONS else 0
     nxt = ACCEL_PERSONALITY_OPTIONS[(idx + 1) % len(ACCEL_PERSONALITY_OPTIONS)]
     self.set_accel_personality(nxt)
     return int(nxt)
 
   def is_enabled(self) -> bool:
-    """
-    檢查縱向個性化控制是否啟用
-    """
     return self._enabled
 
   def set_enabled(self, enabled: bool):
-    """
-    設定縱向個性化控制的啟用狀態並寫入參數
-    """
     self._enabled = bool(enabled)
     self.params.put_bool('AccelPersonalityEnabled', self._enabled)
 
   def toggle_enabled(self) -> bool:
-    """
-    切換啟用狀態開關
-    """
     self.set_enabled(not self._enabled)
     return self._enabled
 
   def reset(self, personality: int | None = None):
-    """
-    重設控制器至初始狀態
-    """
     if personality is None or personality not in ACCEL_PERSONALITY_OPTIONS:
       personality = AccelPersonality.normal
     self._personality = personality
@@ -211,119 +207,79 @@ class AccelPersonalityController:
     self._cache_v = None
     self._cache_v_cruise = None
     self._force_early_coast = False
+    self._approach_frames = 0
 
   def get_accel_limits(self, v_ego: float) -> tuple[float, float]:
-    """
-    獲取當前車速下的動態加減速限制值 (考慮快取優化機制)
-    """
     v_ego = max(0.0, v_ego)
-    # 快取檢查：若車速變化極小且巡航速度未變，直接返回上一次的計算結果以節省運算資源
     if (self._cache_v is not None
         and abs(self._cache_v - v_ego) < 0.01
         and self._cache_v_cruise == self._v_cruise):
       return self._cache_a_min, self._cache_a_max
 
-    # 執行實際的步進計算
     self._cache_a_min, self._cache_a_max = self._step(v_ego)
     self._cache_v = v_ego
     self._cache_v_cruise = self._v_cruise
     return self._cache_a_min, self._cache_a_max
 
   def get_min_accel(self, v_ego: float) -> float:
-    """
-    獲取當前車速下的最小加速度 (減速下限)
-    """
     return self.get_accel_limits(v_ego)[0]
 
   def get_max_accel(self, v_ego: float) -> float:
-    """
-    獲取當前車速下的最大加速度 (加速上限)
-    """
     return self.get_accel_limits(v_ego)[1]
 
   def _ramp_off(self, v_ego: float) -> float:
-    """
-    接近緩和機制：當車速接近巡航目標速度時，線性調降加速度上限，避免衝過頭
-    """
     if self._v_cruise <= 0.0:
       return 1.0
     return float(np.clip((self._v_cruise - v_ego) / RAMP_OFF_RANGE, 0.0, 1.0))
 
   def _target_max(self, v_ego: float) -> float:
-    """
-    計算基礎最大加速度目標值，並結合接近緩和增益
-    """
     base = float(np.interp(v_ego, A_MAX_BP, A_MAX_V[self._personality]))
     return base * self._ramp_off(v_ego)
 
   def _target_min(self, v_ego: float) -> float:
-    """
-    計算動態減速度目標值（核心升級：滑行與煞車分離）
-    - 超速或未設定巡航速時：僅提供基礎滑行阻力 (Coast Drag)
-    - 低於巡航速時：根據速差以指數曲線 (1.5次方) 平滑過渡至煞車底線 (Floor)
-    """
     coast = float(np.interp(v_ego, COAST_DRAG_BP, COAST_DRAG_V[self._personality]))
     if self._v_cruise <= 0.0 or v_ego >= self._v_cruise:
       return coast
 
     floor = float(np.interp(v_ego, A_MIN_FLOOR_BP, A_MIN_FLOOR_V[self._personality]))
     deficit = self._v_cruise - v_ego
-    # 引入 1.5 次方曲線，讓煞車力道的介入更為平滑線性，提升舒適度
     t = float(np.clip(deficit / DEFICIT_TO_FLOOR, 0.0, 1.0)) ** 1.5
     return coast + t * (floor - coast)
 
   def _apply_coast_deadband(self, v_ego: float, t_min: float, t_max: float) -> tuple[float, float]:
-    """
-    巡航死區控制：當車速與目標巡航速度高度接近 (1.0 m/s 內) 時，
-    限制加速度上限並將減速下限設為滑行阻力，防止加減速頻繁交替 (Ping-Pong 效應)
-    """
     if self._v_cruise <= 0.0 or abs(v_ego - self._v_cruise) >= COAST_DEADBAND:
       return t_min, t_max
     coast = float(np.interp(v_ego, COAST_DRAG_BP, COAST_DRAG_V[self._personality]))
     return coast, max(0.05, t_max * 0.25)
 
   def _rate_limit(self, last: float, target: float, rate_down: float, rate_up: float) -> float:
-    """
-    線性變化率限制器 (Rate Limiter)：根據變化方向應用非對稱變化率上限，確保加減速過渡平順
-    """
     rate = rate_up if target > last else rate_down
     step = rate * DT_MDL
     return float(np.clip(target, last - step, last + step))
 
   def _step(self, v_ego: float) -> tuple[float, float]:
-    """
-    核心加減速限制步進計算
-    """
-    # 1. 計算目標極值
     t_max = self._target_max(v_ego)
     t_min = self._target_min(v_ego)
 
-    # 2. 應用巡航死區修正
     t_min, t_max = self._apply_coast_deadband(v_ego, t_min, t_max)
 
     # ==============================================================================
-    # [修改開始] 提早滑行攔截邏輯 (配置於死區修正後，確保最高執行優先權)
+    # 提早滑行攔截邏輯 (配置於死區修正後)
     # ==============================================================================
-    # 如果滿足觸發條件（有前車、正逼近、且車距超過 10 公尺）
     if self._force_early_coast:
-        # 強制將加速上限壓至 -1e-3 (Toyota 專屬純引擎煞車滑行數值)
-        # 這會阻斷 Planner 在中高速接近慢車時試圖補油門的動作，釋放動能完美滑行
-        t_max = -1e-3
-    # ==============================================================================
-    # [修改結束]
+        # 取消補油，將加速上限限制在不大於 0.0 的狀態
+        # 不主動要求負加速度，讓車輛透過自然阻力滑行
+        t_max = min(t_max, 0.0)
     # ==============================================================================
 
-    # 3. 首次執行直接賦值
     if self._first:
       self._a_min, self._a_max = t_min, t_max
       self._first = False
       return self._a_min, self._a_max
 
-    # 4. 應用嚴格的線性變化率限制 (替代舊版的 EMA 濾波)
     new_min = self._rate_limit(self._a_min, t_min, rate_down=A_MIN_TIGHTEN_RATE, rate_up=A_MIN_RELAX_RATE)
     new_max = self._rate_limit(self._a_max, t_max, rate_down=A_MAX_RATE, rate_up=A_MAX_RATE)
 
-    # 5. 安全廊道約束：確保 min 永遠小於 max 減去最小間距，防止解算器異常
     new_min = min(new_min, new_max - MIN_MAX_GAP)
 
     self._a_min, self._a_max = new_min, new_max
