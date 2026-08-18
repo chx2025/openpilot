@@ -1,7 +1,8 @@
+import math
+import time
 import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
-from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
@@ -18,6 +19,12 @@ KM_TO_MILE = 0.621371
 CRUISE_DISABLED_CHAR = '–'
 
 SET_SPEED_PERSISTENCE = 2.5  # seconds
+
+# --- 方向燈與盲區閃爍頻率設定 ---
+DP_INDICATOR_BLINK_RATE_FAST = int(gui_app.target_fps * 0.25)
+DP_INDICATOR_BLINK_RATE_STD = int(gui_app.target_fps * 0.5)
+DP_INDICATOR_COLOR_BSM = rl.Color(255, 204, 0, 220)      # 盲區黃色
+DP_INDICATOR_COLOR_BLINKER = rl.Color(0, 255, 0, 220)    # 方向燈綠色
 
 
 @dataclass(frozen=True)
@@ -38,63 +45,6 @@ FONT_SIZES = FontSizes()
 COLORS = Colors()
 
 
-class TurnIntent(Widget):
-  FADE_IN_ANGLE = 30  # degrees
-
-  def __init__(self):
-    super().__init__()
-    self._pre = False
-    self._turn_intent_direction: int = 0
-
-    self._turn_intent_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
-    self._turn_intent_rotation_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
-
-    self._txt_turn_intent_left: rl.Texture = gui_app.texture('icons_mici/turn_intent_left.png', 50, 20)
-    self._txt_turn_intent_right: rl.Texture = gui_app.texture('icons_mici/turn_intent_left.png', 50, 20, flip_x=True)
-
-  def _render(self, _):
-    if self._turn_intent_alpha_filter.x > 1e-2:
-      turn_intent_texture = self._txt_turn_intent_right if self._turn_intent_direction == 1 else self._txt_turn_intent_left
-      src_rect = rl.Rectangle(0, 0, turn_intent_texture.width, turn_intent_texture.height)
-      dest_rect = rl.Rectangle(self._rect.x + self._rect.width / 2, self._rect.y + self._rect.height / 2,
-                               turn_intent_texture.width, turn_intent_texture.height)
-
-      origin = (turn_intent_texture.width / 2, self._rect.height / 2)
-      color = rl.Color(255, 255, 255, int(255 * self._turn_intent_alpha_filter.x))
-      rl.draw_texture_pro(turn_intent_texture, src_rect, dest_rect, origin, self._turn_intent_rotation_filter.x, color)
-
-  def _update_state(self) -> None:
-    sm = ui_state.sm
-
-    left = any(e.name == EventName.preLaneChangeLeft for e in sm['onroadEvents'])
-    right = any(e.name == EventName.preLaneChangeRight for e in sm['onroadEvents'])
-    if left or right:
-      # pre lane change
-      if not self._pre:
-        self._turn_intent_rotation_filter.x = self.FADE_IN_ANGLE if left else -self.FADE_IN_ANGLE
-
-      self._pre = True
-      self._turn_intent_direction = -1 if left else 1
-      self._turn_intent_alpha_filter.update(1)
-      self._turn_intent_rotation_filter.update(0)
-    elif any(e.name == EventName.laneChange for e in sm['onroadEvents']):
-      # fade out and rotate away
-      self._pre = False
-      self._turn_intent_alpha_filter.update(0)
-
-      if self._turn_intent_direction == 0:
-        # unknown. missed pre frame?
-        self._turn_intent_rotation_filter.update(0)
-      else:
-        self._turn_intent_rotation_filter.update(self._turn_intent_direction * self.FADE_IN_ANGLE)
-    else:
-      # didn't complete lane change, just hide
-      self._pre = False
-      self._turn_intent_direction = 0
-      self._turn_intent_alpha_filter.update(0)
-      self._turn_intent_rotation_filter.update(0)
-
-
 class HudRenderer(Widget):
   def __init__(self):
     super().__init__()
@@ -107,29 +57,26 @@ class HudRenderer(Widget):
     self.v_ego_cluster_seen: bool = False
     self._engaged: bool = False
 
+    # --- 前車距離變數 ---
+    self.lead_dist: str = "-"
+    self.lead_dist_raw: float = 0.0
+
+    # --- 邊緣閃爍狀態變數 ---
+    self._dp_indicator_show_left = False
+    self._dp_indicator_show_right = False
+    self._dp_indicator_count_left = 0
+    self._dp_indicator_count_right = 0
+    self._dp_indicator_color_left = rl.Color(0, 0, 0, 0)
+    self._dp_indicator_color_right = rl.Color(0, 0, 0, 0)
+
     self._can_draw_top_icons = True
-    self._show_wheel_critical = False
 
     self._font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
     self._font_medium: rl.Font = gui_app.font(FontWeight.MEDIUM)
     self._font_semi_bold: rl.Font = gui_app.font(FontWeight.SEMI_BOLD)
     self._font_display: rl.Font = gui_app.font(FontWeight.DISPLAY)
 
-    self._turn_intent = TurnIntent()
-    self._torque_bar = TorqueBar()
-
-    self._txt_wheel: rl.Texture = gui_app.texture('icons_mici/wheel.png', 50, 50)
-    self._txt_wheel_critical: rl.Texture = gui_app.texture('icons_mici/wheel_critical.png', 50, 50)
-    self._txt_exclamation_point: rl.Texture = gui_app.texture('icons_mici/exclamation_point.png', 9, 44)
-
-    self._wheel_alpha_filter = FirstOrderFilter(0, 0.05, 1 / gui_app.target_fps)
-    self._wheel_y_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
-
     self._set_speed_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
-
-  def set_wheel_critical_icon(self, critical: bool):
-    """Set the wheel icon to critical or normal state."""
-    self._show_wheel_critical = critical
 
   def set_can_draw_top_icons(self, can_draw_top_icons: bool):
     """Set whether to draw the top part of the HUD."""
@@ -139,6 +86,32 @@ class HudRenderer(Widget):
     # whether we're drawing any top icons currently
     return bool(self._set_speed_alpha_filter.x > 1e-2)
 
+  def _update_dp_indicator_side_state(self, blinker_state, bsm_state, show_prev, count_prev):
+    """處理單邊的閃爍與顏色邏輯"""
+    show = show_prev
+    count = count_prev
+    color = rl.Color(0, 0, 0, 0)
+
+    if not blinker_state and not bsm_state:
+      show = False
+      count = 0
+    else:
+      count += 1
+
+    if bsm_state and blinker_state:
+      show = not show if count % DP_INDICATOR_BLINK_RATE_FAST == 0 else show
+      color = DP_INDICATOR_COLOR_BSM
+    elif blinker_state:
+      show = not show if count % DP_INDICATOR_BLINK_RATE_STD == 0 else show
+      color = DP_INDICATOR_COLOR_BLINKER
+    elif bsm_state:
+      show = True
+      color = DP_INDICATOR_COLOR_BSM
+    else:
+      show = False
+
+    return show, count, color
+
   def _update_state(self) -> None:
     """Update HUD state based on car state and controls state."""
     sm = ui_state.sm
@@ -146,10 +119,33 @@ class HudRenderer(Widget):
       self.is_cruise_set = False
       self.set_speed = SET_SPEED_NA
       self.speed = 0.0
+      self.lead_dist = "-"
+      self.lead_dist_raw = 0.0
+
+      self._dp_indicator_show_left = False
+      self._dp_indicator_show_right = False
       return
+
+    # --- 讀取雷達狀態（前車距離） ---
+    radar_state = sm['radarState']
+    if radar_state.leadOne.status:
+      self.lead_dist_raw = radar_state.leadOne.dRel
+      self.lead_dist = f"{self.lead_dist_raw:.0f}m"
+    else:
+      self.lead_dist_raw = 0.0
+      self.lead_dist = "-"
 
     controls_state = sm['controlsState']
     car_state = sm['carState']
+
+    # --- 更新兩側方向燈與盲區閃爍狀態 ---
+    self._dp_indicator_show_left, self._dp_indicator_count_left, self._dp_indicator_color_left = \
+      self._update_dp_indicator_side_state(car_state.leftBlinker, car_state.leftBlindspot,
+                                           self._dp_indicator_show_left, self._dp_indicator_count_left)
+
+    self._dp_indicator_show_right, self._dp_indicator_count_right, self._dp_indicator_color_right = \
+      self._update_dp_indicator_side_state(car_state.rightBlinker, car_state.rightBlindspot,
+                                           self._dp_indicator_show_right, self._dp_indicator_count_right)
 
     v_cruise_cluster = car_state.vCruiseCluster
     set_speed = (
@@ -172,55 +168,143 @@ class HudRenderer(Widget):
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
 
-    self._torque_bar.render(rect)
-
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
-    self._draw_steering_wheel(rect)
+    # 置中的動態立體倒三角形與前車距離
+    self._draw_lead_info(rect)
 
-  def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
-    wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
+    # 自帶雙閃爍頻率的方向燈與盲區邊條（放最後畫，確保圖層在最上方，不被裁切）
+    self._draw_edge_warnings(rect)
 
-    if self._show_wheel_critical:
-      self._wheel_alpha_filter.update(255)
-      self._wheel_y_filter.update(0)
+  def _draw_edge_warnings(self, rect: rl.Rectangle) -> None:
+    """繪製兩側方向燈與盲區警示（圓角效果並垂直置中）"""
+    bar_width = 20
+    bar_height = int(rect.height * 0.60)
+
+    # Y 軸垂直置中，並向上微調 20px
+    y_pos = int(rect.y + (rect.height - bar_height) / 2) - 20
+
+    if self._dp_indicator_show_left:
+      left_rect = rl.Rectangle(int(rect.x), y_pos, bar_width, bar_height)
+      rl.draw_rectangle_rounded(left_rect, 0.75, 20, self._dp_indicator_color_left)
+
+    if self._dp_indicator_show_right:
+      right_rect = rl.Rectangle(int(rect.x + rect.width - bar_width), y_pos, bar_width, bar_height)
+      rl.draw_rectangle_rounded(right_rect, 0.75, 20, self._dp_indicator_color_right)
+
+  def _draw_lead_info(self, rect: rl.Rectangle) -> None:
+    """繪製置中的圓角立體「倒三角形」與前車距離"""
+
+    # 無鎖定前車時，不顯示圖示與數字
+    if self.lead_dist == "-":
+      return
+
+    # 尺寸設定：高度 40，寬度 45
+    bar_h = 40.0
+    bar_w = 45.0
+
+    # 垂直位置與水平置中
+    pos_y = int(rect.y + rect.height - 39)
+    bar_y = pos_y - bar_h / 2
+    bar_x = rect.x + (rect.width - bar_w) / 2
+
+    dist_text = self.lead_dist
+    dist_font_size = 40
+    dist_size = measure_text_cached(self._font_bold, dist_text, dist_font_size)
+
+    # 距離數據顯示在圖形左側（保持 15px 間距）
+    text_x = bar_x - dist_size.x - 15
+    text_y = pos_y - dist_size.y / 2
+
+    dist_color = rl.WHITE
+
+    # 判斷是否處於警告狀態
+    is_warning = (self.lead_dist_raw < 15.0)
+
+    if is_warning:
+      # 呼吸燈效果
+      alpha = 150 + int(60 * math.sin(time.time() * 5))
+      center_color = rl.Color(255, 100, 100, alpha)
+      edge_color = rl.Color(180, 0, 0, alpha)
+      dist_color = rl.Color(255, 100, 100, 255)
     else:
-      # dp - ALKA: show steering wheel when ALKA is active (even when disengaged)
-      if ui_state.status == UIStatus.DISENGAGED and not ui_state.dp_alka_active:
-        self._wheel_alpha_filter.update(0)
-        self._wheel_y_filter.update(wheel_txt.height / 2)
-      else:
-        self._wheel_alpha_filter.update(255 * 0.9)
-        self._wheel_y_filter.update(0)
+      # 安全狀態：綠色恆亮
+      center_color = rl.Color(150, 255, 150, 255)
+      edge_color = rl.Color(0, 180, 0, 255)
+      dist_color = rl.Color(128, 216, 166, 255)
 
-    # pos
-    pos_x = int(rect.x + 21 + wheel_txt.width / 2)
-    pos_y = int(rect.y + rect.height - 14 - wheel_txt.height / 2 + self._wheel_y_filter.x)
-    rotation = -ui_state.sm['carState'].steeringAngleDeg
+    # 繪製文字陰影與主體
+    rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x + 2, text_y + 2), dist_font_size, 0, rl.Color(0, 0, 0, 150))
+    rl.draw_text_ex(self._font_bold, dist_text, rl.Vector2(text_x, text_y), dist_font_size, 0, dist_color)
 
-    turn_intent_margin = 25
-    self._turn_intent.render(rl.Rectangle(
-      pos_x - wheel_txt.width / 2 - turn_intent_margin,
-      pos_y - wheel_txt.height / 2 - turn_intent_margin,
-      wheel_txt.width + turn_intent_margin * 2,
-      wheel_txt.height + turn_intent_margin * 2,
-    ))
+    # --- 圓角三角形繪製演算法（避免半透明圖層重疊加深） ---
+    def draw_rounded_triangle_poly(x, y, w, h, r, scale, color):
+        cx = x + w / 2
+        # 倒三角形，視覺形心偏上方
+        cy = y + h / 3
 
-    src_rect = rl.Rectangle(0, 0, wheel_txt.width, wheel_txt.height)
-    dest_rect = rl.Rectangle(pos_x, pos_y, wheel_txt.width, wheel_txt.height)
-    origin = (wheel_txt.width / 2, wheel_txt.height / 2)
+        # 內縮後的原始角點中心（倒三角形：左上 -> 底部中心 -> 右上）
+        # 確保順序為逆時針 (Counter-Clockwise)
+        v1 = rl.Vector2(x + r, y + r)                  # 左上
+        v2 = rl.Vector2(x + w / 2, y + h - r)          # 底部中心
+        v3 = rl.Vector2(x + w - r, y + r)              # 右上
 
-    # color and draw
-    color = rl.Color(255, 255, 255, int(self._wheel_alpha_filter.x))
-    rl.draw_texture_pro(wheel_txt, src_rect, dest_rect, origin, rotation, color)
+        # 依據 scale 比例推算實際點位
+        c1 = rl.Vector2(cx + (v1.x - cx) * scale, cy + (v1.y - cy) * scale)
+        c2 = rl.Vector2(cx + (v2.x - cx) * scale, cy + (v2.y - cy) * scale)
+        c3 = rl.Vector2(cx + (v3.x - cx) * scale, cy + (v3.y - cy) * scale)
+        scaled_r = r * scale
 
-    if self._show_wheel_critical:
-      # Draw exclamation point icon
-      EXCLAMATION_POINT_SPACING = 10
-      exclamation_pos_x = pos_x - self._txt_exclamation_point.width / 2 + wheel_txt.width / 2 + EXCLAMATION_POINT_SPACING
-      exclamation_pos_y = pos_y - self._txt_exclamation_point.height / 2
-      rl.draw_texture_ex(self._txt_exclamation_point, rl.Vector2(exclamation_pos_x, exclamation_pos_y), 0.0, 1.0, rl.WHITE)
+        # 計算兩點之間的垂直法向量
+        def get_normal(pA, pB):
+            dx = pB.x - pA.x
+            dy = pB.y - pA.y
+            length = math.hypot(dx, dy)
+            return (-dy / length, dx / length) if length > 0 else (0, -1)
+
+        n12 = get_normal(c1, c2)
+        n23 = get_normal(c2, c3)
+        n31 = get_normal(c3, c1)
+
+        points = []
+
+        # 計算弧線點的輪廓
+        def add_arc(center, n_start, n_end):
+            angle_start = math.atan2(n_start[1], n_start[0])
+            angle_end = math.atan2(n_end[1], n_end[0])
+
+            # 強制確保角度為逆時針方向 (Pyray 螢幕座標 Y 軸向下，角度應為遞減)
+            while angle_end > angle_start:
+                angle_end -= math.pi * 2
+
+            steps = 6  # 圓角的平滑度 (分 6 段)
+            for i in range(steps + 1):
+                t = i / steps
+                a = angle_start + (angle_end - angle_start) * t
+                points.append(rl.Vector2(center.x + math.cos(a) * scaled_r, center.y + math.sin(a) * scaled_r))
+
+        # 依序加入左上、底部中心、右下三個圓角的弧線
+        add_arc(c1, n31, n12)
+        add_arc(c2, n12, n23)
+        add_arc(c3, n23, n31)
+
+        # 透過中心點向輪廓畫出放射狀三角形 (Triangle Fan)，完美填充且不重疊
+        center_pt = rl.Vector2(cx, cy)
+        for i in range(len(points)):
+            p1 = points[i]
+            p2 = points[(i + 1) % len(points)]
+            rl.draw_triangle(center_pt, p1, p2, color)
+
+    # --- 依序繪製底層、邊緣、中心 ---
+    base_r = 6.0  # 控制三角形圓角平滑度的半徑參數
+
+    # 背景黑底（放大約 1.15 倍形成外圍邊框）
+    draw_rounded_triangle_poly(bar_x, bar_y, bar_w, bar_h, base_r, 1.15, rl.Color(0, 0, 0, 180))
+    # 底部暗色邊緣（原始大小）
+    draw_rounded_triangle_poly(bar_x, bar_y, bar_w, bar_h, base_r, 1.0, edge_color)
+    # 頂部亮色中心（縮小 0.7 倍製造立體感）
+    draw_rounded_triangle_poly(bar_x, bar_y, bar_w, bar_h, base_r, 0.7, center_color)
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     """Draw the MAX speed indicator box."""
