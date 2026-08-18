@@ -43,9 +43,9 @@ class MetricData:
   label: str
   value: str
   color: rl.Color
-  icon: rl.Texture | None = None
+  icon: object | None = None
 
-  def update(self, label: str, value: str, color: rl.Color, icon: rl.Texture | None = None):
+  def update(self, label: str, value: str, color: rl.Color, icon: object | None = None):
     self.label = label
     self.value = value
     self.color = color
