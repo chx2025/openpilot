@@ -86,7 +86,7 @@ class SmartCruiseControlVision:
       rate_plan = np.array(np.abs(sm['modelV2'].orientationRate.z))
       vel_plan = np.array(sm['modelV2'].velocity.x)
 
-      self.current_lat_acc = self.v_ego ** 2 * abs(sm['controlsState'].curvature)
+      self.current_lat_acc = self.v_ego ** 2 * abs(sm['controlsState'].desiredCurvature)
 
       # get the maximum lat accel from the model
       predicted_lat_accels = rate_plan * vel_plan

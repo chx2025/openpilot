@@ -102,6 +102,7 @@ def generate_carState():
 def generate_controlsState():
   controls_state = messaging.new_message('controlsState')
   controls_state.controlsState.curvature = 0.05
+  controls_state.controlsState.desiredCurvature = 0.05
 
   return controls_state
 
@@ -145,6 +146,12 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     for _ in range(int(10. / DT_MDL)):
       self.scc_v.update(self.sm, True, False, 0., 0., 0.)
     assert self.scc_v.state == VisionState.enabled
+
+  def test_turn_control_uses_planned_curvature(self):
+    self.sm['controlsState'].curvature = 0.001
+    self.sm['controlsState'].desiredCurvature = 0.01
+    self.scc_v.update(self.sm, True, False, 10.0, 0.0, 0.0)
+    assert np.isclose(self.scc_v.current_lat_acc, 1.0)
 
   @parameterized.expand([
       ("p97_just_above_threshold", True),
