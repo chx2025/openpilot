@@ -8,6 +8,7 @@ import pyray as rl
 from dataclasses import dataclass
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 
@@ -56,7 +57,7 @@ class SidebarSP:
   def __init__(self):
     self._egpu_icon = gui_app.texture("icons_mici/egpu_green.png", 60, 44)
     self._egpu_icon_gray = gui_app.texture("icons_mici/egpu_gray.png", 60, 44)
-    self._egpu_status = MetricData("eGPU", "未连接", Colors.DISABLED, self._egpu_icon_gray)
+    self._egpu_status = MetricData("eGPU", "OFFLINE", Colors.DISABLED, self._egpu_icon_gray)
     self._egpu_metric_rect = rl.Rectangle(0, 0, 0, 0)
 
   def _update_egpu_status(self):
@@ -64,17 +65,17 @@ class SidebarSP:
     eject_status = ui_state.params.get("UsbGpuEjectStatus")
 
     if eject_status == "ejecting":
-      value, color, icon = "卸载中", Colors.PROGRESS, self._egpu_icon_gray
+      value, color, icon = "LOADING", Colors.PROGRESS, self._egpu_icon_gray
     elif eject_status == "safe":
-      value, color, icon = "可拔出", Colors.GOOD, self._egpu_icon_gray
+      value, color, icon = "REMOVE", Colors.GOOD, self._egpu_icon_gray
     elif eject_status == "error":
-      value, color, icon = "卸载失败", Colors.DANGER, self._egpu_icon_gray
+      value, color, icon = "ERROR", Colors.DANGER, self._egpu_icon_gray
     elif present and ui_state.usbgpu_compiled:
-      value, color, icon = "已连接", Colors.GOOD, self._egpu_icon
+      value, color, icon = "ONLINE", Colors.GOOD, self._egpu_icon
     elif present:
-      value, color, icon = "未编译", Colors.WARNING, self._egpu_icon_gray
+      value, color, icon = "ONLINE", Colors.WARNING, self._egpu_icon_gray
     else:
-      value, color, icon = "未连接", Colors.DISABLED, self._egpu_icon_gray
+      value, color, icon = "OFFLINE", Colors.DISABLED, self._egpu_icon_gray
 
     self._egpu_status.update("eGPU", value, color, icon)
 
@@ -83,7 +84,7 @@ class SidebarSP:
       return False
 
     if ui_state.started:
-      gui_app.push_widget(ConfirmDialog("只能在停车后的 offroad 界面安全卸载 eGPU。", "确定", cancel_text=""))
+      gui_app.push_widget(ConfirmDialog(f"eGPU · OFFROAD · {tr('REMOVE')}", tr("OK"), cancel_text=""))
       return True
 
     present = bool(ui_state.sm["deviceState"].chestnutPresent)
@@ -97,12 +98,10 @@ class SidebarSP:
 
     error = ui_state.params.get("UsbGpuEjectError")
     if status == "error" and error:
-      message = f"上次卸载失败：{error}\n是否重试安全卸载？"
-      confirm_text = "重试卸载"
+      message = f"eGPU · {tr('ERROR')}: {error}\n{tr('REMOVE')}?"
     else:
-      message = "安全卸载 eGPU？\n请等界面显示“可拔出”后再断开连接。"
-      confirm_text = "安全卸载"
-    gui_app.push_widget(ConfirmDialog(message, confirm_text, callback=confirm))
+      message = f"eGPU · {tr('REMOVE')}?\n{tr('LOADING')}  >  {tr('REMOVE')}"
+    gui_app.push_widget(ConfirmDialog(message, tr("REMOVE"), callback=confirm))
     return True
 
   def _draw_metrics_sp(self, rect: rl.Rectangle, _temp, _panda, _connect):
