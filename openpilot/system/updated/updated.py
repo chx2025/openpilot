@@ -18,6 +18,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.common.hardware import AGNOS, HARDWARE
 from openpilot.common.version import get_build_metadata, SP_BRANCH_MIGRATIONS
+from openpilot.sunnypilot.system.update_hooks import hydrate_lfs_checkout
 
 LOCK_FILE = os.getenv("UPDATER_LOCK_FILE", "/tmp/safe_staging_overlay.lock")
 STAGING_ROOT = os.getenv("UPDATER_STAGING_ROOT", "/data/safe_staging")
@@ -187,6 +188,7 @@ def finalize_update() -> None:
 
   run(["git", "reset", "--hard"], FINALIZED)
   run(["git", "submodule", "foreach", "--recursive", "git", "reset", "--hard"], FINALIZED)
+  hydrate_lfs_checkout(FINALIZED, run)
 
   set_consistent_flag(True)
   cloudlog.info("done finalizing overlay")
