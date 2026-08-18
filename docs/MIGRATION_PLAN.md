@@ -40,8 +40,8 @@ observable. The old unconditional `Panda.get_type() == 9` override is excluded.
 | P1 | Planner Backend | Official and TN-NoDEC; session latch; TN acceleration personality; stopping policy | one planner factory; three default-no-op MPC hooks; two planner-helper hooks | Host-tested; device test pending |
 | P1 | Traffic-control Plan Constraint | Off/Observe/Shadow/StopOnly/StopGo, freshness, confirmation, radar/lead gate, pedal bypass, HUD diagnostics | one planner decorator; card observation publisher; UI consumes Decision | Host-tested; device test pending |
 | P2 | Device Query/Command | read-only status, Tesla diagnostics, settings allowlist, hotspot | one managed service; query/command registry | Pending security review |
-| P2 | Update reliability | proxy Adapter, current-tree LFS hydrate, last-known-good clock | narrow updater/time hooks | Pending |
-| P3 | Local Defaults/UX | offroad brightness entry, one-minute shutdown choice, optional buzzer/sounds, speed offset cap | separate defaults policy and isolated UI rows | Pending individual selection |
+| P2 | Update reliability | proxy Adapter, current-tree LFS hydrate, last-known-good clock | narrow updater/time hooks | LFS and clock host-tested; proxy pending |
+| P3 | Local Defaults/UX | offroad brightness entry, one-minute shutdown choice, optional buzzer/sounds, speed offset cap | separate defaults policy and isolated UI rows | Brightness, shutdown, speed cap, and SCC-V ported; buzzer/sounds pending hardware review |
 
 ### Tesla safety unit
 
