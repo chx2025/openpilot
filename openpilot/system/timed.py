@@ -9,6 +9,7 @@ from openpilot.common.time_helpers import min_date, MAX_DATE, system_time_valid
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.common.gps import get_gps_location_service
+from openpilot.sunnypilot.system.clock_persistence import ClockPersistence
 
 
 def set_time(new_time):
@@ -34,12 +35,19 @@ def main() -> NoReturn:
   """
 
   params = Params()
+  clock_persistence = ClockPersistence(
+    params,
+    monotonic=time.monotonic,
+    now=lambda: datetime.datetime.now(datetime.UTC).replace(tzinfo=None),
+  )
+  clock_persistence.restore(set_time)
   gps_location_service = get_gps_location_service(params)
 
   pm = messaging.PubMaster(['clocks'])
   sm = messaging.SubMaster([gps_location_service])
   while True:
     sm.update(1000)
+    clock_persistence.persist_if_due()
 
     msg = messaging.new_message('clocks')
     msg.valid = system_time_valid()
