@@ -65,7 +65,7 @@ class SidebarSP:
     eject_status = ui_state.params.get("UsbGpuEjectStatus")
 
     if eject_status == "ejecting":
-      value, color, icon = "LOADING", Colors.PROGRESS, self._egpu_icon_gray
+      value, color, icon = f"{tr('REMOVE')}...", Colors.PROGRESS, self._egpu_icon_gray
     elif eject_status == "safe":
       value, color, icon = "REMOVE", Colors.GOOD, self._egpu_icon_gray
     elif eject_status == "error":
@@ -100,7 +100,7 @@ class SidebarSP:
     if status == "error" and error:
       message = f"eGPU · {tr('ERROR')}: {error}\n{tr('REMOVE')}?"
     else:
-      message = f"eGPU · {tr('REMOVE')}?\n{tr('LOADING')}  >  {tr('REMOVE')}"
+      message = f"eGPU · {tr('REMOVE')}?\n{tr('REMOVE')}...  >  {tr('REMOVE')}"
     gui_app.push_widget(ConfirmDialog(message, tr("REMOVE"), callback=confirm))
     return True
 
