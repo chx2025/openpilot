@@ -64,6 +64,7 @@ class UIState(UIStateSP):
         "vehicleParameters",
         "testJoystick",
         "rawAudioData",
+        "chestnutState",
       ] + self.sm_services_ext
     )
 

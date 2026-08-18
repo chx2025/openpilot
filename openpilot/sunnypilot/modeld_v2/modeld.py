@@ -390,6 +390,8 @@ def main(demo=False):
 
   # setup filter to track dropped frames
   frame_dropped_filter = FirstOrderFilter(0., 10., 1. / model.constants.MODEL_FREQ)
+  model_fps_filter = FirstOrderFilter(0., 2., 1. / model.constants.MODEL_FREQ, initialized=False)
+  last_model_output_t: float | None = None
   frame_id = 0
   last_vipc_frame_id = 0
   run_count = 0
@@ -514,6 +516,12 @@ def main(demo=False):
     model_execution_time = mt2 - mt1
 
     if model_output is not None:
+      model_output_t = time.monotonic()
+      if last_model_output_t is not None:
+        model_fps_filter.update(1.0 / max(model_output_t - last_model_output_t, 1e-3))
+      last_model_output_t = model_output_t
+      if chestnut_state is not None:
+        chestnut_state.model_fps = float(model_fps_filter.x)
       modelv2_send = messaging.new_message('modelV2')
       drivingdata_send = messaging.new_message('drivingModelData')
       posenet_send = messaging.new_message('cameraOdometry')

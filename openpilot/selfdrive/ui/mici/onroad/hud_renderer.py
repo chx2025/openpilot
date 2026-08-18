@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
+from openpilot.selfdrive.ui.egpu_status import draw_egpu_status_panel
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -193,6 +194,8 @@ class HudRenderer(Widget):
 
     if ui_state.usbgpu and ui_state.usbgpu_compiled:
       self._draw_model_source(rect)
+
+    draw_egpu_status_panel(rect, self._font_medium, compact=True)
 
     self._draw_steering_wheel(rect)
 

@@ -725,6 +725,9 @@ struct ChestnutState {
   pcieLtssm @7 :UInt8;
   supplyVoltage @8 :UInt16;  # mV
   supplyCurrent @9 :Int16;  # mA
+  memoryUsedMb @10 :UInt32;
+  memoryTotalMb @11 :UInt32;
+  modelFps @12 :Float32;
 }
 
 struct RadarState @0x9a185389d6fdd05f {

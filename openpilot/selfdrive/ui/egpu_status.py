@@ -1,0 +1,97 @@
+"""Read-only eGPU status model and the small left-side HUD panel."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import pyray as rl
+
+from openpilot.common.hardware.usb import CHESTNUT_USB_IDS
+
+
+@dataclass(frozen=True)
+class EgpuStatus:
+  visible: bool
+  healthy: bool
+  headline: str
+  details: tuple[str, ...]
+
+
+def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active: bool | None,
+                      model_alive: bool, model_big: bool, telemetry_valid: bool,
+                      usb_speed_mbps: int = 0, model_fps: float = 0.0,
+                      power_w: float = 0.0, temp_c: float = 0.0, memory_temp_c: float = 0.0,
+                      memory_used_mb: int = 0, memory_total_mb: int = 0,
+                      gpu_usage_percent: int = 0, gpu_clock_mhz: int = 0,
+                      fan_speed_rpm: int = 0) -> EgpuStatus:
+  if not connected:
+    return (EgpuStatus(True, False, "eGPU 未连接 · 当前不能运行大模型", ("检查 UT3G 供电与 USB 连接",))
+            if compiled else EgpuStatus(False, False, "", ()))
+
+  link = f"USB {usb_speed_mbps} Mbps" if usb_speed_mbps else "USB 已连接"
+  if not compiled:
+    return EgpuStatus(True, False, "eGPU 已连接 · 大模型未编译", (f"AMD eGPU · {link}",))
+  if loading:
+    return EgpuStatus(True, False, "eGPU 正在加载大模型", (f"AMD eGPU · {link}",))
+  if active is False:
+    return EgpuStatus(True, False, "eGPU 大模型失败 · 已回退小模型", (f"AMD eGPU · {link}",))
+  if active is not True:
+    return EgpuStatus(True, False, "eGPU 等待模型启动", (f"AMD eGPU · {link}",))
+  if not model_alive or not model_big:
+    return EgpuStatus(True, False, "eGPU 模型流中断 · 已回退/等待", (f"AMD eGPU · {link}",))
+  if not telemetry_valid:
+    return EgpuStatus(True, False, "eGPU 大模型运行中 · 遥测暂不可用", (f"AMD eGPU · {link}",))
+
+  used_gb = memory_used_mb / 1024.0
+  total_gb = memory_total_mb / 1024.0
+  degraded_link = 0 < usb_speed_mbps < 5000
+  headline = (f"eGPU 大模型运行中 · USB 链路降速 · {model_fps:.1f} FPS" if degraded_link else
+              f"eGPU 大模型运行中 · {model_fps:.1f} FPS")
+  return EgpuStatus(True, not degraded_link, headline, (
+    f"AMD eGPU · {link} · {power_w:.0f} W",
+    f"GPU {temp_c:.0f}°C · 显存 {memory_temp_c:.0f}°C · {used_gb:.1f}/{total_gb:.1f} GB",
+    f"负载 {gpu_usage_percent}% · {gpu_clock_mhz} MHz · 风扇 {fan_speed_rpm} RPM",
+  ))
+
+
+def _usb_speed_mbps(device_state) -> int:
+  speeds = [int(device.speedMbps) for device in device_state.usbState.devices
+            if (int(device.vendorId), int(device.productId)) in CHESTNUT_USB_IDS]
+  return max(speeds, default=0)
+
+
+def draw_egpu_status_panel(rect: rl.Rectangle, font: rl.Font, *, compact: bool) -> None:
+  # Avoid constructing the global UIState when importing the pure status model
+  # in tests and diagnostics.
+  from openpilot.selfdrive.ui.ui_state import ui_state
+
+  sm = ui_state.sm
+  connected = bool(sm["deviceState"].chestnutPresent or ui_state.usbgpu)
+  model_seen = sm.recv_frame["modelV2"] > ui_state.started_frame
+  model_alive = bool(model_seen and sm.alive["modelV2"])
+  model_big = bool(model_alive and sm["modelV2"].big)
+  telemetry_valid = bool(sm.alive["chestnutState"] and sm.valid["chestnutState"])
+  telemetry = sm["chestnutState"]
+  status = build_egpu_status(
+    connected=connected, compiled=ui_state.usbgpu_compiled, loading=ui_state.usbgpu_loading,
+    active=ui_state.usbgpu_active, model_alive=model_alive, model_big=model_big,
+    telemetry_valid=telemetry_valid, usb_speed_mbps=_usb_speed_mbps(sm["deviceState"]),
+    model_fps=float(telemetry.modelFps), power_w=float(telemetry.powerDrawW),
+    temp_c=float(telemetry.tempC), memory_temp_c=float(telemetry.memoryTempC),
+    memory_used_mb=int(telemetry.memoryUsedMb), memory_total_mb=int(telemetry.memoryTotalMb),
+    gpu_usage_percent=int(telemetry.gpuUsagePercent), gpu_clock_mhz=int(telemetry.gpuClockMhz),
+    fan_speed_rpm=int(telemetry.fanSpeedRpm),
+  )
+  if not status.visible:
+    return
+
+  panel_width = 440
+  panel_height = 132 if len(status.details) >= 3 else 82
+  bottom_margin = 205 if compact else 425
+  panel = rl.Rectangle(rect.x + 12, rect.y + rect.height - bottom_margin, panel_width, panel_height)
+  rl.draw_rectangle_rounded(panel, 0.16, 8, rl.Color(0, 0, 0, 170))
+  lines = (status.headline, *status.details)
+  for index, line in enumerate(lines):
+    color = rl.Color(80, 220, 120, 245) if status.healthy and index == 0 else (
+      rl.Color(255, 180, 60, 245) if index == 0 else rl.Color(255, 255, 255, 225)
+    )
+    rl.draw_text_ex(font, line, rl.Vector2(panel.x + 12, panel.y + 8 + index * 29), 24, 0, color)

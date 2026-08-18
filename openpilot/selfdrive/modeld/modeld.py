@@ -4,6 +4,7 @@ import os
 os.environ['GMMU'] = '0' # for usbgpu fast loading, noop for qcom
 from tinygrad.tensor import Tensor
 from tinygrad.device import Device
+from tinygrad.helpers import GlobalCounters
 import struct
 import threading
 import time
@@ -81,6 +82,7 @@ class ChestnutState:
     self.valid = True
     self.sends = 0
     self.metrics = {}
+    self.model_fps = 0.0
 
   @cached_property
   def power_limit(self) -> int:
@@ -91,7 +93,7 @@ class ChestnutState:
     msg = messaging.new_message('chestnutState')
     state = msg.chestnutState
     self.sends += 1
-    if self.big and "AMD" in Device._opened_devices and self.sends % 100 == 1:
+    if self.big and "AMD" in Device._opened_devices and self.sends % 20 == 1:
       try:
         smu = Device["AMD"].iface.dev_impl.smu
         smu._send_msg(smu.smu_mod.PPSMC_MSG_TransferTableSmu2Dram, smu.smu_mod.TABLE_SMU_METRICS, timeout=100)
@@ -112,6 +114,10 @@ class ChestnutState:
     if self.big:
       for k, v in self.metrics.items():
         setattr(state, k, v)
+      state.memoryUsedMb = max(0, int(GlobalCounters.mem_used_per_device.get("AMD", 0) >> 20))
+      if "AMD" in Device._opened_devices:
+        state.memoryTotalMb = max(0, int(Device["AMD"].iface.dev_impl.vram_size >> 20))
+      state.modelFps = self.model_fps
 
     asm_valid = False
     if "AMD" in Device._opened_devices:
@@ -287,6 +293,8 @@ def main(demo=False):
 
   # setup filter to track dropped frames
   frame_dropped_filter = FirstOrderFilter(0., 10., 1. / ModelConstants.MODEL_RUN_FREQ)
+  model_fps_filter = FirstOrderFilter(0., 2., DT_MDL, initialized=False)
+  last_model_output_t: float | None = None
   frame_id = 0
   last_vipc_frame_id = 0
   run_count = 0
@@ -410,6 +418,12 @@ def main(demo=False):
     model_execution_time = mt2 - mt1
 
     if model_output is not None:
+      model_output_t = time.monotonic()
+      if last_model_output_t is not None:
+        model_fps_filter.update(1.0 / max(model_output_t - last_model_output_t, 1e-3))
+      last_model_output_t = model_output_t
+      if chestnut_state is not None:
+        chestnut_state.model_fps = float(model_fps_filter.x)
       modelv2_send = messaging.new_message('modelV2')
       drivingdata_send = messaging.new_message('drivingModelData')
       posenet_send = messaging.new_message('cameraOdometry')
