@@ -15,6 +15,9 @@ Planner Backend, Plan Constraint, and Device Query/Device Command.
   or process boundary before UI is added.
 - A copy of an upstream planner, `selfdrived`, `card`, updater, or settings page
   is not an acceptable long-term Adapter; only a thin wrapper or hook is.
+- Planner Backends share the current upstream MPC and generated solver. A local
+  solver or live tuning profile is accepted only after a numerical regression
+  suite passes and upstream cannot supply the required Interface.
 - opendbc and the main repository are versioned as one Tesla safety unit.
 - UI defaults are a separate Local Defaults policy and never justify changing
   upstream Param defaults.

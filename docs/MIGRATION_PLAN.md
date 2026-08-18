@@ -36,9 +36,9 @@ observable. The old unconditional `Panda.get_type() == 9` override is excluded.
 | --- | --- | --- | --- | --- |
 | P0 | C3XL Profile | AGNOS allowlist/manifest, hardware identity Adapter, Panda Startup, read-only probe | build profile define; AGNOS validator call; Panda startup call | Host-tested |
 | P0 | Tesla Control | DBC/HW4 decoding, MADS/coop steering, manual longitudinal selection, Dynamic Auto Stock, AP Hybrid, auto speed, safety validation | Tesla Control Profile at car init; Tesla Control Runtime at selfdrived | Core/opendbc ported; device test pending |
-| P0 | Radar Backend | OEM/ARS408/Off selector, ARS RX parser, tracker, diagnostics, bounded motion TX, Panda safety | one backend selector in opendbc; one enum Param/UI control | opendbc ported; UI/device test pending |
-| P1 | Planner Backend | Official, Experimental, TN-NoDEC; session latch; tuning profiles; stopping policy | registry construction in planner and fail-closed backend ID check | Pending |
-| P1 | Traffic-control Plan Constraint | Off/Observe/Shadow/StopOnly/StopGo, freshness, confirmation, radar/lead gate, pedal bypass, HUD diagnostics | one planner decorator; card observation publisher; UI consumes Decision | Pending after planner |
+| P0 | Radar Backend | OEM/ARS408/Off selector, ARS RX parser, tracker, diagnostics, bounded motion TX, Panda safety | one backend selector in opendbc; one enum Param/UI control | Host-tested; device test pending |
+| P1 | Planner Backend | Official and TN-NoDEC; session latch; TN acceleration personality; stopping policy | one planner factory; three default-no-op MPC hooks; two planner-helper hooks | Host-tested; device test pending |
+| P1 | Traffic-control Plan Constraint | Off/Observe/Shadow/StopOnly/StopGo, freshness, confirmation, radar/lead gate, pedal bypass, HUD diagnostics | one planner decorator; card observation publisher; UI consumes Decision | Host-tested; device test pending |
 | P2 | Device Query/Command | read-only status, Tesla diagnostics, settings allowlist, hotspot | one managed service; query/command registry | Pending security review |
 | P2 | Update reliability | proxy Adapter, current-tree LFS hydrate, last-known-good clock | narrow updater/time hooks | Pending |
 | P3 | Local Defaults/UX | offroad brightness entry, one-minute shutdown choice, optional buzzer/sounds, speed offset cap | separate defaults policy and isolated UI rows | Pending individual selection |
@@ -60,10 +60,20 @@ motion frame is accepted.
 ### Planner migration rule
 
 Do not keep a forked `longitudinal_planner_official.py`. The Official Adapter
-wraps the Source Baseline planner, while TN owns only its delta. A Planner
-Backend exposes `update`, `publish`, `activeBackendId`, and `tuningRevision`.
-Traffic control is a Plan Constraint with `observe`, `decide`, and `constrain`;
-it cannot directly own the planner or duplicate decisions in the UI.
+constructs the Source Baseline planner directly. TN owns only NoDEC,
+acceleration-personality, and stopping-policy deltas and reuses the same
+upstream six-parameter MPC and generated solver. The old separate eight-
+parameter TN solver is excluded: its status-4 failure is reproducible in the
+final old tree, and keeping it would add a second generated-code maintenance
+surface. The retired Experimental selection fails closed to Official.
+
+Full live MPC tuning profiles are not migrated. Comfort-brake and stop-distance
+values are compiled into the current upstream six-parameter model, so a faithful
+runtime implementation would require another solver or upstream model change.
+TN acceleration personality remains supported because it crosses the existing
+bounded acceleration-policy seam. Traffic control is a Plan Constraint with
+`observe`, `decide`, and `constrain`; it cannot directly own the planner or
+duplicate decisions in the UI.
 
 ## Explicitly excluded
 
@@ -78,6 +88,9 @@ it cannot directly own the planner or duplicate decisions in the UI.
   IMEI/private hosts, and Params with no consumer.
 - Duplicate GPS time-sync process; only last-known-good clock persistence may
   be added to upstream `timed`.
+- The old separate Experimental planner snapshot and live MPC tuning profiles;
+  both require long-lived copies or a second generated solver. Reconsider only
+  if upstream adds a stable runtime tuning Interface.
 - Whole-file copies of old `updated.py`, `selfdrived.py`, UI settings pages, or
   planner files.
 
