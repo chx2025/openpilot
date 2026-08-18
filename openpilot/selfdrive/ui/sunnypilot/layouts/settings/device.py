@@ -20,17 +20,18 @@ from openpilot.system.ui.widgets.scroller_tici import LineSeparator
 
 offroad_time_options = {
   0: 0,
-  1: 5,
-  2: 10,
-  3: 15,
-  4: 30,
-  5: 60,
-  6: 120,
-  7: 180,
-  8: 300,
-  9: 600,
-  10: 1440,
-  11: 1800,
+  1: 1,
+  2: 5,
+  3: 10,
+  4: 15,
+  5: 30,
+  6: 60,
+  7: 120,
+  8: 180,
+  9: 300,
+  10: 600,
+  11: 1440,
+  12: 1800,
 }
 
 
@@ -56,7 +57,7 @@ class DeviceLayoutSP(DeviceLayout):
       description=lambda: tr("Device will automatically shutdown after set time once the engine is turned off.\n(30h is the default)"),
       param="MaxTimeOffroad",
       min_value=0,
-      max_value=11,
+      max_value=12,
       value_change_step=1,
       on_value_changed=None,
       enabled=True,

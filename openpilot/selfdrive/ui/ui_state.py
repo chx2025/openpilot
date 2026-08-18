@@ -236,7 +236,7 @@ class Device(DeviceSP):
     self._prev_timed_out = False
     self._awake: bool = True
 
-    self._offroad_brightness: int = BACKLIGHT_OFFROAD
+    self._offroad_brightness = int(ui_state.params.get("Brightness", return_default=True)) or BACKLIGHT_OFFROAD
     self._last_brightness: int = 0
     self._brightness_filter = FirstOrderFilter(BACKLIGHT_OFFROAD, 10.00, 1 / gui_app.target_fps)
     self._brightness_thread: threading.Thread | None = None

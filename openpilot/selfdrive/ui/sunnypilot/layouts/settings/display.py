@@ -27,6 +27,19 @@ class DisplayLayout(Widget):
     self._scroller = Scroller(items, line_separator=True, spacing=0)
 
   def _initialize_items(self):
+    from openpilot.selfdrive.ui.ui_state import device  # local import avoids the UI-state cycle
+
+    self._offroad_brightness = option_item_sp(
+      param="Brightness",
+      title=lambda: tr("Offroad Brightness"),
+      description="",
+      min_value=0,
+      max_value=100,
+      value_change_step=10,
+      label_callback=lambda value: tr("Default") if value == 0 else f"{value} %",
+      on_value_changed=lambda value: device.set_offroad_brightness(None if value == 0 else value),
+      inline=True,
+    )
     self._onroad_brightness = option_item_sp(
       param="OnroadScreenOffBrightness",
       title=lambda: tr("Onroad Brightness"),
@@ -76,6 +89,7 @@ class DisplayLayout(Widget):
       label_callback=lambda value: f"{int(value/60)} m"
     )
     items = [
+      self._offroad_brightness,
       self._onroad_brightness,
       self._onroad_brightness_timer,
       self._interactivity_timeout,
