@@ -6,6 +6,7 @@ See the LICENSE.md file in the root directory for more details.
 """
 import random
 import time
+import pytest
 
 from openpilot.common.parameterized import parameterized
 
@@ -13,7 +14,8 @@ from openpilot.cereal import custom
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE
 
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver, ALL_SOURCES
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import OffsetType, Policy
+from openpilot.common.constants import CV
 from openpilot.common.test import OpenpilotTestCase
 
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
@@ -145,3 +147,15 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     resolver._get_from_map_data(sm_mock)
     assert resolver.limit_solutions[SpeedLimitSource.map] == 0.
     assert resolver.distance_solutions[SpeedLimitSource.map] == 0.
+
+  def test_offset_is_disabled_at_configured_result_speed(self, resolver_class):
+    resolver = object.__new__(resolver_class)
+    resolver.is_metric = True
+    resolver.offset_type = OffsetType.fixed
+    resolver.offset_value = 10
+    resolver.offset_max_speed = 100
+    resolver.speed_limit = 90 * CV.KPH_TO_MS
+    assert resolver._get_speed_limit_offset() == 0.
+
+    resolver.speed_limit = 80 * CV.KPH_TO_MS
+    assert resolver._get_speed_limit_offset() == pytest.approx(10 * CV.KPH_TO_MS)

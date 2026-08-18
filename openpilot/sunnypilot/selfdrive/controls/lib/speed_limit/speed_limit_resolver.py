@@ -67,6 +67,7 @@ class SpeedLimitResolver:
       self.params
     )
     self.offset_value = self.params.get("SpeedLimitValueOffset", return_default=True)
+    self.offset_max_speed = self.params.get("SpeedLimitOffsetMaxSpeed", return_default=True)
 
     self.speed_limit = 0.
     self.speed_limit_last = 0.
@@ -95,16 +96,20 @@ class SpeedLimitResolver:
       self.is_metric = self.params.get_bool("IsMetric")
       self.offset_type = self.params.get("SpeedLimitOffsetType", return_default=True)
       self.offset_value = self.params.get("SpeedLimitValueOffset", return_default=True)
+      self.offset_max_speed = self.params.get("SpeedLimitOffsetMaxSpeed", return_default=True)
 
   def _get_speed_limit_offset(self) -> float:
     if self.offset_type == OffsetType.off:
-      return 0
+      offset = 0.
     elif self.offset_type == OffsetType.fixed:
-      return float(self.offset_value * (CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS))
+      offset = float(self.offset_value * (CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS))
     elif self.offset_type == OffsetType.percentage:
-      return float(self.offset_value * 0.01 * self.speed_limit)
+      offset = float(self.offset_value * 0.01 * self.speed_limit)
     else:
       raise NotImplementedError("Offset not supported")
+
+    offset_max_speed = self.offset_max_speed * (CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS)
+    return 0. if offset_max_speed > 0. and self.speed_limit + offset >= offset_max_speed else offset
 
   def _reset_limit_sources(self, source: custom.LongitudinalPlanSP.SpeedLimit.Source) -> None:
     self.limit_solutions[source] = 0.

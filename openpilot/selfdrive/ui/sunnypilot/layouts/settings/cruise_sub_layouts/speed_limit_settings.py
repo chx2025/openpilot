@@ -86,13 +86,24 @@ class SpeedLimitSettingsLayout(Widget):
       label_callback=self._get_offset_label,
     )
 
+    self._speed_limit_offset_max_speed = option_item_sp(
+      title=tr("Disable Offset At or Above"),
+      param="SpeedLimitOffsetMaxSpeed",
+      min_value=0,
+      max_value=150,
+      value_change_step=5,
+      description=tr("Do not apply the offset when the resulting speed reaches this value. Set to 0 to disable."),
+      label_callback=self._get_offset_max_speed_label,
+    )
+
     items = [
       self._speed_limit_mode,
       LineSeparatorSP(40),
       self._source_button,
       LineSeparatorSP(40),
       self._speed_limit_offset_type,
-      self._speed_limit_value_offset
+      self._speed_limit_value_offset,
+      self._speed_limit_offset_max_speed,
     ]
     return items
 
@@ -119,6 +130,13 @@ class SpeedLimitSettingsLayout(Widget):
     elif offset_type == int(SpeedLimitOffsetType.fixed):
       return f"{value} {unit}"
     return str(value)
+
+  @staticmethod
+  def _get_offset_max_speed_label(value):
+    if value == 0:
+      return tr("Off")
+    unit = tr("km/h") if ui_state.is_metric else tr("mph")
+    return f"{value} {unit}"
 
   def _update_state(self):
     super()._update_state()
@@ -156,6 +174,7 @@ class SpeedLimitSettingsLayout(Widget):
 
     offset_type = ui_state.params.get("SpeedLimitOffsetType", return_default=True)
     self._speed_limit_value_offset.set_visible(offset_type != int(SpeedLimitOffsetType.off))
+    self._speed_limit_offset_max_speed.set_visible(offset_type != int(SpeedLimitOffsetType.off))
 
   def _render(self, rect):
     if self._current_panel == PanelType.POLICY:
