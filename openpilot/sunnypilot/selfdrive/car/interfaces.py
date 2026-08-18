@@ -12,6 +12,7 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.controls.lib.nnlc.helpers import get_nn_model_path
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import set_speed_limit_assist_availability
+from openpilot.sunnypilot.selfdrive.car.tesla.control_profile import initialization_snapshot as tesla_initialization_snapshot
 
 import openpilot.system.sentry as sentry
 
@@ -126,11 +127,9 @@ def initialize_params(params) -> list[dict[str, Any]]:
     "SubaruStopAndGoManualParkingBrake",
   ])
 
-  # tesla
-  keys.extend([
-    "TeslaCoopSteering",
-    "TeslaMadsScreenButton",
-  ])
+  # Tesla is a deep Module: its complete initialization contract crosses one
+  # Seam instead of leaking each feature flag into this generic interface.
+  tesla_params = tesla_initialization_snapshot(params)
 
   # toyota
   keys.extend([
@@ -138,4 +137,4 @@ def initialize_params(params) -> list[dict[str, Any]]:
     "ToyotaStopAndGoHack",
   ])
 
-  return [{k: params.get(k, return_default=True)} for k in keys]
+  return [{k: params.get(k, return_default=True)} for k in keys] + tesla_params

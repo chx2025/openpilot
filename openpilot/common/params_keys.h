@@ -228,6 +228,18 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SubaruStopAndGoManualParkingBrake", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaCoopSteering", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaMadsScreenButton", {PERSISTENT | BACKUP, INT, "0"}},
+    // Tesla Control Profile. Radar is an enum: 0=OEM, 1=ARS408, 2=off.
+    {"TeslaARS408Radar", {PERSISTENT | BACKUP, INT, "0"}},
+    {"TeslaTouchLongitudinalSwitch", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TeslaApHybrid", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TeslaDynamicApLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TeslaSpeedButtonValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TeslaTurnSignalValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"DynamicAutoStock", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"DynamicAutoStockBlinkerToSP", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"DynamicAutoStockCurveToSP", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"DynamicAutoStockSpeedKph", {PERSISTENT | BACKUP, INT, "80"}},
+    {"DynamicAutoStockSpeedLowKph", {PERSISTENT | BACKUP, INT, "70"}},
     {"ToyotaEnforceStockLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"ToyotaStopAndGoHack", {PERSISTENT | BACKUP, BOOL, "0"}},
 

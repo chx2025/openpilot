@@ -31,6 +31,7 @@ from openpilot.sunnypilot import get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.car.car_specific import CarSpecificEventsSP
 from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import IntelligentCruiseButtonManagement
+from openpilot.sunnypilot.selfdrive.car.tesla.control_runtime import TeslaControlRuntime
 from openpilot.sunnypilot.selfdrive.selfdrived.button_state_tracker import ButtonStateTracker
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 
@@ -97,6 +98,10 @@ class SelfdriveD(CruiseHelper):
 
     # TODO: de-couple selfdrived with card/conflate on carState without introducing controls mismatches
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
+    self.tesla_control = TeslaControlRuntime(self.CP.brand == 'tesla')
+    self.car_state_sp_sock = messaging.sub_sock('carStateSP', conflate=True) if self.tesla_control.enabled else None
+    self.car_state_sp_flags = 0
+    self.car_state_sp_mono_time = 0
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'lateralManeuverPlan'] + ['modelDataV2SP', 'longitudinalPlanSP']
     if SIMULATION:
@@ -276,6 +281,7 @@ class SelfdriveD(CruiseHelper):
     if CS.canValid:
       car_events = self.car_events.update(CS, self.CS_prev, self.sm['carControl']).to_msg()
       self.events.add_from_msg(car_events)
+      self.tesla_control.filter_transition_events(self.events)
 
       car_events_sp = self.car_events_sp.update(CS, self.events).to_msg()
       self.events_sp.add_from_msg(car_events_sp)
@@ -527,6 +533,14 @@ class SelfdriveD(CruiseHelper):
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)
     CS = _car_state.carState if _car_state else self.CS_prev
+    if self.car_state_sp_sock is not None:
+      car_state_sp = messaging.recv_one_or_none(self.car_state_sp_sock)
+      if car_state_sp is not None and car_state_sp.valid:
+        self.car_state_sp_flags = int(car_state_sp.carStateSP.flags)
+        self.car_state_sp_mono_time = int(car_state_sp.logMonoTime)
+
+    car_state_mono_time = int(_car_state.logMonoTime) if _car_state is not None else 0
+    self.tesla_control.update(self.car_state_sp_flags, car_state_mono_time, self.car_state_sp_mono_time)
 
     self.sm.update(0)
 
@@ -658,6 +672,7 @@ class SelfdriveD(CruiseHelper):
     self.publish_selfdriveState(CS)
 
     self.CS_prev = CS
+    self.tesla_control.commit_cycle()
 
   def params_thread(self, evt):
     while not evt.is_set():
