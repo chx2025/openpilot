@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely detach a Chestnut-connected eGPU while the device is offroad."""
+"""Prepare a Chestnut-connected eGPU for physical removal while offroad."""
 import argparse
 import os
 import sys
@@ -28,10 +28,13 @@ def _wait_disconnected(timeout: float = DETACH_TIMEOUT) -> bool:
 
 
 def safe_eject() -> bool:
-  """Exclusively claim Chestnut, then power it down or remove it from the USB bus.
+  """Exclusively claim Chestnut, then power it down when VBUS is controllable.
 
-  Returns whether VBUS was switched off. A False return still means the device is
-  safe to unplug: it was removed from the host bus, but remains externally powered.
+  Returns whether VBUS was switched off. On externally powered C3XL adapters a
+  False return means the bridge is idle and safe for the user to unplug. Do not
+  write the device's sysfs ``remove`` node: an ASM2464 that remains externally
+  powered may not re-enumerate after that host-only detach until its power is
+  physically cycled.
   """
   path, _, _ = find_chestnut()
   if path is None:
@@ -44,11 +47,10 @@ def safe_eject() -> bool:
 
   vbus = Path(VBUS_PATH)
   powered_off = vbus.exists()
-  detach_path = vbus if powered_off else Path(path) / "remove"
-  detach_path.write_text("0\n" if powered_off else "1\n")
-
-  if not _wait_disconnected():
-    raise DetachPendingError("eGPU detach is still pending")
+  if powered_off:
+    vbus.write_text("0\n")
+    if not _wait_disconnected():
+      raise DetachPendingError("eGPU detach is still pending")
   return powered_off
 
 
@@ -60,7 +62,7 @@ def main() -> int:
   except DetachPendingError as e:
     print(e, file=sys.stderr, flush=True)
     return DETACH_PENDING_EXIT_CODE
-  print("powered-off" if powered_off else "host-detached", flush=True)
+  print("powered-off" if powered_off else "safe-to-unplug", flush=True)
   return 0
 
 

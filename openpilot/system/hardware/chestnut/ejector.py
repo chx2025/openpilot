@@ -31,18 +31,19 @@ class ChestnutEjector:
     cloudlog.event("chestnut eject done", returncode=ret.returncode, output=output[-1000:], error=ret.returncode != 0)
 
   def update(self, offroad: bool, usb_state: list[dict]) -> None:
-    present = any((d["vendorId"], d["productId"]) in CHESTNUT_USB_IDS + CHESTNUT_ROM_USB_IDS for d in usb_state)
+    detected = any((d["vendorId"], d["productId"]) in CHESTNUT_USB_IDS + CHESTNUT_ROM_USB_IDS for d in usb_state)
+    ready = any((d["vendorId"], d["productId"]) in CHESTNUT_USB_IDS and d.get("speedMbps", 0) == 5000 for d in usb_state)
     status = self.params.get("UsbGpuEjectStatus")
-    if self.detach_pending and status == "error" and not present:
+    if self.detach_pending and status == "error" and not detected:
       self.params.put("UsbGpuEjectStatus", "safe")
       self.params.remove("UsbGpuEjectError")
       self.detach_pending = False
       self.detached_seen = True
       status = "safe"
 
-    if status == "safe" and not present:
+    if status == "safe" and not detected:
       self.detached_seen = True
-    elif present and status == "safe" and self.detached_seen:
+    elif ready and status == "safe" and self.detached_seen:
       self.params.remove("UsbGpuEjectStatus")
       self.detached_seen = False
 

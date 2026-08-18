@@ -35,13 +35,13 @@ def chestnut_path(tmp_path, monkeypatch):
   return path
 
 
-def test_safe_eject_removes_host_device(chestnut_path, monkeypatch):
+def test_safe_eject_leaves_externally_powered_device_for_physical_unplug(chestnut_path, monkeypatch):
   read_fd, write_fd = os.pipe()
   os.close(write_fd)
   monkeypatch.setattr(eject, "claim_interface", lambda path: read_fd)
 
   assert not eject.safe_eject()
-  assert (chestnut_path / "remove").read_text() == "1\n"
+  assert (chestnut_path / "remove").read_text() == ""
   with pytest.raises(OSError):
     os.fstat(read_fd)
 
@@ -83,15 +83,18 @@ def test_ejector_rejects_onroad_request():
   assert not params.get_bool("UsbGpuEjectRequest")
 
 
-def test_safe_status_survives_stale_usb_snapshot():
+def test_safe_status_clears_only_after_disconnect_and_5gbps_return():
   params = FakeParams({"UsbGpuEjectStatus": "safe"})
   ejector = ChestnutEjector(params)
-  present = [{"vendorId": 0x3801, "productId": 0x0001}]
+  present = [{"vendorId": 0x3801, "productId": 0x0001, "speedMbps": 5000}]
 
   ejector.update(True, present)
   assert params.get("UsbGpuEjectStatus") == "safe"
 
   ejector.update(True, [])
+  ejector.update(True, [{**present[0], "speedMbps": 480}])
+  assert params.get("UsbGpuEjectStatus") == "safe"
+
   ejector.update(True, present)
   assert params.get("UsbGpuEjectStatus") is None
 
