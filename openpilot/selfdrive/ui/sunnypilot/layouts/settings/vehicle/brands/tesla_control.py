@@ -11,6 +11,7 @@ import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.car.tesla.control_profile import normalize_mads_screen_button
+from openpilot.sunnypilot.selfdrive.traffic_control import TrafficControlMode, configured_mode, planner_session_is_active
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets.list_view import button_item_sp, multiple_button_item_sp, option_item_sp, toggle_item_sp
@@ -79,6 +80,27 @@ class TeslaControlSettingsLayout(Widget):
       label_callback=lambda value: f"{value} km/h",
       description=tr("Return a configured dynamic mode to sunnypilot below this speed."),
     )
+    self.traffic_control_mode = multiple_button_item_sp(
+      title=lambda: tr("Tesla Traffic Control"),
+      description=lambda: tr("Observe and Shadow never alter control. Stop and Stop/Go are experimental closed-course constraints."),
+      buttons=[lambda: tr("Off"), lambda: tr("Observe"), lambda: tr("Shadow"), lambda: tr("Stop"), lambda: tr("Stop/Go")],
+      param="TeslaTrafficControlMode",
+      inline=False,
+    )
+    self.traffic_stop_reference = option_item_sp(
+      title=tr("Traffic Stop Reference"),
+      param="TeslaTrafficStopReference",
+      min_value=20,
+      max_value=120,
+      value_change_step=5,
+      label_callback=lambda value: f"{value / 10.0:.1f} m",
+      description=tr("Distance between the OEM traffic-control target and the desired stopping point."),
+    )
+    self.traffic_adaptive_reference = toggle_item_sp(
+      title=tr("Adaptive Stop Reference"),
+      param="TeslaTrafficAdaptiveReference",
+      description=tr("Use a confirmed model stop to slowly adapt the OEM target reference."),
+    )
 
     self.items = [
       self.touch_longitudinal_switch,
@@ -89,6 +111,9 @@ class TeslaControlSettingsLayout(Widget):
       self.curve_to_sp,
       self.speed_high,
       self.speed_low,
+      self.traffic_control_mode,
+      self.traffic_stop_reference,
+      self.traffic_adaptive_reference,
     ]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
@@ -102,6 +127,9 @@ class TeslaControlSettingsLayout(Widget):
     self.curve_to_sp.set_visible(dynamic_stock)
     self.speed_high.set_visible(dynamic_stock or dynamic_ap)
     self.speed_low.set_visible(dynamic_stock or dynamic_ap)
+    traffic_mode = configured_mode(ui_state.params)
+    self.traffic_stop_reference.set_visible(traffic_mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo))
+    self.traffic_adaptive_reference.set_visible(traffic_mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo))
 
   def _update_state(self):
     super()._update_state()
@@ -115,6 +143,11 @@ class TeslaControlSettingsLayout(Widget):
     self.dynamic_ap_longitudinal.action_item.set_enabled(offroad and has_longitudinal)
     self.speed_high.action_item.set_enabled(offroad)
     self.speed_low.action_item.set_enabled(offroad)
+    planner_stopped = not planner_session_is_active(ui_state.sm)
+    self.traffic_control_mode.action_item.set_enabled(planner_stopped)
+    self.traffic_control_mode.action_item.set_enabled_buttons(None if has_longitudinal else {0, 1, 2})
+    self.traffic_stop_reference.action_item.set_enabled(planner_stopped)
+    self.traffic_adaptive_reference.action_item.set_enabled(planner_stopped)
     self._update_visibility()
 
   def _render(self, rect):
