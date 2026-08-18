@@ -11,6 +11,10 @@ import SCons.Errors
 from SCons.Defaults import _stripixes
 
 COMMA_HARDWARE = os.path.isfile('/AGNOS')
+HARDWARE_PROFILE_FILE = os.path.join(Dir('#').abspath, 'hardware_profile')
+HARDWARE_PROFILE = open(HARDWARE_PROFILE_FILE).read().strip() if os.path.isfile(HARDWARE_PROFILE_FILE) else 'standard'
+if HARDWARE_PROFILE not in ('standard', 'c3xl'):
+  raise SCons.Errors.UserError(f"Unknown hardware profile '{HARDWARE_PROFILE}'")
 
 SCons.Warnings.warningAsException(True)
 
@@ -167,6 +171,8 @@ env = Environment(
   tools=["default", "cython", "compilation_db", "rednose_filter"],
   toolpath=["#msgq_repo/site_scons/site_tools", "#rednose_repo/site_scons/site_tools"],
 )
+if HARDWARE_PROFILE == 'c3xl':
+  env.Append(CPPDEFINES=['SUNNYPILOT_HARDWARE_PROFILE_C3XL'])
 # SCons' Darwin linker tool doesn't define the variables used to expand RPATH.
 if arch == "Darwin":
   env["RPATHPREFIX"] = "-Wl,-rpath,"

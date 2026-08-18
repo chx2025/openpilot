@@ -10,9 +10,18 @@ from collections.abc import Generator
 
 import requests
 
+from openpilot.sunnypilot.hardware.agnos import validate_agnos_manifest
+
 SPARSE_CHUNK_FMT = struct.Struct('H2xI4x')
 
 AGNOS_MANIFEST_FILE = "openpilot/system/hardware/comma/agnos.json"
+
+
+def load_agnos_manifest(manifest_path: str) -> list[dict]:
+  with open(manifest_path) as manifest_file:
+    update = json.load(manifest_file)
+  validate_agnos_manifest(update)
+  return update
 
 
 class StreamingDecompressor:
@@ -208,7 +217,7 @@ def flash_partition(target_slot_number: int, partition: dict, cloudlog, standalo
 
 
 def swap(manifest_path: str, target_slot_number: int, cloudlog) -> None:
-  update = json.load(open(manifest_path))
+  update = load_agnos_manifest(manifest_path)
   for partition in update:
     if not partition.get('full_check', False):
       clear_partition_hash(target_slot_number, partition)
@@ -223,7 +232,7 @@ def swap(manifest_path: str, target_slot_number: int, cloudlog) -> None:
 
 
 def flash_agnos_update(manifest_path: str, target_slot_number: int, cloudlog, standalone=False) -> None:
-  update = json.load(open(manifest_path))
+  update = load_agnos_manifest(manifest_path)
 
   cloudlog.info(f"Target slot {target_slot_number}")
 
@@ -252,7 +261,7 @@ def flash_agnos_update(manifest_path: str, target_slot_number: int, cloudlog, st
 
 
 def verify_agnos_update(manifest_path: str, target_slot_number: int) -> bool:
-  update = json.load(open(manifest_path))
+  update = load_agnos_manifest(manifest_path)
   return all(verify_partition(target_slot_number, partition) for partition in update)
 
 

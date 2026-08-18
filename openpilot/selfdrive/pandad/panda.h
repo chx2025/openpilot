@@ -50,6 +50,7 @@ private:
 public:
   Panda(std::string serial);
 
+  cereal::PandaState::PandaType raw_hw_type = cereal::PandaState::PandaType::UNKNOWN;
   cereal::PandaState::PandaType hw_type = cereal::PandaState::PandaType::UNKNOWN;
 
   bool connected();
