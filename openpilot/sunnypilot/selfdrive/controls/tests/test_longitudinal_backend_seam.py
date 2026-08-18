@@ -1,10 +1,15 @@
+from pathlib import Path
+from types import SimpleNamespace
+
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import (
   BACKENDS, BackendId, get_backend, validate_registry,
 )
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.session import (
   ACTIVE_BACKEND_PARAM, latch_active_backend,
 )
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.longcontrol_factory import _load_stopping_policy
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.longcontrol_policy import TNStoppingPolicy
 
 
 class FakeParams:
@@ -80,3 +85,22 @@ def test_default_backend_hooks_preserve_upstream_dec_behavior():
   plan.dec = State()
   planner._publish_backend_state(plan)
   assert plan.dec.enabled and plan.dec.active
+
+
+def test_tn_backend_does_not_depend_on_dynamic_experimental_control():
+  root = Path(__file__).parents[1] / "lib" / "longitudinal_backends" / "tn_no_dec"
+  source = "\n".join(path.read_text() for path in root.rglob("*.py"))
+  assert "DynamicExperimental" not in source
+  assert "self.dec" not in source
+  assert "dynamic_experimental_control" not in source.lower()
+
+
+def test_tn_stopping_policy_fails_safe_on_invalid_inputs():
+  policy = TNStoppingPolicy()
+  cs = SimpleNamespace(vEgo=float("nan"), aEgo=0.0, standstill=False)
+  assert policy.stopping_decel_rate(cs, -0.5, -0.2) == 1.0
+
+
+def test_stopping_policy_is_attached_only_to_tn_backend():
+  assert _load_stopping_policy(BACKENDS[BackendId.OFFICIAL]) is None
+  assert isinstance(_load_stopping_policy(BACKENDS[BackendId.TN_NO_DEC]), TNStoppingPolicy)

@@ -40,13 +40,14 @@ def long_control_state_trans(CP_SP, active, long_control_state,
   return long_control_state
 
 class LongControl:
-  def __init__(self, CP, CP_SP):
+  def __init__(self, CP, CP_SP, stopping_policy=None):
     self.CP = CP
     self.CP_SP = CP_SP
     self.long_control_state = LongCtrlState.off
     self.pid = PIDController(0.0, (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
+    self.stopping_policy = stopping_policy
 
   def reset(self):
     self.pid.reset()
@@ -59,6 +60,8 @@ class LongControl:
     self.long_control_state = long_control_state_trans(self.CP_SP, active, self.long_control_state,
                                                        should_stop, CS.brakePressed,
                                                        CS.cruiseState.standstill)
+    if self.stopping_policy is not None:
+      self.stopping_policy.update_state(self.long_control_state == LongCtrlState.stopping)
     if self.long_control_state == LongCtrlState.off:
       self.reset()
       output_accel = 0.
@@ -68,7 +71,10 @@ class LongControl:
       if output_accel > self.CP.stopAccel:
         output_accel = min(output_accel, 0.0)
         # TODO: can we just go straight to stopAccel?
-        output_accel -= 1.0 * DT_CTRL  # m/s^2/s while trying to stop
+        decel_rate = 1.0 if self.stopping_policy is None else self.stopping_policy.stopping_decel_rate(
+          CS, a_target, self.last_output_accel,
+        )
+        output_accel -= decel_rate * DT_CTRL  # m/s^2/s while trying to stop
       self.reset()
 
     else:  # LongCtrlState.pid

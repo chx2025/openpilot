@@ -14,6 +14,7 @@ class BackendSpec:
   label: str
   provider: str
   capabilities: frozenset[str] = frozenset()
+  stopping_policy: str | None = None
 
 
 # The official provider always points at the current upstream planner. It is
@@ -31,6 +32,7 @@ TN_NO_DEC_BACKEND = BackendSpec(
   label="TN-NoDEC",
   provider="openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.planner:LongitudinalPlanner",
   capabilities=frozenset({"custom_mpc", "no_dynamic_experimental_control"}),
+  stopping_policy="openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.longcontrol_policy:TNStoppingPolicy",
 )
 
 
