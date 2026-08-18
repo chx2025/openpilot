@@ -240,6 +240,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"DynamicAutoStockCurveToSP", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"DynamicAutoStockSpeedKph", {PERSISTENT | BACKUP, INT, "80"}},
     {"DynamicAutoStockSpeedLowKph", {PERSISTENT | BACKUP, INT, "70"}},
+    // Desired provider is persistent; Active is latched for one onroad session.
+    {"LongitudinalPlannerMode", {PERSISTENT | BACKUP, INT, "0"}},
+    {"ActiveLongitudinalBackend", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT}},
     {"ToyotaEnforceStockLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"ToyotaStopAndGoHack", {PERSISTENT | BACKUP, BOOL, "0"}},
 
