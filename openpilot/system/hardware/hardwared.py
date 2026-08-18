@@ -26,6 +26,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.system.statsd import statlog
 from openpilot.system.hardware.power_monitoring import PowerMonitoring
 from openpilot.system.hardware.fan_controller import FanController
+from openpilot.system.hardware.chestnut.ejector import ChestnutEjector
 from openpilot.common.version import terms_version, training_version, get_build_metadata, terms_version_sp
 
 
@@ -238,6 +239,7 @@ def hardware_thread(end_event, hw_queue) -> None:
 
   fan_controller = FanController(int(1./DT_HW))
   chestnut = Chestnut()
+  chestnut_ejector = ChestnutEjector(params)
   big_model_available = os.path.isfile(os.path.join(BASEDIR, "openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx")) or \
                         os.path.isfile(os.path.join(BASEDIR, "openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl.chunkmanifest"))
 
@@ -300,6 +302,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     msg.deviceState.screenBrightnessPercent = HARDWARE.get_screen_brightness()
 
     set_usb_state(msg.deviceState, last_hw_state.usb_state)
+    chestnut_ejector.update(started_ts is None, last_hw_state.usb_state)
     chestnut.update(started_ts is None, last_hw_state.usb_state)
     set_offroad_alert_if_changed("Offroad_ChestnutBranch", msg.deviceState.chestnutPresent and not big_model_available)
 

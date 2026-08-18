@@ -115,7 +115,7 @@ class Sidebar(Widget, SidebarSP):
     self._update_temperature_status(device_state)
     self._update_connection_status(device_state)
     self._update_panda_status()
-    SidebarSP._update_sunnylink_status(self)
+    SidebarSP._update_egpu_status(self)
 
   def _update_network_status(self, device_state):
     self._net_type = NETWORK_TYPES.get(device_state.networkType.raw, tr_noop("Unknown"))
@@ -146,6 +146,8 @@ class Sidebar(Widget, SidebarSP):
       self._panda_status.update(tr_noop("VEHICLE"), tr_noop("ONLINE"), Colors.GOOD)
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
+    if gui_app.sunnypilot_ui() and SidebarSP._handle_egpu_click(self, mouse_pos):
+      return
     if rl.check_collision_point_rec(mouse_pos, SETTINGS_BTN):
       if self._on_settings_click:
         self._on_settings_click()
@@ -203,7 +205,7 @@ class Sidebar(Widget, SidebarSP):
 
   def _draw_metrics(self, rect: rl.Rectangle):
     if gui_app.sunnypilot_ui():
-      metrics, start_y, spacing = SidebarSP._draw_metrics_w_sunnylink(self, rect, self._temp_status, self._panda_status, self._connect_status)
+      metrics, start_y, spacing = SidebarSP._draw_metrics_sp(self, rect, self._temp_status, self._panda_status, self._connect_status)
       for idx, metric in enumerate(metrics):
         self._draw_metric(rect, metric, start_y + idx * spacing)
 
@@ -226,13 +228,20 @@ class Sidebar(Widget, SidebarSP):
     rl.draw_rectangle_rounded_lines_ex(metric_rect, 0.3, 10, 2, Colors.METRIC_BORDER)
 
     # Draw label and value
+    icon = getattr(metric, "icon", None)
+    if icon is not None:
+      icon_pos = rl.Vector2(metric_rect.x + 31, metric_rect.y + (metric_rect.height - icon.height) / 2)
+      rl.draw_texture_ex(icon, icon_pos, 0.0, 1.0, Colors.WHITE)
+
     labels = [tr(metric.label), tr(metric.value)]
+    text_x = metric_rect.x + (98 if icon is not None else 22)
+    text_width = metric_rect.width - (98 if icon is not None else 22)
     text_y = metric_rect.y + (metric_rect.height / 2 - len(labels) * FONT_SIZE * FONT_SCALE)
     for text in labels:
       text_size = measure_text_cached(self._font_bold, text, FONT_SIZE)
       text_y += text_size.y
       text_pos = rl.Vector2(
-        metric_rect.x + 22 + (metric_rect.width - 22 - text_size.x) / 2,
+        text_x + (text_width - text_size.x) / 2,
         text_y
       )
       rl.draw_text_ex(self._font_bold, text, text_pos, FONT_SIZE, 0, Colors.WHITE)
