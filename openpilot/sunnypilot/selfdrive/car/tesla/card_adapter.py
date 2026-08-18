@@ -8,13 +8,16 @@ adding Tesla branches throughout generic card.
 import time
 from typing import Any
 
+from opendbc.sunnypilot.car.tesla.values import TeslaSafetyFlagsSP
+from openpilot.sunnypilot.selfdrive.car.tesla.validation_controller import TeslaTurnSignalRealtimeController
+
 from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import (
   TeslaTrafficControlObserver, publish_tesla_traffic_control,
 )
 
 
 CONTEXT_STALE_S = 0.2
-CONTEXT_SERVICES = ("selfdriveStateSP",)
+CONTEXT_SERVICES = ("selfdriveStateSP", "modelV2")
 
 
 def longitudinal_context(sm, now: float) -> tuple[int, bool, bool, float, bool, bool, bool, float, bool, float, bool]:
@@ -62,6 +65,9 @@ class TeslaCardAdapter:
     self.sm = submaster
     self.traffic_control_observer = TeslaTrafficControlObserver() if self.enabled else None
     self.road_context_parser = self._create_road_context_parser() if self.enabled else None
+    configured = bool(getattr(car_interface, "CP_SP", None) and
+                      car_interface.CP_SP.safetyParam & TeslaSafetyFlagsSP.TURN_SIGNAL_VALIDATION)
+    self.validation = TeslaTurnSignalRealtimeController(configured) if self.enabled else None
 
   def _create_road_context_parser(self):
     try:
@@ -74,9 +80,9 @@ class TeslaCardAdapter:
     except (AttributeError, KeyError):
       return None
 
-  def observe_can(self, can_list) -> None:
+  def observe_can(self, can_list) -> list:
     if not self.enabled:
-      return
+      return []
 
     if self.traffic_control_observer is not None:
       self.traffic_control_observer.update(can_list, time.monotonic_ns())
@@ -85,13 +91,41 @@ class TeslaCardAdapter:
 
     state = getattr(self.car_interface, "CS", None)
     update_template = getattr(state, "update_speed_button_template", None)
-    if update_template is None:
-      return
 
     for mono_time, frames in can_list:
       for address, data, source in frames:
-        if source == self.VEHICLE_BUS and address == self.SPEED_BUTTON_ADDRESS:
+        if self.validation is not None:
+          self.validation.observe_frame(mono_time, address, data, source)
+        if update_template is not None and source == self.VEHICLE_BUS and address == self.SPEED_BUTTON_ADDRESS:
           update_template(data, mono_time)
+
+    if self.validation is None:
+      return []
+    now_nanos = time.monotonic_ns()
+    self.validation.advance_time(now_nanos)
+    # Cancellation cannot depend on controlsd continuing to publish carControl.
+    return self.validation.take_can_sends(now_nanos, cancel_only=True)
+
+  def control_sends(self, car_state, car_control, now_nanos: int) -> list:
+    if self.validation is None:
+      return []
+    now = time.monotonic()
+    model_valid = (self.sm.seen["modelV2"] and self.sm.valid["modelV2"] and
+                   now - self.sm.recv_time["modelV2"] <= CONTEXT_STALE_S)
+    lane_change = self.sm["modelV2"].meta
+    self.validation.update_lane_change_context(
+      now_nanos,
+      valid=model_valid,
+      state=int(getattr(lane_change.laneChangeState, "raw", lane_change.laneChangeState)),
+      direction=int(getattr(lane_change.laneChangeDirection, "raw", lane_change.laneChangeDirection)),
+      lateral_active=bool(car_control.latActive),
+      brake_pressed=bool(car_state.brakePressed),
+    )
+    return self.validation.take_can_sends(now_nanos)
+
+  def service_params(self, params) -> None:
+    if self.validation is not None:
+      self.validation.service_params(params)
 
   def update_state(self, state_sp, now_ns: int | None = None) -> None:
     if self.road_context_parser is None:

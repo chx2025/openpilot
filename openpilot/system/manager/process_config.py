@@ -75,6 +75,12 @@ def use_github_runner(started, params, CP: car.CarParams) -> bool:
 def use_copyparty(started, params, CP: car.CarParams) -> bool:
   return bool(params.get_bool("EnableCopyparty"))
 
+def use_device_console(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return not PC and params.get_bool("DeviceConsoleEnabled")
+
+def use_external_buzzer(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return not PC and started and params.get_bool("ExternalBuzzerEnabled")
+
 def sunnylink_ready_shim(started, params, CP: car.CarParams) -> bool:
   """Shim for sunnylink_ready to match the process manager signature."""
   return sunnylink_ready(params)
@@ -174,6 +180,11 @@ procs = [
 
 # sunnypilot
 procs += [
+  # Optional C3XL integrations are isolated processes; disabling them restores
+  # the upstream process graph and control behavior.
+  PythonProcess("device_console", "openpilot.selfdrive.debug.device_console", use_device_console),
+  PythonProcess("alert_output", "openpilot.sunnypilot.system.alert_output", use_external_buzzer),
+
   # Models
   PythonProcess("models_manager", "openpilot.sunnypilot.models.manager", only_offroad),
   NativeProcess("modeld_tinygrad", "openpilot/sunnypilot/modeld_v2", ["./modeld"], and_(only_onroad, is_tinygrad_model)),

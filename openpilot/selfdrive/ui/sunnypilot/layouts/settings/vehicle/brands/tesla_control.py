@@ -13,6 +13,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.car.tesla.control_profile import normalize_mads_screen_button
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import BackendId, ordered_backends
 from openpilot.sunnypilot.selfdrive.traffic_control import TrafficControlMode, configured_mode, planner_session_is_active
+from openpilot.selfdrive.debug.device_console_auth import ensure_console_token, rotate_console_token
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets.list_view import button_item_sp, multiple_button_item_sp, option_item_sp, toggle_item_sp
@@ -123,6 +124,48 @@ class TeslaControlSettingsLayout(Widget):
       param="TeslaTrafficAdaptiveReference",
       description=tr("Use a confirmed model stop to slowly adapt the OEM target reference."),
     )
+    ensure_console_token(ui_state.params)
+    self.device_console = toggle_item_sp(
+      title=tr("Local Device Console"),
+      param="DeviceConsoleEnabled",
+      description=tr("Expose the authenticated settings, hotspot, driving status, and Tesla validation page on the local network."),
+    )
+    self.console_token = button_item_sp(
+      title=tr("Device Console Access Token"),
+      button_text=tr("Rotate"),
+      description=lambda: f"http://192.168.43.1:8088\n{ensure_console_token(ui_state.params)}",
+      callback=lambda: rotate_console_token(ui_state.params),
+    )
+    self.web_terminal = toggle_item_sp(
+      title=tr("Arbitrary Web Terminal (High Risk)"),
+      param="WebTerminalEnabled",
+      description=tr("Allow arbitrary commands only while offroad, authenticated by the device console token."),
+    )
+    self.web_driving_visualization = toggle_item_sp(
+      title=tr("Browser Driving and HW4 View"),
+      param="TeslaWebDrivingVisualization",
+      description=tr("Publish a read-only browser view of driving state and Tesla CAN/HW4 perception."),
+    )
+    self.turn_validation = toggle_item_sp(
+      title=tr("Tesla Turn Signal Validation"),
+      param="TeslaTurnSignalValidation",
+      description=tr("Allow authenticated validation using fresh OEM 0x3E9 templates. Restart after changing."),
+    )
+    self.speed_validation = toggle_item_sp(
+      title=tr("Tesla Speed Button Validation"),
+      param="TeslaSpeedButtonValidation",
+      description=tr("Allow authenticated validation using fresh OEM 0x3C2 templates. Restart after changing."),
+    )
+    self.external_buzzer = toggle_item_sp(
+      title=tr("C3XL GPIO42 Buzzer"),
+      param="ExternalBuzzerEnabled",
+      description=tr("Use the C3XL hardware profile's external alert output."),
+    )
+    self.custom_alert_sounds = toggle_item_sp(
+      title=tr("C3XL Custom Alert Sounds"),
+      param="CustomAlertSounds",
+      description=tr("Use the C3XL engage and disengage sound profile after restart."),
+    )
 
     self.items = [
       self.planner_backend,
@@ -139,6 +182,14 @@ class TeslaControlSettingsLayout(Widget):
       self.traffic_control_mode,
       self.traffic_stop_reference,
       self.traffic_adaptive_reference,
+      self.device_console,
+      self.console_token,
+      self.web_terminal,
+      self.web_driving_visualization,
+      self.turn_validation,
+      self.speed_validation,
+      self.external_buzzer,
+      self.custom_alert_sounds,
     ]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
@@ -186,6 +237,10 @@ class TeslaControlSettingsLayout(Widget):
     self.traffic_control_mode.action_item.set_enabled_buttons(None if has_longitudinal else {0, 1, 2})
     self.traffic_stop_reference.action_item.set_enabled(planner_stopped)
     self.traffic_adaptive_reference.action_item.set_enabled(planner_stopped)
+    for item in (self.device_console, self.console_token, self.web_terminal,
+                 self.web_driving_visualization, self.turn_validation,
+                 self.speed_validation, self.external_buzzer, self.custom_alert_sounds):
+      item.action_item.set_enabled(offroad)
     self._update_visibility()
 
   def _render(self, rect):

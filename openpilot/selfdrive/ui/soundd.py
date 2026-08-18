@@ -15,6 +15,7 @@ from openpilot.system import micd
 from openpilot.common.hardware import HARDWARE
 
 from openpilot.sunnypilot.selfdrive.ui.quiet_mode import QuietMode
+from openpilot.sunnypilot.system.sound_profile import get_sound_overrides
 
 SAMPLE_RATE = 48000
 SAMPLE_BUFFER = 4096 # (approx 100ms)
@@ -59,6 +60,7 @@ sound_list: dict[int, tuple[str, int | None, float]] = {
 
   **sound_list_sp,
 }
+sound_list.update(get_sound_overrides())
 
 def check_selfdrive_timeout_alert(sm):
   ss_missing = time.monotonic() - sm.recv_time['selfdriveState']

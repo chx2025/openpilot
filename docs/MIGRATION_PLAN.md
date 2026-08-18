@@ -38,10 +38,10 @@ observable. The old unconditional `Panda.get_type() == 9` override is excluded.
 | P0 | Tesla Control | DBC/HW4 decoding, MADS/coop steering, manual longitudinal selection, Dynamic Auto Stock, AP Hybrid, auto speed, safety validation | Tesla Control Profile at car init; Tesla Control Runtime at selfdrived | Core/opendbc ported; device test pending |
 | P0 | Radar Backend | OEM/ARS408/Off selector, ARS RX parser, tracker, diagnostics, bounded motion TX, Panda safety | one backend selector in opendbc; one enum Param/UI control | Host-tested; device test pending |
 | P1 | Planner Backend | Official and TN-NoDEC; session latch; TN acceleration personality; stopping policy | one planner factory; three default-no-op MPC hooks; two planner-helper hooks | Host-tested; device test pending |
-| P1 | Traffic-control Plan Constraint | Off/Observe/Shadow/StopOnly/StopGo, freshness, confirmation, radar/lead gate, pedal bypass, HUD diagnostics | one planner decorator; card observation publisher; UI consumes Decision | Host-tested; device test pending |
-| P2 | Device Query/Command | read-only status, Tesla diagnostics, settings allowlist, hotspot | one managed service; query/command registry | Pending security review |
+| P1 | Traffic-control Plan Constraint | Off/Observe/Shadow/StopOnly/StopGo, Tesla event confirmation, CP model stop target, bounded confirmed-green departure, radar/lead/driver gates, HUD diagnostics | one planner decorator; card observation publisher; UI consumes Decision | 50 host tests pass; device test pending |
+| P2 | Device Query/Command | authenticated read-only status, Tesla/HW4 diagnostics and validation, settings allowlist, hotspot, opt-in offroad terminal | one managed service; query/command boundary | Host-tested; device security test pending |
 | P2 | Update reliability | proxy Adapter, current-tree LFS hydrate, last-known-good clock | narrow updater/time hooks | LFS and clock host-tested; proxy pending |
-| P3 | Local Defaults/UX | offroad brightness entry, one-minute shutdown choice, optional buzzer/sounds, speed offset cap | separate defaults policy and isolated UI rows | Brightness, shutdown, speed cap, and SCC-V ported; buzzer/sounds pending hardware review |
+| P3 | Local Defaults/UX | offroad brightness entry, one-minute shutdown choice, optional C3XL GPIO42 buzzer/sounds, speed offset cap, eGPU status/telemetry panel | separate defaults policy and isolated UI rows | Host-tested; GPIO/audio/display device test pending |
 
 ### Tesla safety unit
 
@@ -75,15 +75,34 @@ bounded acceleration-policy seam. Traffic control is a Plan Constraint with
 `observe`, `decide`, and `constrain`; it cannot directly own the planner or
 duplicate decisions in the UI.
 
+The confirmed-stop policy follows the local CP reference: Tesla CAN supplies a
+fresh explicit red/yellow event and identity, while an aligned CP model stop
+supplies the primary stopping distance. Confirmed green may depart directly
+only in Stop/Go mode at or below 1 m/s, with valid radar and no lead, no pedal
+input, and no turn intent. Departure uses the Official planner's cruise
+candidate capped at 0.4 m/s²; it does not mutate backend persistent state.
+
+### Local console security boundary
+
+The console and terminal are disabled by default. A random on-device token is
+required on every API request, is marked `DONT_LOG`, is not backed up, and is
+stored only in browser session storage. Requests are accepted only from
+loopback/private/link-local addresses. The arbitrary terminal is a deliberate
+user requirement: it additionally requires its own opt-in Param, runs only
+offroad, is killed on an onroad transition, has a 20-second/64-KiB bound, and
+passes commands as a Bash argument without Python `shell=True`.
+
 ## Explicitly excluded
 
-- eGPU/UT3G model routing, GPU HUD, model assets, and Chestnut/libusb changes.
+- New eGPU/UT3G routing or model assets. The Source Baseline's existing USB-GPU
+  path is unchanged; this migration adds only Chestnut FPS/VRAM observability
+  and a left-side status/telemetry panel.
 - The old offline-Panda-wake series: its intermediate commits are not present
   as a functional net change in final `6108f38`.
 - Unconditional Panda type spoofing.
-- Arbitrary browser shell, default password `123456`, and `shell=True` command
-  execution. A future web console must use a command registry and on-road write
-  gates.
+- Default browser password `123456`, unauthenticated command execution, and
+  Python `shell=True`. The explicitly requested arbitrary terminal is retained
+  only behind the security boundary described above.
 - Disabled audio-feedback code, disabled loggerd/DM/micd changes, hard-coded
   IMEI/private hosts, and Params with no consumer.
 - Duplicate GPS time-sync process; only last-known-good clock persistence may

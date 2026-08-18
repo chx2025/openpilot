@@ -198,7 +198,9 @@ class Car:
 
     can_strs = messaging.drain_sock_raw(self.can_sock, wait_for_one=True)
     can_list = can_capnp_to_list(can_strs)
-    self.tesla_adapter.observe_can(can_list)
+    urgent_sends = self.tesla_adapter.observe_can(can_list)
+    if urgent_sends:
+      self.can_callbacks[1](urgent_sends)
 
     # Update carState from CAN
     CS, CS_SP = self.CI.update(can_list)
@@ -291,6 +293,7 @@ class Car:
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       self.last_actuators_output, can_sends = self.CI.apply(CC, convert_carControlSP(CC_SP), now_nanos)
+      can_sends.extend(self.tesla_adapter.control_sends(CS, CC, now_nanos))
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC
@@ -317,6 +320,7 @@ class Car:
       # sunnypilot
       self.dynamic_experimental_control = self.params.get_bool("DynamicExperimentalControl")
       self.v_cruise_helper.read_custom_set_speed_params()
+      self.tesla_adapter.service_params(self.params)
 
       time.sleep(0.1)
 

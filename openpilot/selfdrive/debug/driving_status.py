@@ -1,0 +1,141 @@
+"""Read-only live driving status for the local settings web UI."""
+import threading
+import time
+
+from opendbc.car.structs import car
+from openpilot.cereal import messaging
+from openpilot.common.params import Params
+from openpilot.selfdrive.debug.tesla_can_visualization import TeslaCanVisualization
+
+
+SERVICES = ("carState", "carStateSP", "controlsState", "selfdriveState", "selfdriveStateSP", "modelV2")
+ENABLED_PARAM = "TeslaWebDrivingVisualization"
+MAX_TRAJECTORY_DISTANCE_M = 100.0
+TRAJECTORY_STRIDE = 3
+MAX_CAN_EVENTS_PER_SNAPSHOT = 250
+
+
+def _number(value: object, digits: int = 1) -> float:
+  return round(float(value), digits)
+
+
+def _set_speed_kph(v_cruise_cluster: float, fallback_v_cruise: float) -> float:
+  """Mirror the on-device HUD: vCruiseCluster is already in display units."""
+  return fallback_v_cruise if v_cruise_cluster == 0.0 else v_cruise_cluster
+
+
+def _is_tesla_model_y(car_params: bytes | None) -> bool:
+  if not car_params:
+    return False
+  try:
+    with car.CarParams.from_bytes(car_params) as cp:
+      return cp.brand == "tesla" and cp.carFingerprint == "TESLA_MODEL_Y"
+  except Exception:
+    return False
+
+
+def _line_points(line: object) -> list[list[float]]:
+  """Compact model coordinates for browser-side rendering."""
+  xs, ys = list(line.x), list(line.y)
+  points = []
+  for index in range(0, min(len(xs), len(ys)), TRAJECTORY_STRIDE):
+    x = float(xs[index])
+    if 0.0 <= x <= MAX_TRAJECTORY_DISTANCE_M:
+      points.append([_number(x), _number(ys[index], 2)])
+  return points
+
+
+def _model_geometry(model: object, car_state_sp: object, oem_can: dict[str, object]) -> dict[str, object]:
+  leads = []
+  for lead in model.leadsV3:
+    if lead.prob >= 0.5 and len(lead.x) and len(lead.y):
+      leads.append({"x": _number(lead.x[0]), "y": _number(lead.y[0], 2), "velocity_mps": _number(lead.v[0]), "probability": _number(lead.prob, 2)})
+  return {
+    "path": _line_points(model.position),
+    # The inner pair is the current-lane boundary and is the clearest signal on a compact display.
+    "lanes": [_line_points(line) for line in list(model.laneLines)[1:3]],
+    "edges": [_line_points(line) for line in model.roadEdges],
+    "leads": leads,
+    "lane_change": str(model.meta.laneChangeState),
+    "lane_change_direction": str(model.meta.laneChangeDirection),
+    "hard_brake_predicted": bool(model.meta.hardBrakePredicted),
+    "oem_traffic": {
+      "available": bool(car_state_sp.teslaRoadContext.available),
+      "light_color": int(car_state_sp.teslaRoadContext.trafficLightColor),
+      "stop_line_distance": _number(car_state_sp.teslaRoadContext.stopLineDistance),
+    },
+    "oem_can": oem_can,
+  }
+
+
+class DrivingStatus:
+  def __init__(self) -> None:
+    self.params = Params()
+    self.sm = messaging.SubMaster(SERVICES)
+    self.can_sock = messaging.sub_sock("can", conflate=False)
+    self.tesla_can = TeslaCanVisualization()
+    self.lock = threading.Lock()
+
+  def _is_tesla_model_y(self) -> bool:
+    car_params = self.params.get("CarParams") or self.params.get("CarParamsPersistent")
+    return _is_tesla_model_y(car_params)
+
+  def _update_tesla_can(self) -> dict[str, object]:
+    packets = []
+    events = messaging.drain_sock(self.can_sock)
+    for event in events[-MAX_CAN_EVENTS_PER_SNAPSHOT:]:
+      packets.append((event.logMonoTime, [(frame.address, bytes(frame.dat), frame.src) for frame in event.can]))
+    if self._is_tesla_model_y():
+      self.tesla_can.update(packets)
+    else:
+      self.tesla_can.reset()
+    return self.tesla_can.snapshot()
+
+  def snapshot(self) -> dict[str, object]:
+    with self.lock:
+      self.sm.update(0)
+      car_state = self.sm["carState"]
+      car_state_sp = self.sm["carStateSP"]
+      controls_state = self.sm["controlsState"]
+      selfdrive_state = self.sm["selfdriveState"]
+      sp_state = self.sm["selfdriveStateSP"]
+      model = self.sm["modelV2"]
+      oem_can = self._update_tesla_can()
+
+      alert = " ".join(text for text in (selfdrive_state.alertText1, selfdrive_state.alertText2) if text)
+      cruise_speed = _set_speed_kph(float(car_state.vCruiseCluster), float(controls_state.deprecated.vCruise))
+      return {
+        "onroad": not self.params.get_bool("IsOffroad"),
+        "connected": {service: self.sm.alive[service] for service in SERVICES},
+        "speed_kph": _number(car_state.vEgo * 3.6),
+        "set_speed_kph": _number(cruise_speed),
+        "openpilot_enabled": bool(selfdrive_state.enabled),
+        "mads_enabled": bool(sp_state.mads.enabled),
+        "alert": alert,
+        "geometry": _model_geometry(model, car_state_sp, oem_can),
+        "updated_at": int(time.monotonic()),
+      }
+
+
+_STATUS: DrivingStatus | None = None
+_STATUS_LOCK = threading.Lock()
+
+
+def driving_status_enabled() -> bool:
+  return Params().get_bool(ENABLED_PARAM)
+
+
+def driving_status_snapshot() -> dict[str, object]:
+  global _STATUS
+  if not driving_status_enabled():
+    # Drop the subscriber when the feature is disabled so the web-only CAN
+    # decoder cannot continue doing work in the background.
+    with _STATUS_LOCK:
+      _STATUS = None
+    raise PermissionError("请先在设备的“设置 → 车辆型号”中开启“浏览器行驶信息”")
+
+  with _STATUS_LOCK:
+    if _STATUS is None:
+      _STATUS = DrivingStatus()
+    status = _STATUS
+  return status.snapshot()
