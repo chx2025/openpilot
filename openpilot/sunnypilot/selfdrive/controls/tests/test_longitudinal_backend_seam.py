@@ -94,6 +94,15 @@ def test_tn_backend_does_not_depend_on_dynamic_experimental_control():
   assert "DynamicExperimental" not in source
   assert "self.dec" not in source
   assert "dynamic_experimental_control" not in source.lower()
+  assert "enable_dec=False" in source
+
+
+def test_tn_reuses_upstream_solver_instead_of_forking_generated_code():
+  root = Path(__file__).parents[1] / "lib" / "longitudinal_backends" / "tn_no_dec"
+  source = (root / "long_mpc.py").read_text()
+  assert "UpstreamLongitudinalMpc" in source
+  assert "gen_long_ocp" not in source
+  assert not (root / "SConscript").exists()
 
 
 def test_tn_stopping_policy_fails_safe_on_invalid_inputs():

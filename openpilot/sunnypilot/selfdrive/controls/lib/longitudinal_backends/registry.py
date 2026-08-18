@@ -31,7 +31,7 @@ TN_NO_DEC_BACKEND = BackendSpec(
   id=BackendId.TN_NO_DEC,
   label="TN-NoDEC",
   provider="openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.planner:LongitudinalPlanner",
-  capabilities=frozenset({"custom_mpc", "no_dynamic_experimental_control"}),
+  capabilities=frozenset({"upstream_mpc", "no_dynamic_experimental_control", "accel_controller"}),
   stopping_policy="openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.longcontrol_policy:TNStoppingPolicy",
 )
 

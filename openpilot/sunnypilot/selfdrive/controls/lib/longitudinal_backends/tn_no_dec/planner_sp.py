@@ -16,7 +16,7 @@ class LongitudinalPlannerSP(UpstreamLongitudinalPlannerSP):
   """TN behavior layered on the current upstream sunnypilot planner helpers."""
 
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, mpc, dt: float = DT_MDL):
-    super().__init__(CP, CP_SP, mpc)
+    super().__init__(CP, CP_SP, mpc, enable_dec=False)
     self.mpc = mpc
     self.accel_controller = AccelController(CP, dt=dt)
     self._radar_log_mono_time = None

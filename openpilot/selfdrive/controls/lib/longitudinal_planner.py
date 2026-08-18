@@ -35,7 +35,8 @@ def get_max_accel(v_ego):
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
 
-def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
+def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle,
+                     max_accel_override=None):
   max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
 
   if not e2e:
@@ -43,6 +44,8 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
     a_y = v_ego ** 2 * angle_steers * CV.DEG_TO_RAD / (CP.steerRatio * CP.wheelbase)
     a_x_allowed = math.sqrt(max(a_total_max ** 2 - a_y ** 2, 0.))
     max_accel = min(max_accel, a_x_allowed)
+    if max_accel_override is not None:
+      max_accel = min(max_accel, max_accel_override)
     if not allow_throttle:
       clipped_accel_coast = max(accel_coast, ACCEL_MIN)
       coast_limit = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [max_accel, clipped_accel_coast])

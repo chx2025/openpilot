@@ -1,3 +1,2 @@
 SConscript(['common/transformations/SConscript'])
 SConscript(['selfdrive/locationd/SConscript'])
-SConscript(['selfdrive/controls/lib/longitudinal_backends/tn_no_dec/SConscript'])
