@@ -214,7 +214,7 @@ def test_green_release_only_removes_constraint_and_never_builds_acceleration():
   assert before[3:] == after[3:]
 
 
-def test_stopped_green_release_never_overrides_base_planner_departure_or_stop():
+def test_stopped_explicit_green_uses_bounded_cp_cruise_departure():
   planner = FakePlanner()
   planner.v_desired_trajectory = np.linspace(0.0, 4.0, 17)
   planner.a_desired_trajectory = np.full(17, 0.4)
@@ -239,15 +239,20 @@ def test_stopped_green_release_never_overrides_base_planner_departure_or_stop():
 
   applied, constraint_accel = adapter._apply_constraint(decision, sm)
 
-  assert not applied
-  assert constraint_accel == 0.0
+  assert applied
+  assert constraint_accel == 0.25
   after = (planner.v_desired_trajectory, planner.a_desired_trajectory,
            planner.j_desired_trajectory, planner.output_a_target,
            planner.output_should_stop, planner.allow_throttle,
            planner.a_desired, planner.v_desired_filter.x)
   for expected, actual in zip(before[:3], after[:3], strict=True):
     assert np.array_equal(expected, actual)
-  assert before[3:] == after[3:]
+  assert planner.output_a_target == 0.25
+  assert not planner.output_should_stop
+  assert planner.allow_throttle
+  # Do not feed the local release into the backend's persistent state.
+  assert planner.a_desired == before[6]
+  assert planner.v_desired_filter.x == before[7]
 
 
 def test_stopped_green_release_does_not_override_lead_or_base_stop():

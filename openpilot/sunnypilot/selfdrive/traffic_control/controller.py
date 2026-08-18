@@ -171,7 +171,8 @@ class TeslaTrafficControlController:
     ))
     return abs(model_stop_distance - expected_stop_distance) <= tolerance
 
-  def _start_stop(self, observation: TeslaTrafficControlObservation, v_ego: float) -> None:
+  def _start_stop(self, observation: TeslaTrafficControlObservation, v_ego: float,
+                  model_stop_distance: float | None) -> None:
     # Distant visual estimates are useful for building confidence but are too
     # unstable and lack lane identity. Never let them constrain the planner.
     if observation.distance > self.config.max_control_distance:
@@ -179,7 +180,13 @@ class TeslaTrafficControlController:
     self.event_source_bus = observation.source_bus
     self.event_control_source = observation.control_source
     self.last_event_observation_ns = self.last_update_ns
-    self.remaining_distance = max(0.0, observation.distance - self.stop_reference)
+    # CP's e2e stop state commits the model stop distance, while the traffic
+    # light detector decides whether that stop is a traffic-control event. Use
+    # the same split: Tesla CAN confirms red and event identity; the aligned CP
+    # model target supplies the primary stopping point.
+    tesla_remaining = max(0.0, observation.distance - self.stop_reference)
+    self.remaining_distance = (tesla_remaining if model_stop_distance is None else
+                               max(0.0, float(model_stop_distance)))
     # A stable target may begin constraining as it crosses 100 m. The stop
     # profile still derives its acceleration from current speed and remaining
     # distance; this boundary only prevents distant visual estimates from
@@ -209,7 +216,7 @@ class TeslaTrafficControlController:
              model_stop_distance: float | None, model_stop_candidate: bool, lead_present: bool,
              radar_valid: bool, enabled: bool, long_active: bool, gas_pressed: bool,
              brake_pressed: bool, turn_signal_active: bool) -> TrafficControlDecision:
-    del a_ego, brake_pressed
+    del a_ego
     dt = 0.0 if self.last_update_ns is None else max(0.0, min((now_ns - self.last_update_ns) / 1e9, 0.5))
     self.last_update_ns = now_ns
 
@@ -285,9 +292,9 @@ class TeslaTrafficControlController:
         if self.green_since_ns is None:
           self.green_since_ns = now_ns
         green_stable = (now_ns - self.green_since_ns) / 1e9 >= self.config.green_confirm_s
-        moving_release = v_ego >= 0.3
+        moving_release = v_ego >= 0.3 and not brake_pressed
         stopped_release = (self.config.mode == TrafficControlMode.stopGo and radar_valid and not lead_present and
-                           not turn_signal_active)
+                           not turn_signal_active and not brake_pressed)
         if green_stable and (moving_release or stopped_release):
           self.phase = TrafficControlPhase.release
           self.release_since_ns = now_ns
@@ -367,7 +374,7 @@ class TeslaTrafficControlController:
         required = v_ego ** 2 / (2.0 * remaining)
         confirmed = confirmed and required <= self.config.comfort_brake
       if confirmed:
-        self._start_stop(observation, v_ego)
+        self._start_stop(observation, v_ego, model_stop_distance)
       return self._decision()
 
     candidate_cancelled = self.phase == TrafficControlPhase.redCandidate

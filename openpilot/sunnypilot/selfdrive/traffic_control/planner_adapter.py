@@ -136,12 +136,36 @@ class TrafficControlPlannerAdapter:
     v_ego = float(sm['carState'].vEgo)
     a_ego = float(sm['carState'].aEgo)
 
-    # A green light only removes this adapter's own stop profile. Departure is
-    # always left to the selected planner so traffic-control data can never
-    # synthesize acceleration or clear a model/lead-owned stop.
+    # CP moves directly from e2eStopped to cruise on a confirmed green. Keep
+    # that behavior narrowly scoped to the same Tesla event, low speed, valid
+    # no-lead radar, and no driver brake/turn intent. The departure acceleration
+    # comes from the official planner's cruise candidate and is capped here.
     if decision.phase == TrafficControlPhase.release:
       self._profile.reset()
-      return False, 0.0
+      car_state = sm['carState']
+      car_control = sm['carControl']
+      radar_valid = bool(sm.seen['radarState'] and sm.alive['radarState'] and sm.valid['radarState'])
+      leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo) if radar_valid else ()
+      no_lead = radar_valid and not any(lead.present for lead in leads)
+      low_speed = float(car_state.vEgo) <= 1.0
+      driver_allows = (not car_state.brakePressed and not car_state.gasPressed and
+                       not car_control.leftBlinker and not car_control.rightBlinker)
+      cruise_accel = float(np.clip(getattr(planner, "a_cruise", 0.0), 0.0, 0.4))
+      departure_allowed = (decision.mode == TrafficControlMode.stopGo and decision.light_state == 2 and
+                           low_speed and no_lead and driver_allows and cruise_accel > 0.0)
+      if not departure_allowed:
+        return False, 0.0
+
+      self._capture_base_output()
+      previous_accel = float(planner.output_a_target)
+      previous_should_stop = bool(planner.output_should_stop)
+      previous_allow_throttle = bool(planner.allow_throttle)
+      planner.output_a_target = max(previous_accel, cruise_accel)
+      planner.output_should_stop = False
+      planner.allow_throttle = True
+      applied = (planner.output_a_target > previous_accel + 1e-3 or previous_should_stop or
+                 not previous_allow_throttle)
+      return applied, float(planner.output_a_target)
 
     stop_speeds, stop_accels, _ = self._profile.build_stop(
       v_ego=v_ego, a_ego=a_ego, remaining_distance=decision.remaining_distance,

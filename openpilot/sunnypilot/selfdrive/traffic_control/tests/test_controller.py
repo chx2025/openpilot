@@ -133,6 +133,14 @@ def test_event_reference_uses_bounded_model_offset_instead_of_fixed_six():
   assert math.isclose(decision.remaining_distance, 42.0 - decision.stop_reference, abs_tol=1.0)
 
 
+def test_confirmed_red_uses_cp_model_stop_distance_as_primary_target():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  decision = confirmed_red(controller, distance=50.0, v_ego=10.0, model_stop_distance=42.0)
+  # At the final confirmation sample both Tesla and CP model distances moved
+  # forward by 8 m. CP's 34 m stop target should be used instead of 42-6=36 m.
+  assert math.isclose(decision.remaining_distance, 34.0, abs_tol=0.5)
+
+
 def test_green_at_255_never_releases_hold():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   confirmed_red(controller, distance=20.0, v_ego=5.0)
@@ -160,6 +168,14 @@ def test_stable_green_releases_only_same_stopped_event_without_turn_signal_or_le
   for now_s in (1.0, 1.3, 1.7):
     decision = update(blocked, now_s, observation(6.0, light=2, now_ns=int(now_s * 1e9)),
                       v_ego=0.0, blinker=True)
+  assert decision.phase == TrafficControlPhase.hold
+
+  braking = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  confirmed_red(braking, distance=20.0, v_ego=5.0)
+  update(braking, 0.8, observation(6.0, light=1, now_ns=int(0.8e9)), v_ego=0.0)
+  for now_s in (1.0, 1.3, 1.7):
+    decision = update(braking, now_s, observation(6.0, light=2, now_ns=int(now_s * 1e9)),
+                      v_ego=0.0, brake=True)
   assert decision.phase == TrafficControlPhase.hold
 
 
