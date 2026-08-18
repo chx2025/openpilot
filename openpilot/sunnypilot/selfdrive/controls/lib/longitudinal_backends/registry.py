@@ -26,9 +26,17 @@ OFFICIAL_BACKEND = BackendSpec(
   capabilities=frozenset({"upstream"}),
 )
 
+TN_NO_DEC_BACKEND = BackendSpec(
+  id=BackendId.TN_NO_DEC,
+  label="TN-NoDEC",
+  provider="openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.planner:LongitudinalPlanner",
+  capabilities=frozenset({"custom_mpc", "no_dynamic_experimental_control"}),
+)
+
 
 BACKENDS: dict[BackendId, BackendSpec] = {
   BackendId.OFFICIAL: OFFICIAL_BACKEND,
+  BackendId.TN_NO_DEC: TN_NO_DEC_BACKEND,
 }
 
 

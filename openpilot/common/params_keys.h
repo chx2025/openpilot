@@ -243,6 +243,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     // Desired provider is persistent; Active is latched for one onroad session.
     {"LongitudinalPlannerMode", {PERSISTENT | BACKUP, INT, "0"}},
     {"ActiveLongitudinalBackend", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT}},
+    {"AccelPersonalityEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"AccelPersonality", {PERSISTENT | BACKUP, INT, "1"}},
     {"TeslaTrafficControlMode", {PERSISTENT | BACKUP, INT, "1"}},
     {"TeslaTrafficStopReference", {PERSISTENT | BACKUP, INT, "60"}},  // decimeters
     {"TeslaTrafficAdaptiveReference", {PERSISTENT | BACKUP, BOOL, "0"}},

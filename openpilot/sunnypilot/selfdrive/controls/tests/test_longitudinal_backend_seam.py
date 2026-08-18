@@ -4,6 +4,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.session import (
   ACTIVE_BACKEND_PARAM, latch_active_backend,
 )
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
 
 class FakeParams:
@@ -20,17 +21,18 @@ class FakeParams:
     self.puts.append((key, value, block))
 
 
-def test_registry_starts_with_current_upstream_planner_only():
+def test_registry_keeps_upstream_and_custom_providers_separate():
   validate_registry()
-  assert set(BACKENDS) == {BackendId.OFFICIAL}
+  assert set(BACKENDS) == {BackendId.OFFICIAL, BackendId.TN_NO_DEC}
   assert get_backend(BackendId.OFFICIAL).provider.endswith("longitudinal_planner:LongitudinalPlanner")
+  assert ".tn_no_dec.planner:" in get_backend(BackendId.TN_NO_DEC).provider
 
 
-def test_unknown_and_not_yet_installed_backends_fail_closed_to_official():
+def test_unknown_and_uninstalled_backends_fail_closed_to_official():
   assert get_backend(None).id == BackendId.OFFICIAL
   assert get_backend("invalid").id == BackendId.OFFICIAL
   assert get_backend(BackendId.EXPERIMENTAL).id == BackendId.OFFICIAL
-  assert get_backend(BackendId.TN_NO_DEC).id == BackendId.OFFICIAL
+  assert get_backend(BackendId.TN_NO_DEC).id == BackendId.TN_NO_DEC
 
 
 def test_backend_is_latched_across_process_restarts():
@@ -43,7 +45,38 @@ def test_backend_is_latched_across_process_restarts():
   assert len(params.puts) == 1
 
 
-def test_uninstalled_backend_selection_latches_safe_provider():
+def test_custom_backend_selection_is_latched():
   params = FakeParams({"LongitudinalPlannerMode": int(BackendId.TN_NO_DEC)})
-  assert latch_active_backend(params).id == BackendId.OFFICIAL
-  assert params.values[ACTIVE_BACKEND_PARAM] == int(BackendId.OFFICIAL)
+  assert latch_active_backend(params).id == BackendId.TN_NO_DEC
+  assert params.values[ACTIVE_BACKEND_PARAM] == int(BackendId.TN_NO_DEC)
+
+
+def test_default_backend_hooks_preserve_upstream_dec_behavior():
+  class FakeDec:
+    def __init__(self):
+      self.updated = False
+
+    def update(self, sm):
+      self.updated = sm
+
+    def mode(self):
+      return "blended"
+
+    def enabled(self):
+      return True
+
+    def active(self):
+      return True
+
+  class State:
+    pass
+
+  planner = object.__new__(LongitudinalPlannerSP)
+  planner.dec = FakeDec()
+  planner._update_backend("sm")
+  assert planner.dec.updated == "sm"
+
+  plan = State()
+  plan.dec = State()
+  planner._publish_backend_state(plan)
+  assert plan.dec.enabled and plan.dec.active
