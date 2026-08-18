@@ -25,6 +25,7 @@ from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroa
 
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware import HARDWARE
+from openpilot.sunnypilot.hardware.profile import has_driver_camera
 
 from openpilot.sunnypilot.mads.mads import ModularAssistiveDrivingSystem
 from openpilot.sunnypilot import get_sanitize_int_param
@@ -104,6 +105,10 @@ class SelfdriveD(CruiseHelper):
     self.car_state_sp_mono_time = 0
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'lateralManeuverPlan'] + ['modelDataV2SP', 'longitudinalPlanSP']
+    if not has_driver_camera():
+      # C3XL has no cabin camera and does not run visual driver monitoring.
+      # Retain every unrelated process, camera, and communication fault check.
+      ignore += ['cabinCameraState', 'driverMonitoringState']
     if SIMULATION:
       ignore += ['cabinCameraState', 'managerState']
     if REPLAY:

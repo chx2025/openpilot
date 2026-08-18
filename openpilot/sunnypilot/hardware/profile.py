@@ -24,6 +24,10 @@ def get_hardware_profile(value: str | None = None) -> HardwareProfile:
   return HardwareProfile(raw_value)
 
 
+def has_driver_camera(profile: HardwareProfile | None = None) -> bool:
+  return (profile or get_hardware_profile()) != HardwareProfile.C3XL
+
+
 def resolve_internal_panda_type(raw_type: bytes, profile: HardwareProfile | None = None) -> bytes:
   """Resolve the effective type for an already-identified internal Panda."""
   selected_profile = profile or get_hardware_profile()

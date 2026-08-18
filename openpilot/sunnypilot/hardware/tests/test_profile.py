@@ -2,7 +2,7 @@ import pytest
 from panda import Panda
 
 from openpilot.sunnypilot.hardware.panda import InternalPanda
-from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_profile, resolve_internal_panda_type
+from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_profile, has_driver_camera, resolve_internal_panda_type
 
 
 def test_repository_profile_is_c3xl() -> None:
@@ -11,6 +11,11 @@ def test_repository_profile_is_c3xl() -> None:
 
 def test_explicit_standard_profile() -> None:
   assert get_hardware_profile("standard") == HardwareProfile.STANDARD
+
+
+def test_driver_camera_capability_is_profile_scoped() -> None:
+  assert has_driver_camera(HardwareProfile.STANDARD)
+  assert not has_driver_camera(HardwareProfile.C3XL)
 
 
 def test_unknown_profile_fails_closed() -> None:
