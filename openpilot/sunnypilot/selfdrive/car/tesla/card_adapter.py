@@ -8,6 +8,10 @@ adding Tesla branches throughout generic card.
 import time
 from typing import Any
 
+from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import (
+  TeslaTrafficControlObserver, publish_tesla_traffic_control,
+)
+
 
 CONTEXT_STALE_S = 0.2
 CONTEXT_SERVICES = ("selfdriveStateSP",)
@@ -56,17 +60,60 @@ class TeslaCardAdapter:
     self.enabled = brand == "tesla"
     self.car_interface = car_interface
     self.sm = submaster
+    self.traffic_control_observer = TeslaTrafficControlObserver() if self.enabled else None
+    self.road_context_parser = self._create_road_context_parser() if self.enabled else None
+
+  def _create_road_context_parser(self):
+    try:
+      from opendbc.can import CANParser
+      from opendbc.car import Bus
+      from opendbc.car.tesla.values import CANBUS, DBC
+
+      fingerprint = self.car_interface.CP.carFingerprint
+      return CANParser(DBC[fingerprint][Bus.party], [("DAS_road", float("nan"))], CANBUS.party)
+    except (AttributeError, KeyError):
+      return None
 
   def observe_can(self, can_list) -> None:
+    if not self.enabled:
+      return
+
+    if self.traffic_control_observer is not None:
+      self.traffic_control_observer.update(can_list, time.monotonic_ns())
+    if self.road_context_parser is not None:
+      self.road_context_parser.update(can_list)
+
     state = getattr(self.car_interface, "CS", None)
     update_template = getattr(state, "update_speed_button_template", None)
-    if not self.enabled or update_template is None:
+    if update_template is None:
       return
 
     for mono_time, frames in can_list:
       for address, data, source in frames:
         if source == self.VEHICLE_BUS and address == self.SPEED_BUTTON_ADDRESS:
           update_template(data, mono_time)
+
+  def update_state(self, state_sp, now_ns: int | None = None) -> None:
+    if self.road_context_parser is None:
+      return
+
+    from opendbc.sunnypilot.car.tesla.carstate_ext import publish_tesla_road_context
+
+    timestamp_ns = self.road_context_parser.ts_nanos["DAS_road"]["DAS_stopLineDist"]
+    publish_tesla_road_context(
+      state_sp,
+      self.road_context_parser.vl["DAS_road"],
+      timestamp_ns,
+      time.monotonic_ns() if now_ns is None else now_ns,
+    )
+
+  def publish_state(self, state_sp, now_ns: int | None = None) -> None:
+    if self.traffic_control_observer is None:
+      return
+    publish_tesla_traffic_control(
+      state_sp,
+      self.traffic_control_observer.snapshot(time.monotonic_ns() if now_ns is None else now_ns),
+    )
 
   def update_context(self, now: float | None = None) -> None:
     state = getattr(self.car_interface, "CS", None)

@@ -1,0 +1,264 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import time
+
+import numpy as np
+
+from openpilot.common.params import Params
+from openpilot.common.swaglog import cloudlog
+from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.sunnypilot.selfdrive.traffic_control.controller import (
+  TeslaTrafficControlController,
+  TrafficControlConfig,
+  TrafficControlDecision,
+  TrafficControlMode,
+  TrafficControlPhase,
+)
+from openpilot.sunnypilot.selfdrive.traffic_control.stop_profile import StopProfileGenerator
+from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import TRAFFIC_CONTROL_STALE_NS, TeslaTrafficControlObservation
+
+
+MIN_STOP_REFERENCE = 2.0
+MAX_STOP_REFERENCE = 12.0
+
+
+@dataclass
+class TrafficControlDiagnostics:
+  decision: TrafficControlDecision
+  applied: bool = False
+  constraint_accel: float = 0.0
+
+
+@dataclass
+class _PlannerOutputSnapshot:
+  speeds: np.ndarray
+  accels: np.ndarray
+  jerks: np.ndarray
+  a_target: float
+  should_stop: bool
+  allow_throttle: bool
+
+
+class _PublishProxy:
+  def __init__(self, pm, diagnostics: TrafficControlDiagnostics) -> None:
+    self._pm = pm
+    self._diagnostics = diagnostics
+
+  def __getattr__(self, name):
+    return getattr(self._pm, name)
+
+  def send(self, service: str, msg) -> None:
+    if service == "longitudinalPlanSP":
+      decision = self._diagnostics.decision
+      target = msg.longitudinalPlanSP.teslaTrafficControl
+      target.mode = int(decision.mode)
+      target.phase = int(decision.phase)
+      target.active = decision.active
+      target.shadow = decision.shadow
+      target.applied = self._diagnostics.applied
+      target.shouldStop = decision.should_stop
+      target.remainingDistance = decision.remaining_distance
+      target.stopReference = decision.stop_reference
+      target.lightState = decision.light_state
+      target.sourceBus = decision.source_bus
+      target.quality = decision.quality
+      target.constraintAccel = self._diagnostics.constraint_accel
+    self._pm.send(service, msg)
+
+
+class TrafficControlPlannerAdapter:
+  """Optional Tesla stop/go constraint around any selected longitudinal backend."""
+
+  def __init__(self, planner, CP, params: Params | None = None) -> None:
+    self._planner = planner
+    self._CP = CP
+    self._params = params or Params()
+    self._controller = TeslaTrafficControlController()
+    self._profile = StopProfileGenerator(actuator_delay=float(CP.longitudinalActuatorDelay))
+    self._diagnostics = TrafficControlDiagnostics(self._controller._decision())
+    self._last_transition_seq = self._controller.transition_seq
+    self._base_output: _PlannerOutputSnapshot | None = None
+    self._read_config()
+
+  def __getattr__(self, name):
+    return getattr(self._planner, name)
+
+  @staticmethod
+  def _mode(value) -> TrafficControlMode:
+    try:
+      return TrafficControlMode(int(value or 0))
+    except (TypeError, ValueError):
+      return TrafficControlMode.off
+
+  def _read_config(self) -> None:
+    reference_dm = self._params.get("TeslaTrafficStopReference", return_default=True)
+    reference = float(np.clip(float(reference_dm or 60) / 10.0, MIN_STOP_REFERENCE, MAX_STOP_REFERENCE))
+    config = TrafficControlConfig(
+      mode=self._mode(self._params.get("TeslaTrafficControlMode", return_default=True)),
+      default_stop_reference=reference,
+      adaptive_reference=bool(self._params.get("TeslaTrafficAdaptiveReference", return_default=True)),
+    )
+    self._controller.set_config(config)
+    self._profile.comfort_brake = config.comfort_brake
+
+  @staticmethod
+  def _observation(msg, now_ns: int) -> TeslaTrafficControlObservation:
+    observation = TeslaTrafficControlObservation.from_message(msg)
+    age_ns = now_ns - observation.frame_mono_time
+    return observation if 0 <= age_ns <= TRAFFIC_CONTROL_STALE_NS else TeslaTrafficControlObservation()
+
+  @staticmethod
+  def _model_stop(model, v_ego: float, lead_distance: float | None) -> tuple[float | None, bool]:
+    x = list(model.position.x)
+    velocity = list(model.velocity.x)
+    if not x or not velocity:
+      return None, False
+    index = min(31, len(x) - 1, len(velocity) - 1)
+    distance = float(x[index])
+    terminal_speed = float(velocity[index])
+    below_lead = lead_distance is None or distance < lead_distance - 3.0
+    max_distance = float(np.interp(v_ego * 3.6, [60.0, 80.0], [120.0, 150.0]))
+    stopped = (v_ego < 0.28 and distance < 20.0 and terminal_speed < 10.0) or (
+      v_ego < 82.0 / 3.6 and distance < max_distance and terminal_speed < min(3.0, v_ego * 0.7)
+    )
+    return distance, bool(stopped and below_lead)
+
+  def _apply_constraint(self, decision: TrafficControlDecision, sm) -> tuple[bool, float]:
+    if not decision.apply_constraint:
+      if not decision.active:
+        self._profile.reset()
+      return False, 0.0
+
+    planner = self._planner
+    base_speeds = np.asarray(planner.v_desired_trajectory, dtype=float)
+    times = np.asarray(ModelConstants.T_IDXS[:len(base_speeds)], dtype=float)
+    v_ego = float(sm['carState'].vEgo)
+    a_ego = float(sm['carState'].aEgo)
+
+    # A green light only removes this adapter's own stop profile. Departure is
+    # always left to the selected planner so traffic-control data can never
+    # synthesize acceleration or clear a model/lead-owned stop.
+    if decision.phase == TrafficControlPhase.release:
+      self._profile.reset()
+      return False, 0.0
+
+    stop_speeds, stop_accels, _ = self._profile.build_stop(
+      v_ego=v_ego, a_ego=a_ego, remaining_distance=decision.remaining_distance,
+      times=times, hold=decision.phase == TrafficControlPhase.hold,
+    )
+
+    base_accels = np.asarray(planner.a_desired_trajectory, dtype=float)
+    merged_speeds = np.minimum(base_speeds, stop_speeds)
+    merged_accels = np.minimum(base_accels, stop_accels)
+    merged_jerks = np.diff(merged_accels) / np.maximum(np.diff(times), 1e-3)
+
+    delay = float(self._CP.longitudinalActuatorDelay) + 0.05
+    stop_constraint_accel = float(np.interp(delay, times, stop_accels))
+    constraint_accel = min(float(planner.output_a_target), stop_constraint_accel)
+    applied = (bool(np.any(merged_speeds < base_speeds - 1e-3)) or
+               bool(np.any(merged_accels < base_accels - 1e-3)) or
+               constraint_accel < float(planner.output_a_target) - 1e-3)
+    if not applied:
+      return False, constraint_accel
+
+    self._capture_base_output()
+    planner.v_desired_trajectory = merged_speeds
+    planner.a_desired_trajectory = merged_accels
+    planner.j_desired_trajectory = np.pad(
+      merged_jerks, (0, max(0, len(merged_speeds) - len(merged_jerks))), mode="edge",
+    )[:len(merged_speeds)]
+    planner.output_a_target = constraint_accel
+    planner.output_should_stop = bool(planner.output_should_stop or decision.should_stop)
+    planner.allow_throttle = bool(planner.allow_throttle and not decision.should_stop)
+    return applied, constraint_accel
+
+  def _capture_base_output(self) -> None:
+    if self._base_output is not None:
+      return
+    planner = self._planner
+    self._base_output = _PlannerOutputSnapshot(
+      speeds=np.asarray(planner.v_desired_trajectory, dtype=float).copy(),
+      accels=np.asarray(planner.a_desired_trajectory, dtype=float).copy(),
+      jerks=np.asarray(planner.j_desired_trajectory, dtype=float).copy(),
+      a_target=float(planner.output_a_target),
+      should_stop=bool(planner.output_should_stop),
+      allow_throttle=bool(planner.allow_throttle),
+    )
+
+  def _restore_base_output(self) -> None:
+    if self._base_output is None:
+      return
+    planner = self._planner
+    planner.v_desired_trajectory = self._base_output.speeds
+    planner.a_desired_trajectory = self._base_output.accels
+    planner.j_desired_trajectory = self._base_output.jerks
+    planner.output_a_target = self._base_output.a_target
+    planner.output_should_stop = self._base_output.should_stop
+    planner.allow_throttle = self._base_output.allow_throttle
+    self._base_output = None
+
+  def _log_transition(self, decision: TrafficControlDecision, observation: TeslaTrafficControlObservation,
+                      *, v_ego: float, lead_present: bool, radar_valid: bool,
+                      applied: bool, constraint_accel: float) -> None:
+    if self._controller.transition_seq == self._last_transition_seq:
+      return
+    self._last_transition_seq = self._controller.transition_seq
+    cloudlog.event(
+      "tesla_traffic_control_transition",
+      transition=self._controller.transition_reason,
+      mode=int(decision.mode), phase=int(decision.phase), applied=applied,
+      sourceBus=observation.source_bus, featureState=observation.feature_state,
+      stateMachine=observation.state_machine, controlSource=observation.control_source,
+      lightState=observation.light_state, observationDistance=round(observation.distance, 2),
+      candidateDistance=round(self._controller.candidate_distance, 2),
+      distanceInnovation=round(self._controller.last_distance_innovation, 2),
+      confirmationRequiredS=round(self._controller.candidate_confirm_s, 2),
+      remainingDistance=round(decision.remaining_distance, 2), vEgo=round(v_ego, 3),
+      leadPresent=lead_present, radarValid=radar_valid,
+      constraintAccel=round(constraint_accel, 3),
+    )
+
+  def update(self, sm) -> None:
+    # A previous constrained publish must never seed the next backend cycle.
+    # The normal plannerd loop always publishes, but restoring here as well
+    # keeps the boundary safe if a caller skips publish after an exception.
+    self._restore_base_output()
+    self._planner.update(sm)
+
+    now_ns = time.monotonic_ns()
+    car_state_sp_valid = bool(sm.seen['carStateSP'] and sm.alive['carStateSP'] and sm.valid['carStateSP'])
+    observation = (self._observation(sm['carStateSP'].teslaTrafficControl, now_ns)
+                   if car_state_sp_valid else TeslaTrafficControlObservation())
+    car_state = sm['carState']
+    car_control = sm['carControl']
+    radar_valid = bool(sm.seen['radarState'] and sm.alive['radarState'] and sm.valid['radarState'])
+    leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo) if radar_valid else ()
+    present_leads = [lead for lead in leads if lead.present]
+    lead_present = bool(present_leads)
+    lead_distance = min(float(lead.dRel) for lead in present_leads) if present_leads else None
+    model_valid = bool(sm.seen['modelV2'] and sm.alive['modelV2'] and sm.valid['modelV2'])
+    if model_valid:
+      model_distance, model_candidate = self._model_stop(sm['modelV2'], float(car_state.vEgo), lead_distance)
+    else:
+      model_distance, model_candidate = None, False
+    decision = self._controller.update(
+      observation, now_ns, v_ego=float(car_state.vEgo), a_ego=float(car_state.aEgo),
+      model_stop_distance=model_distance, model_stop_candidate=model_candidate,
+      lead_present=lead_present, radar_valid=radar_valid, enabled=bool(car_control.enabled),
+      long_active=bool(car_control.longActive), gas_pressed=bool(car_state.gasPressed),
+      brake_pressed=bool(car_state.brakePressed),
+      turn_signal_active=bool(car_control.leftBlinker or car_control.rightBlinker),
+    )
+    applied, constraint_accel = self._apply_constraint(decision, sm)
+    self._log_transition(
+      decision, observation, v_ego=float(car_state.vEgo), lead_present=lead_present,
+      radar_valid=radar_valid, applied=applied, constraint_accel=constraint_accel,
+    )
+    self._diagnostics = TrafficControlDiagnostics(decision, applied, constraint_accel)
+
+  def publish(self, sm, pm) -> None:
+    try:
+      self._planner.publish(sm, _PublishProxy(pm, self._diagnostics))
+    finally:
+      self._restore_base_output()

@@ -202,7 +202,9 @@ class Car:
 
     # Update carState from CAN
     CS, CS_SP = self.CI.update(can_list)
+    self.tesla_adapter.update_state(CS_SP)
     CS_SP = convert_to_capnp(CS_SP)
+    self.tesla_adapter.publish_state(CS_SP)
 
     # Update radar tracks from CAN
     RD: structs.RadarDataT | None = self.RI.update(can_list)

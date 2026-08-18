@@ -203,6 +203,8 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
   aTarget @5 :Float32;
   events @6 :List(OnroadEventSP.Event);
   e2eAlerts @7 :E2eAlerts;
+  accelController @8 :AccelController;
+  teslaTrafficControl @9 :TeslaTrafficControlPlan;
 
   struct DynamicExperimentalControl {
     state @0 :DynamicExperimentalControlState;
@@ -304,6 +306,29 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
   struct E2eAlerts {
     greenLightAlert @0 :Bool;
     leadDepartAlert @1 :Bool;
+  }
+
+  struct AccelController {
+    enabled @0 :Bool;
+    active @1 :Bool;
+    shadowOnlyDEPRECATED @2 :Bool;
+    profile @3 :Profile;
+    state @4 :State;
+
+    enum Profile {
+      eco @0;
+      normal @1;
+      sport @2;
+    }
+
+    enum State {
+      inactive @0;
+      free @1;
+      restrict @2;
+      hold @3;
+      release @4;
+      stopHold @5;
+    }
   }
 }
 
@@ -446,6 +471,52 @@ struct BackupManagerSP @0xf98d843bfd7004a3 {
 struct CarStateSP @0xb86e6369214c01c8 {
   speedLimit @0 :Float32;
   flags @1 :UInt32;  # Optional car-module runtime flags (Tesla split-control ownership).
+  teslaRoadContext @2 :TeslaRoadContext;
+  teslaTrafficControl @3 :TeslaTrafficControl;
+}
+
+struct TeslaRoadContext {
+  available @0 :Bool;
+  trafficLightColor @1 :UInt8;
+  stopLineDistance @2 :Float32;
+}
+
+struct TeslaTrafficControl {
+  available @0 :Bool;
+  validForControl @1 :Bool;
+  sourceBus @2 :UInt8;
+  dlc @3 :UInt8;
+  featureState @4 :UInt8;
+  stateMachine @5 :UInt8;
+  controlSource @6 :UInt8;
+  controlType @7 :UInt8;
+  distance @8 :Float32;
+  lightState @9 :UInt8;
+  continuationReason @10 :UInt8;
+  confirmationType @11 :UInt8;
+  warningSuppressionReason @12 :UInt8;
+  unavailableReason @13 :UInt8;
+  visionLight @14 :Bool;
+  visionSign @15 :Bool;
+  visionRoadMarking @16 :Bool;
+  visionLine @17 :Bool;
+  frameMonoTime @18 :UInt64;
+  quality @19 :UInt8;
+}
+
+struct TeslaTrafficControlPlan {
+  mode @0 :UInt8;
+  phase @1 :UInt8;
+  active @2 :Bool;
+  shadow @3 :Bool;
+  applied @4 :Bool;
+  shouldStop @5 :Bool;
+  remainingDistance @6 :Float32;
+  stopReference @7 :Float32;
+  lightState @8 :UInt8;
+  sourceBus @9 :UInt8;
+  quality @10 :UInt8;
+  constraintAccel @11 :Float32;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {
