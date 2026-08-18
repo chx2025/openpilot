@@ -2,13 +2,19 @@
 """Safely detach a Chestnut-connected eGPU while the device is offroad."""
 import argparse
 import os
+import sys
 import time
 from pathlib import Path
 
 from openpilot.system.hardware.chestnut.flash import VBUS_PATH, claim_interface, find_chestnut
 
 
-DETACH_TIMEOUT = 5.0
+DETACH_TIMEOUT = 20.0
+DETACH_PENDING_EXIT_CODE = 75  # EX_TEMPFAIL: the accepted USB remove is still converging
+
+
+class DetachPendingError(RuntimeError):
+  pass
 
 
 def _wait_disconnected(timeout: float = DETACH_TIMEOUT) -> bool:
@@ -42,14 +48,18 @@ def safe_eject() -> bool:
   detach_path.write_text("0\n" if powered_off else "1\n")
 
   if not _wait_disconnected():
-    raise RuntimeError("eGPU did not disconnect from the host")
+    raise DetachPendingError("eGPU detach is still pending")
   return powered_off
 
 
 def main() -> int:
   parser = argparse.ArgumentParser(description="safely detach the Chestnut eGPU")
   parser.parse_args()
-  powered_off = safe_eject()
+  try:
+    powered_off = safe_eject()
+  except DetachPendingError as e:
+    print(e, file=sys.stderr, flush=True)
+    return DETACH_PENDING_EXIT_CODE
   print("powered-off" if powered_off else "host-detached", flush=True)
   return 0
 
