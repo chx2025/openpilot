@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import (
-  BACKENDS, BackendId, get_backend, validate_registry,
+  BACKENDS, BackendId, get_backend, ordered_backends, validate_registry,
 )
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.session import (
   ACTIVE_BACKEND_PARAM, latch_active_backend,
@@ -31,6 +31,7 @@ def test_registry_keeps_upstream_and_custom_providers_separate():
   assert set(BACKENDS) == {BackendId.OFFICIAL, BackendId.TN_NO_DEC}
   assert get_backend(BackendId.OFFICIAL).provider.endswith("longitudinal_planner:LongitudinalPlanner")
   assert ".tn_no_dec.planner:" in get_backend(BackendId.TN_NO_DEC).provider
+  assert [backend.id for backend in ordered_backends()] == [BackendId.OFFICIAL, BackendId.TN_NO_DEC]
 
 
 def test_unknown_and_uninstalled_backends_fail_closed_to_official():

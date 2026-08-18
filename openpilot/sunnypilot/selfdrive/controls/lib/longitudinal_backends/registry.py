@@ -50,6 +50,10 @@ def get_backend(value: object) -> BackendSpec:
   return BACKENDS.get(backend_id, OFFICIAL_BACKEND)
 
 
+def ordered_backends() -> tuple[BackendSpec, ...]:
+  return tuple(BACKENDS[backend_id] for backend_id in sorted(BACKENDS))
+
+
 def validate_registry() -> None:
   if OFFICIAL_BACKEND.id not in BACKENDS:
     raise ValueError("official longitudinal backend is required")

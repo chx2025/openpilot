@@ -11,6 +11,7 @@ import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.car.tesla.control_profile import normalize_mads_screen_button
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import BackendId, ordered_backends
 from openpilot.sunnypilot.selfdrive.traffic_control import TrafficControlMode, configured_mode, planner_session_is_active
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
@@ -25,6 +26,27 @@ class TeslaControlSettingsLayout(Widget):
     super().__init__()
     self._back_button = NavButton(tr("Back"))
     self._back_button.set_click_callback(back_btn_callback)
+    self._planner_backends = ordered_backends()
+
+    self.planner_backend = multiple_button_item_sp(
+      title=lambda: tr("Longitudinal Planner"),
+      description=lambda: tr("Official follows the current dev planner. TN-NoDEC is isolated and ignores Dynamic Experimental Control."),
+      buttons=[lambda label=backend.label: tr(label) for backend in self._planner_backends],
+      callback=self._set_planner_backend,
+      inline=False,
+    )
+    self.accel_personality_enabled = toggle_item_sp(
+      title=tr("TN Accel Personality"),
+      param="AccelPersonalityEnabled",
+      description=tr("Enable TN's acceleration profile controller."),
+    )
+    self.accel_personality = multiple_button_item_sp(
+      title=lambda: tr("TN Accel Profile"),
+      description=lambda: tr("Choose Eco, Normal, or Sport acceleration limits for TN-NoDEC."),
+      buttons=[lambda: tr("Eco"), lambda: tr("Normal"), lambda: tr("Sport")],
+      param="AccelPersonality",
+      inline=False,
+    )
 
     self.touch_longitudinal_switch = toggle_item_sp(
       title=tr("4-Finger Longitudinal Switch"),
@@ -103,6 +125,9 @@ class TeslaControlSettingsLayout(Widget):
     )
 
     self.items = [
+      self.planner_backend,
+      self.accel_personality_enabled,
+      self.accel_personality,
       self.touch_longitudinal_switch,
       self.ap_hybrid,
       self.dynamic_ap_longitudinal,
@@ -117,11 +142,22 @@ class TeslaControlSettingsLayout(Widget):
     ]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
+  def _planner_backend_index(self) -> int:
+    configured = int(ui_state.params.get("LongitudinalPlannerMode", return_default=True))
+    return next((index for index, backend in enumerate(self._planner_backends) if backend.id == configured), 0)
+
+  def _set_planner_backend(self, index: int) -> None:
+    if 0 <= index < len(self._planner_backends):
+      ui_state.params.put("LongitudinalPlannerMode", int(self._planner_backends[index].id), block=True)
+
   def _update_visibility(self) -> None:
     dynamic_stock = ui_state.params.get_bool("DynamicAutoStock")
     dynamic_ap = ui_state.params.get_bool("TeslaDynamicApLongitudinal")
     ap_hybrid = ui_state.params.get_bool("TeslaApHybrid")
+    tn_selected = self._planner_backends[self._planner_backend_index()].id == BackendId.TN_NO_DEC
 
+    self.accel_personality_enabled.set_visible(tn_selected)
+    self.accel_personality.set_visible(tn_selected and ui_state.params.get_bool("AccelPersonalityEnabled"))
     self.dynamic_ap_longitudinal.set_visible(ap_hybrid)
     self.blinker_to_sp.set_visible(dynamic_stock)
     self.curve_to_sp.set_visible(dynamic_stock)
@@ -144,6 +180,8 @@ class TeslaControlSettingsLayout(Widget):
     self.speed_high.action_item.set_enabled(offroad)
     self.speed_low.action_item.set_enabled(offroad)
     planner_stopped = not planner_session_is_active(ui_state.sm)
+    self.planner_backend.action_item.selected_button = self._planner_backend_index()
+    self.planner_backend.action_item.set_enabled(planner_stopped)
     self.traffic_control_mode.action_item.set_enabled(planner_stopped)
     self.traffic_control_mode.action_item.set_enabled_buttons(None if has_longitudinal else {0, 1, 2})
     self.traffic_stop_reference.action_item.set_enabled(planner_stopped)
