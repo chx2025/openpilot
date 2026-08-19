@@ -315,6 +315,8 @@ def merge_po(po_path: str | Path, pot_path: str | Path) -> None:
   _, po_entries = parse_po(po_path)
   _, pot_entries = parse_po(pot_path)
   language = Path(po_path).stem.removeprefix("app_")
+  plural_forms = PLURAL_FORMS.get(language, 'nplurals=2; plural=(n != 1);')
+  nplurals = int(re.search(r'nplurals=(\d+)', plural_forms).group(1))
 
   existing = {e.msgid: e for e in po_entries}
   merged = []
@@ -327,8 +329,11 @@ def merge_po(po_path: str | Path, pot_path: str | Path) -> None:
       old.comments = pot_e.comments
       if pot_e.is_plural:
         old.msgid_plural = pot_e.msgid_plural
+        old.msgstr_plural = {idx: old.msgstr_plural.get(idx, '') for idx in range(nplurals)}
       merged.append(old)
     else:
+      if pot_e.is_plural:
+        pot_e.msgstr_plural = dict.fromkeys(range(nplurals), '')
       merged.append(pot_e)
 
   merged.sort(key=lambda e: e.msgid)

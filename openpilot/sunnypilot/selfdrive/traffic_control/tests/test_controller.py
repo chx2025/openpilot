@@ -1,4 +1,6 @@
 import math
+import json
+from pathlib import Path
 
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import (
   TeslaTrafficControlController,
@@ -113,8 +115,11 @@ def test_dropout_cancels_far_stop_after_grace_but_not_immediately():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   update(controller, 0.0, observation(80, now_ns=0))
   decision = update(controller, 0.1, observation(255, valid=False, now_ns=int(0.1e9)))
+  assert decision.phase == TrafficControlPhase.redCandidate
+  decision = update(controller, 0.8, observation(255, valid=False, now_ns=int(0.8e9)))
   assert decision.phase == TrafficControlPhase.off
 
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   decision = confirmed_red(controller, distance=80.0)
   remaining = decision.remaining_distance
   decision = update(controller, 0.90, observation(255, valid=False, now_ns=int(0.9e9)), v_ego=15.0)
@@ -216,6 +221,26 @@ def test_candidate_target_change_restarts_red_confirmation():
   assert decision.active
 
 
+def test_route_candidate_jitter_preserves_one_candidate_until_a_real_dropout():
+  fixture = json.loads((Path(__file__).parent / "fixtures/traffic_candidate_jitter.json").read_text())
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.shadow))
+  transitions = []
+  last_seq = 0
+  decisions = []
+  for frame in fixture["frames"]:
+    obs = observation(frame["distance"], valid=frame["valid"], now_ns=int(frame["t"] * 1e9))
+    decision = update(controller, frame["t"], obs, v_ego=0.0)
+    decisions.append(decision)
+    if controller.transition_seq != last_seq:
+      transitions.append(controller.transition_reason)
+      last_seq = controller.transition_seq
+
+  # Short qlog-observed unavailable frames and isolated distance quantization
+  # must not make the UI alternate redCandidate/off or restart confirmation.
+  assert all(decision.phase == TrafficControlPhase.redCandidate for decision in decisions)
+  assert transitions == ["candidate_started"]
+
+
 def test_large_downward_distance_jump_is_a_new_target_and_restarts_confirmation():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   update(controller, 0.0, observation(150.0, now_ns=0), v_ego=10.0)
@@ -233,6 +258,11 @@ def test_large_downward_distance_jump_is_a_new_target_and_restarts_confirmation(
 
   decision = update(controller, 1.7, observation(19.0, now_ns=int(1.7e9)), v_ego=10.0,
                     model_stop_distance=13.0, model_stop_candidate=True)
+  assert decision.phase == TrafficControlPhase.redCandidate
+  assert not decision.apply_constraint
+
+  decision = update(controller, 2.8, observation(8.0, now_ns=int(2.8e9)), v_ego=10.0,
+                    model_stop_distance=2.0, model_stop_candidate=True)
   assert decision.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking)
   assert decision.apply_constraint
 

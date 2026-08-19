@@ -35,17 +35,14 @@ def test_public_or_invalid_addresses_are_rejected(address):
   assert not client_is_local(address)
 
 
-def test_console_requires_explicit_enable_and_matching_token():
-  with pytest.raises(PermissionError):
-    authorize("device-token-123456", FakeParams(enabled=False))
-  with pytest.raises(PermissionError):
-    authorize("wrong", FakeParams())
-  authorize("device-token-123456", FakeParams())
+def test_console_is_completely_unauthenticated_in_this_test_version():
+  authorize(None, FakeParams(enabled=False))
+  authorize("wrong", FakeParams())
 
 
 def test_terminal_is_offroad_only():
   with pytest.raises(PermissionError, match="行驶中"):
-    run_command("true", "device-token-123456", FakeParams(offroad=False))
+    run_command("true", None, FakeParams(offroad=False))
 
 
 def test_terminal_passes_command_as_bash_argument_without_python_shell(monkeypatch):
@@ -58,7 +55,7 @@ def test_terminal_passes_command_as_bash_argument_without_python_shell(monkeypat
   monkeypatch.setattr("openpilot.selfdrive.debug.device_terminal.subprocess.Popen", popen)
   monkeypatch.setattr("openpilot.selfdrive.debug.device_terminal.time.sleep", lambda _: None)
 
-  result = run_command("printf ok", "device-token-123456", FakeParams())
+  result = run_command("printf ok", None, FakeParams())
 
   assert result["output"] == "ok\n"
   args, kwargs = popen.call_args

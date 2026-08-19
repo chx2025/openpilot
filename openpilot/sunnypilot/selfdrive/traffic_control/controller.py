@@ -94,6 +94,10 @@ class TeslaTrafficControlController:
     self.candidate_anchor_distance = 0.0
     self.candidate_travel_distance = 0.0
     self.candidate_confirm_s = self.config.red_confirm_s
+    self.pending_candidate_since_ns: int | None = None
+    self.pending_candidate_distance = 0.0
+    self.pending_candidate_last_ns: int | None = None
+    self.pending_candidate_travel_distance = 0.0
     self.model_confirm_since_ns: int | None = None
     self.last_event_observation_ns: int | None = None
     self.quality = 0
@@ -125,6 +129,10 @@ class TeslaTrafficControlController:
     self.candidate_anchor_distance = 0.0
     self.candidate_travel_distance = 0.0
     self.candidate_confirm_s = self.config.red_confirm_s
+    self.pending_candidate_since_ns = None
+    self.pending_candidate_distance = 0.0
+    self.pending_candidate_last_ns = None
+    self.pending_candidate_travel_distance = 0.0
     self.model_confirm_since_ns = None
     self.last_distance_innovation = 0.0
     self.last_event_observation_ns = None
@@ -337,6 +345,45 @@ class TeslaTrafficControlController:
                         abs(observation.distance - expected_distance) <= distance_tolerance and
                         abs(observation.distance - anchor_expected_distance) <= anchor_tolerance)
       self.last_distance_innovation = 0.0 if self.red_since_ns is None else observation.distance - expected_distance
+      same_source = (observation.source_bus == self.candidate_source_bus and
+                     observation.control_source == self.candidate_control_source)
+
+      # Route 00000003--5d11656108 segments 5/6 shows the same stationary
+      # AP-PARTY red target quantizing by 7-8 m. A single distance innovation
+      # is not a new event identity: require the alternative trajectory to
+      # remain motion-consistent for the already-defined replacement window.
+      if self.red_since_ns is not None and same_source and not same_candidate:
+        pending_dt = (0.0 if self.pending_candidate_last_ns is None else
+                      max(0.0, (now_ns - self.pending_candidate_last_ns) / 1e9))
+        pending_expected = max(0.0, self.pending_candidate_distance - max(v_ego, 0.0) * pending_dt)
+        pending_tolerance = max(
+          self.config.candidate_distance_tolerance,
+          self.config.candidate_distance_tolerance_ratio * max(self.pending_candidate_distance, observation.distance),
+        )
+        pending_consistent = (self.pending_candidate_since_ns is not None and
+                              abs(observation.distance - pending_expected) <= pending_tolerance)
+        if not pending_consistent:
+          self.pending_candidate_since_ns = now_ns
+          self.pending_candidate_travel_distance = 0.0
+        else:
+          self.pending_candidate_travel_distance += max(v_ego, 0.0) * pending_dt
+        self.pending_candidate_distance = observation.distance
+        self.pending_candidate_last_ns = now_ns
+        self.candidate_last_ns = now_ns
+        replacement_stable = ((now_ns - self.pending_candidate_since_ns) / 1e9 >=
+                              self.config.replacement_confirm_s)
+        if not replacement_stable:
+          self.phase = TrafficControlPhase.redCandidate
+          return self._decision()
+        # Commit only a sustained alternative trajectory, then run the normal
+        # candidate/model confirmation from a clean event anchor below.
+        same_candidate = False
+      elif same_candidate:
+        self.pending_candidate_since_ns = None
+        self.pending_candidate_distance = 0.0
+        self.pending_candidate_last_ns = None
+        self.pending_candidate_travel_distance = 0.0
+
       if self.red_since_ns is None or not same_candidate:
         replacement = self.red_since_ns is not None
         self.red_since_ns = now_ns
@@ -349,6 +396,10 @@ class TeslaTrafficControlController:
         base_confirm_s = self.config.red_confirm_s if observation.quality >= 2 else self.config.weak_red_confirm_s
         self.candidate_confirm_s = max(base_confirm_s, self.config.replacement_confirm_s if replacement else 0.0)
         self.model_confirm_since_ns = None
+        self.pending_candidate_since_ns = None
+        self.pending_candidate_distance = 0.0
+        self.pending_candidate_last_ns = None
+        self.pending_candidate_travel_distance = 0.0
         self._mark_transition("candidate_replaced" if replacement else "candidate_started")
       else:
         self.candidate_travel_distance = projected_travel
@@ -377,6 +428,11 @@ class TeslaTrafficControlController:
         self._start_stop(observation, v_ego, model_stop_distance)
       return self._decision()
 
+    if self.phase == TrafficControlPhase.redCandidate and self.candidate_last_ns is not None:
+      candidate_dropout_s = (now_ns - self.candidate_last_ns) / 1e9
+      if candidate_dropout_s < self.config.observation_dropout_s:
+        return self._decision()
+
     candidate_cancelled = self.phase == TrafficControlPhase.redCandidate
     self.red_since_ns = None
     self.candidate_source_bus = 0
@@ -386,6 +442,10 @@ class TeslaTrafficControlController:
     self.candidate_anchor_distance = 0.0
     self.candidate_travel_distance = 0.0
     self.candidate_confirm_s = self.config.red_confirm_s
+    self.pending_candidate_since_ns = None
+    self.pending_candidate_distance = 0.0
+    self.pending_candidate_last_ns = None
+    self.pending_candidate_travel_distance = 0.0
     self.model_confirm_since_ns = None
     self.phase = TrafficControlPhase.off
     if candidate_cancelled:

@@ -28,17 +28,28 @@ class FakeParams:
 
 def test_registry_keeps_upstream_and_custom_providers_separate():
   validate_registry()
-  assert set(BACKENDS) == {BackendId.OFFICIAL, BackendId.TN_NO_DEC}
+  assert set(BACKENDS) == {BackendId.OFFICIAL, BackendId.EXPERIMENTAL, BackendId.TN_NO_DEC}
   assert get_backend(BackendId.OFFICIAL).provider.endswith("longitudinal_planner:LongitudinalPlanner")
+  assert ".experimental.planner:" in get_backend(BackendId.EXPERIMENTAL).provider
   assert ".tn_no_dec.planner:" in get_backend(BackendId.TN_NO_DEC).provider
-  assert [backend.id for backend in ordered_backends()] == [BackendId.OFFICIAL, BackendId.TN_NO_DEC]
+  assert [backend.id for backend in ordered_backends()] == [BackendId.OFFICIAL, BackendId.EXPERIMENTAL, BackendId.TN_NO_DEC]
 
 
-def test_unknown_and_uninstalled_backends_fail_closed_to_official():
+def test_unknown_backends_fail_closed_to_official():
   assert get_backend(None).id == BackendId.OFFICIAL
   assert get_backend("invalid").id == BackendId.OFFICIAL
-  assert get_backend(BackendId.EXPERIMENTAL).id == BackendId.OFFICIAL
+  assert get_backend(BackendId.EXPERIMENTAL).id == BackendId.EXPERIMENTAL
   assert get_backend(BackendId.TN_NO_DEC).id == BackendId.TN_NO_DEC
+
+
+def test_experimental_provider_is_installed_and_isolated_from_official():
+  spec = BACKENDS[BackendId.EXPERIMENTAL]
+  module_name, class_name = spec.provider.split(":", 1)
+  module_path = Path(__file__).parents[5] / f"{module_name.replace('.', '/')}.py"
+
+  assert module_path.is_file()
+  source = module_path.read_text()
+  assert f"class {class_name}(UpstreamLongitudinalPlanner)" in source
 
 
 def test_backend_is_latched_across_process_restarts():

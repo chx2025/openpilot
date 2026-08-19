@@ -9,7 +9,6 @@ from openpilot.selfdrive.debug.tesla_can_visualization import TeslaCanVisualizat
 
 
 SERVICES = ("carState", "carStateSP", "controlsState", "selfdriveState", "selfdriveStateSP", "modelV2")
-ENABLED_PARAM = "TeslaWebDrivingVisualization"
 MAX_TRAJECTORY_DISTANCE_M = 100.0
 TRAJECTORY_STRIDE = 3
 MAX_CAN_EVENTS_PER_SNAPSHOT = 250
@@ -122,18 +121,11 @@ _STATUS_LOCK = threading.Lock()
 
 
 def driving_status_enabled() -> bool:
-  return Params().get_bool(ENABLED_PARAM)
+  return True
 
 
 def driving_status_snapshot() -> dict[str, object]:
   global _STATUS
-  if not driving_status_enabled():
-    # Drop the subscriber when the feature is disabled so the web-only CAN
-    # decoder cannot continue doing work in the background.
-    with _STATUS_LOCK:
-      _STATUS = None
-    raise PermissionError("请先在设备的“设置 → 车辆型号”中开启“浏览器行驶信息”")
-
   with _STATUS_LOCK:
     if _STATUS is None:
       _STATUS = DrivingStatus()

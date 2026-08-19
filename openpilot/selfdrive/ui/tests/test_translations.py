@@ -5,9 +5,10 @@ from pathlib import Path
 
 
 from openpilot.common.parameterized import parameterized
+from openpilot.common.basedir import BASEDIR
 from openpilot.common.test import OpenpilotTestCase
-from openpilot.selfdrive.ui.translations.potools import parse_po
-from openpilot.system.ui.lib.multilang import LANGUAGES_FILE, TRANSLATIONS_DIR
+from openpilot.selfdrive.ui.translations.potools import extract_strings, parse_po
+from openpilot.system.ui.lib.multilang import LANGUAGES_FILE, SYSTEM_UI_DIR, TRANSLATIONS_DIR, UI_DIR
 
 PERCENT_PLACEHOLDER_RE = re.compile(r"%(?:n|\d+)")
 BAD_ENTITY_RE = re.compile(r'@(\w+);')
@@ -48,6 +49,53 @@ def load_po_text(po_path: Path) -> str:
 
 
 class TestTranslations(OpenpilotTestCase):
+  def test_translation_template_covers_runtime_ui_strings(self):
+    runtime_roots = (
+      Path(SYSTEM_UI_DIR),
+      Path(str(UI_DIR)) / "layouts",
+      Path(str(UI_DIR)) / "widgets",
+      Path(str(UI_DIR)) / "onroad",
+      Path(str(UI_DIR)) / "sunnypilot",
+    )
+    source_files = [
+      str(path.relative_to(BASEDIR))
+      for root in runtime_roots
+      for path in root.rglob("*.py")
+      if "tests" not in path.parts
+    ]
+    runtime_msgids = {entry.msgid for entry in extract_strings(source_files, BASEDIR)}
+    _, template_entries = parse_po(PO_DIR / "app.pot")
+    template_msgids = {entry.msgid for entry in template_entries}
+
+    missing = sorted(runtime_msgids - template_msgids)
+    assert not missing, f"runtime UI strings missing from app.pot: {missing}"
+
+  def test_simplified_chinese_covers_translation_template(self):
+    _, template_entries = parse_po(PO_DIR / "app.pot")
+    _, chinese_entries = parse_po(PO_DIR / "app_zh-CHS.po")
+    translated_msgids = {
+      entry.msgid for entry in chinese_entries
+      if entry.msgstr or any(entry.msgstr_plural.values())
+    }
+
+    missing = sorted(entry.msgid for entry in template_entries if entry.msgid not in translated_msgids)
+    assert not missing, f"Simplified Chinese translations missing for: {missing}"
+
+  @parameterized.expand(sorted(PO_DIR.glob("app_*.po")), ids=lambda p: p.name)
+  def test_translation_plural_forms_match_catalog_header(self, po_path: Path):
+    header, entries = parse_po(po_path)
+    assert header is not None
+    match = re.search(r"nplurals=(\d+)", header.msgstr)
+    assert match is not None, f"{po_path.name}: missing nplurals header"
+    expected_slots = set(range(int(match.group(1))))
+
+    for entry in entries:
+      if entry.is_plural:
+        assert set(entry.msgstr_plural) == expected_slots, (
+          f"{po_path.name}: {entry.msgid!r} has plural slots "
+          f"{sorted(entry.msgstr_plural)}, expected {sorted(expected_slots)}"
+        )
+
   @parameterized.expand(sorted(TRANSLATION_LANGUAGES.values()))
   def test_translation_file_exists(self, language_code: str):
     po_path = PO_DIR / f"app_{language_code}.po"

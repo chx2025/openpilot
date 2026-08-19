@@ -3,6 +3,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
+import openpilot.system.manager.process_config as process_config
 from openpilot.sunnypilot.system.alert_output import BEEP_GAP_SECONDS, BEEP_PULSE_SECONDS, Beepd
 from openpilot.sunnypilot.hardware.profile import HardwareProfile
 
@@ -28,6 +29,31 @@ def test_mads_enable_and_disable_have_distinct_beeps(beepd):
   beepd.update_mads(False)
 
   assert beepd.dispatch_beep.call_args_list == [call(beepd.engage), call(beepd.disengage)]
+
+
+def test_warning_and_prompt_repeat_follow_legacy_beep_rules(beepd, monkeypatch):
+  from opendbc.car.structs import car
+
+  alert = car.CarControl.HUDControl.AudibleAlert
+  beepd.current_alert = alert.none
+  beepd.prompt_suppress_until = 0
+  timestamps = iter((100.0, 100.5, 101.0, 101.5, 102.0, 102.5, 111.0, 111.5))
+  monkeypatch.setattr("openpilot.sunnypilot.system.alert_output.time.monotonic", lambda: next(timestamps))
+
+  beepd.update_alert(alert.warningSoft)
+  beepd.update_alert(alert.none)
+  beepd.update_alert(alert.promptRepeat)
+  beepd.update_alert(alert.none)
+  beepd.update_alert(alert.promptRepeat)
+  beepd.update_alert(alert.none)
+  beepd.update_alert(alert.promptRepeat)
+  beepd.update_alert(alert.none)
+
+  assert beepd.dispatch_beep.call_args_list == [
+    call(beepd.warning),
+    call(beepd.engage),
+    call(beepd.engage),
+  ]
 
 
 def test_mads_beeps_use_very_short_pulses(monkeypatch):
@@ -87,3 +113,16 @@ def test_standard_profile_never_probes_gpio42(monkeypatch):
 
   assert beep.gpio_fd is None
   run.assert_not_called()
+
+
+def test_c3xl_buzzer_process_is_always_on_without_enable_param(monkeypatch):
+  params = Mock()
+  monkeypatch.setattr(process_config, "PC", False)
+  monkeypatch.setattr(process_config, "get_hardware_profile", lambda: HardwareProfile.C3XL, raising=False)
+
+  assert process_config.use_external_buzzer(False, params, Mock())
+  assert process_config.use_external_buzzer(True, params, Mock())
+  params.get_bool.assert_not_called()
+
+  monkeypatch.setattr(process_config, "get_hardware_profile", lambda: HardwareProfile.STANDARD)
+  assert not process_config.use_external_buzzer(False, params, Mock())

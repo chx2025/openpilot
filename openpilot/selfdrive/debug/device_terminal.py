@@ -1,4 +1,4 @@
-"""Authenticated, opt-in and offroad-only arbitrary command terminal."""
+"""Unauthenticated, opt-in and offroad-only arbitrary command terminal."""
 from __future__ import annotations
 
 import os
@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 
 from openpilot.common.params import Params
-from openpilot.selfdrive.debug.device_console_auth import authorize, console_status, require_offroad
+from openpilot.selfdrive.debug.device_console_auth import console_status, require_offroad
 
 
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -36,7 +36,7 @@ def _terminate(proc: subprocess.Popen) -> None:
 
 def run_command(command: str, token: str | None, params: Params | None = None) -> dict[str, object]:
   params = params or Params()
-  authorize(token, params)
+  del token
   require_offroad(params)
   if not params.get_bool("WebTerminalEnabled"):
     raise PermissionError("网页终端未启用")

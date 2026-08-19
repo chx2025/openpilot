@@ -12,7 +12,7 @@ from openpilot.common.hardware.hw import Paths
 from openpilot.sunnypilot.mapd.mapd_manager import MAPD_PATH
 
 from openpilot.sunnypilot.models.helpers import get_active_model_runner
-from openpilot.sunnypilot.hardware.profile import has_driver_camera
+from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_profile, has_driver_camera
 from openpilot.sunnypilot.sunnylink.utils import sunnylink_need_register, sunnylink_ready, use_sunnylink_uploader
 
 WEBCAM = os.getenv("USE_WEBCAM") is not None
@@ -80,10 +80,10 @@ def use_copyparty(started, params, CP: car.CarParams) -> bool:
   return bool(params.get_bool("EnableCopyparty"))
 
 def use_device_console(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return not PC and params.get_bool("DeviceConsoleEnabled")
+  return not PC
 
 def use_external_buzzer(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return not PC and started and params.get_bool("ExternalBuzzerEnabled")
+  return not PC and get_hardware_profile() == HardwareProfile.C3XL
 
 def sunnylink_ready_shim(started, params, CP: car.CarParams) -> bool:
   """Shim for sunnylink_ready to match the process manager signature."""

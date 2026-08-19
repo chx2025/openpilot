@@ -25,4 +25,5 @@ def create_longitudinal_planner(CP, CP_SP, *, params=None) -> PlannerBackend:
   spec = latch_active_backend(params)
   planner = _load_provider(spec)(CP, CP_SP)
   planner.active_backend_id = spec.id
+  planner.mpc.configure_runtime_tuning(params, spec)
   return decorate_planner(planner, CP, params)

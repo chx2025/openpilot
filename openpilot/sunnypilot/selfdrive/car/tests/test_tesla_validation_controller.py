@@ -1,28 +1,28 @@
 import json
 import threading
-import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
 import pytest
 
 from openpilot.selfdrive.debug import device_console as tesla_turn_signal_web
+from openpilot.selfdrive.debug.driving_status import driving_status_enabled
 
 
 @pytest.fixture(autouse=True)
-def authenticated_api(monkeypatch):
-  # Endpoint behavior is covered here; authentication policy has dedicated
-  # unit tests and must not depend on the machine's persistent Params store.
+def local_api(monkeypatch):
+  # Endpoint behavior is covered here; tests bypass only the local-network
+  # address check. This test version intentionally has no authentication.
   monkeypatch.setattr(tesla_turn_signal_web.TurnSignalHandler, "_authorize_api", lambda self: True)
 
 
-def test_turn_signal_web_page_exposes_sp_driven_actions_and_cancel(monkeypatch):
-  monkeypatch.setattr(tesla_turn_signal_web, "driving_status_enabled", lambda: True)
+def test_turn_signal_web_page_exposes_sp_driven_actions_and_cancel():
   page = tesla_turn_signal_web.render_page().decode()
   assert "行驶信息" in page
   assert "左转" in page
   assert "右转" in page
-  assert "设备控制台访问令牌" in page
+  assert "设备控制台访问令牌" not in page
+  assert "无需认证" in page
   assert "速度按钮" in page
   assert "123456" not in page
   assert "立即取消" in page
@@ -35,7 +35,6 @@ def test_turn_signal_web_page_exposes_sp_driven_actions_and_cancel(monkeypatch):
 
 def test_turn_signal_web_returns_read_only_driving_status(monkeypatch):
   snapshot = {"onroad": True, "speed_kph": 42.0}
-  monkeypatch.setattr(tesla_turn_signal_web, "driving_status_enabled", lambda: True)
   monkeypatch.setattr(tesla_turn_signal_web, "driving_status_snapshot", lambda: snapshot)
   server = ThreadingHTTPServer(("127.0.0.1", 0), tesla_turn_signal_web.TurnSignalHandler)
   thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -49,24 +48,9 @@ def test_turn_signal_web_returns_read_only_driving_status(monkeypatch):
     thread.join(timeout=2)
 
 
-def test_turn_signal_web_blocks_driving_status_when_disabled(monkeypatch):
-  monkeypatch.setattr(tesla_turn_signal_web, "driving_status_enabled", lambda: False)
-  monkeypatch.setattr(tesla_turn_signal_web, "driving_status_snapshot",
-                      lambda: (_ for _ in ()).throw(PermissionError("功能未开启")))
-  assert "driving-tab\" disabled" in tesla_turn_signal_web.render_page().decode()
-
-  server = ThreadingHTTPServer(("127.0.0.1", 0), tesla_turn_signal_web.TurnSignalHandler)
-  thread = threading.Thread(target=server.serve_forever, daemon=True)
-  thread.start()
-  try:
-    with pytest.raises(urllib.error.HTTPError) as exc_info:
-      urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/api/driving-status", timeout=2)
-    assert exc_info.value.code == 403
-    assert json.loads(exc_info.value.read())["message"] == "功能未开启"
-  finally:
-    server.shutdown()
-    server.server_close()
-    thread.join(timeout=2)
+def test_driving_status_is_always_enabled_without_a_setting():
+  assert driving_status_enabled()
+  assert 'driving-tab" disabled' not in tesla_turn_signal_web.render_page().decode()
 
 
 def test_turn_signal_web_post_runs_requested_direction(monkeypatch):

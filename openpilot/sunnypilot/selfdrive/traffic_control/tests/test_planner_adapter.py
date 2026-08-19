@@ -369,7 +369,7 @@ def test_dead_radar_and_invalid_model_fail_closed_before_controller():
 
 def test_transition_logging_records_candidate_replacement_without_per_frame_spam(monkeypatch):
   events = []
-  update_times = (0, int(0.4e9), int(0.6e9))
+  update_times = (0, int(0.4e9), int(0.6e9), int(1.0e9), int(1.7e9))
   times = iter(update_times)
   monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: next(times))
   monkeypatch.setattr(
@@ -381,11 +381,11 @@ def test_transition_logging_records_candidate_replacement_without_per_frame_spam
   )
   sm = fake_sm()
 
-  for now_ns, distance in zip(update_times, (150.0, 146.0, 30.0), strict=True):
+  for now_ns, distance in zip(update_times, (150.0, 144.0, 30.0, 24.0, 13.5), strict=True):
     sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
     sm["carStateSP"].teslaTrafficControl.distance = distance
     adapter.update(sm)
 
   assert [event[1]["transition"] for event in events] == ["candidate_started", "candidate_replaced"]
-  assert events[-1][1]["observationDistance"] == 30.0
+  assert events[-1][1]["observationDistance"] == 13.5
   assert events[-1][1]["distanceInnovation"] < -100.0

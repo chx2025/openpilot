@@ -52,7 +52,26 @@ class DeveloperLayoutSP(DeveloperLayout):
 
     self.error_log_btn = button_item(tr("Error Log"), tr("VIEW"), tr("View the error log for sunnypilot crashes."), callback=self._on_error_log_clicked)
 
-    self.items: list = [self.show_advanced_controls, self.enable_github_runner_toggle, self.enable_copyparty_toggle, self.prebuilt_toggle, self.error_log_btn,]
+    self.web_terminal_toggle = toggle_item_sp(
+      tr("Arbitrary Web Terminal (High Risk)"),
+      tr("The local console on port 8088 has no authentication in this test version. Terminal commands remain offroad-only."),
+      param="WebTerminalEnabled",
+    )
+    self.tesla_turn_validation_toggle = toggle_item_sp(
+      tr("Tesla Turn Signal Validation"),
+      tr("Allow the local browser to validate turn requests using fresh OEM 0x3E9 templates. Restart after changing."),
+      param="TeslaTurnSignalValidation",
+    )
+    self.tesla_speed_validation_toggle = toggle_item_sp(
+      tr("Tesla Speed Button Validation"),
+      tr("Allow the local browser to validate speed-button requests using fresh OEM 0x3C2 templates. Restart after changing."),
+      param="TeslaSpeedButtonValidation",
+    )
+
+    self.items: list = [self.show_advanced_controls, self.web_terminal_toggle,
+                        self.tesla_turn_validation_toggle, self.tesla_speed_validation_toggle,
+                        self.enable_github_runner_toggle, self.enable_copyparty_toggle,
+                        self.prebuilt_toggle, self.error_log_btn]
 
   @staticmethod
   def _on_prebuilt_toggled(state):
