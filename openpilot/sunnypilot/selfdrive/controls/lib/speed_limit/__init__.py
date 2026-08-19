@@ -13,7 +13,26 @@ PCM_LONG_REQUIRED_MAX_SET_SPEED = {
   False: (31.2928, 35.7632),  # mph, (70, 80)
 }
 
+# Tesla PCM longitudinal confirms SLA through the displayed cruise set speed.
+# Keep the upstream fixed maximum for other brands, while Tesla follows the
+# actual detected limit in the same discrete steps exposed by its cruise UI.
+TESLA_PCM_LONG_REQUIRED_MAX_SET_SPEED = {
+  True: tuple((speed, speed / 3.6) for speed in range(20, 131, 10)),
+  False: tuple((speed, speed * 0.44704) for speed in range(15, 91, 5)),
+}
+
 CONFIRM_SPEED_THRESHOLD = {
   True: 80,   # km/h
   False: 50,  # mph
 }
+
+
+def resolve_pcm_long_required_max(metric: bool, limit_conv: int, has_speed_limit: bool, *, brand: str) -> float:
+  if brand != "tesla":
+    cst_low, cst_high = PCM_LONG_REQUIRED_MAX_SET_SPEED[metric]
+    return cst_low if has_speed_limit and limit_conv < CONFIRM_SPEED_THRESHOLD[metric] else cst_high
+
+  segments = TESLA_PCM_LONG_REQUIRED_MAX_SET_SPEED[metric]
+  if not has_speed_limit:
+    return segments[-1][1]
+  return next((value for threshold, value in segments if limit_conv <= threshold), segments[-1][1])
