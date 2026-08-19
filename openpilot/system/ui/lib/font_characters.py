@@ -10,4 +10,5 @@ def fallback_font_characters(language: str, extra_characters: str = "") -> set[s
   # Onroad alerts originate in selfdrived, outside of the normal UI PO extraction.
   from openpilot.selfdrive.ui.onroad.alert_localizer import localized_alert_characters
   characters.update(localized_alert_characters(language))
+  characters.difference_update({"\n", "\r", "\t"})
   return characters

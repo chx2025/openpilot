@@ -56,8 +56,10 @@ def test_simplified_chinese_font_covers_every_requested_runtime_glyph():
 
 def test_simplified_chinese_fallback_requests_every_localized_alert_glyph():
   requested_chars = fallback_font_characters("zh-CHS", _runtime_extra_font_chars())
-  alert_chars = localized_alert_characters("zh-CHS")
+  control_chars = {"\n", "\r", "\t"}
+  alert_chars = localized_alert_characters("zh-CHS") - control_chars
 
+  assert not (control_chars & requested_chars)
   assert alert_chars <= requested_chars
 
   with TTFont(FONT_PATH) as font:
