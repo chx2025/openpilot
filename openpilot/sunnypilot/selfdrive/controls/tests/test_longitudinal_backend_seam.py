@@ -50,6 +50,7 @@ def test_experimental_provider_is_installed_and_isolated_from_official():
   assert module_path.is_file()
   source = module_path.read_text()
   assert f"class {class_name}(UpstreamLongitudinalPlanner)" in source
+  assert "def is_e2e" not in source  # Preserve the shared legacy DEC/Experimental Mode behavior.
 
 
 def test_backend_is_latched_across_process_restarts():
@@ -106,6 +107,7 @@ def test_tn_backend_does_not_depend_on_dynamic_experimental_control():
   assert "self.dec" not in source
   assert "dynamic_experimental_control" not in source.lower()
   assert "enable_dec=False" in source
+  assert "return sm['selfdriveState'].experimentalMode" in source
 
 
 def test_tn_reuses_upstream_solver_instead_of_forking_generated_code():

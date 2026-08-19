@@ -4,9 +4,6 @@ import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import BackendId, ordered_backends
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.model_policy import (
-  load_model_policy, save_model_policy, supported_model_policies,
-)
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import (
   DEFAULT_VALUES, VALUE_SPECS, apply_backend_profile, backend_profile, backend_values, save_backend_values,
 )
@@ -57,20 +54,6 @@ class TeslaPlannerSettingsLayout(Widget):
       callback=self._on_profile_changed,
       inline=False,
     )
-    self.experimental_model_policy = multiple_button_item_sp(
-      title=lambda: tr("Experimental Model Longitudinal"),
-      description=lambda: tr("ACC ignores model acceleration. Dynamic follows DEC. E2E allows model acceleration in Experimental Mode. Applies next drive."),
-      buttons=[lambda: tr("ACC"), lambda: tr("Dynamic"), lambda: tr("E2E")],
-      callback=self._on_experimental_model_policy_changed,
-      inline=False,
-    )
-    self.tn_model_policy = multiple_button_item_sp(
-      title=lambda: tr("TN Model Longitudinal"),
-      description=lambda: tr("ACC uses TN MPC without model acceleration. E2E allows model acceleration in Experimental Mode. Applies next drive."),
-      buttons=[lambda: tr("ACC"), lambda: tr("E2E")],
-      callback=self._on_tn_model_policy_changed,
-      inline=False,
-    )
     self.tn_accel_enabled = toggle_item_sp(
       title=tr("TN Accel Personality"), param="AccelPersonalityEnabled",
       description=tr("Enable TN's acceleration profile controller."),
@@ -93,10 +76,7 @@ class TeslaPlannerSettingsLayout(Widget):
         on_value_changed=self._on_tuning_changed, enabled=lambda: True, inline=True,
       ))
 
-    self.items = [
-      self.planner, self.experimental_model_policy, self.tn_model_policy,
-      self.profile, self.tn_accel_enabled, self.tn_accel_profile, *self.options,
-    ]
+    self.items = [self.planner, self.profile, self.tn_accel_enabled, self.tn_accel_profile, *self.options]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
     self._load_selected_backend()
 
@@ -122,13 +102,6 @@ class TeslaPlannerSettingsLayout(Widget):
     ui_state.params.put("MpcTuningProfile", profile, block=True)
     self.planner.action_item.set_selected_button(self._backend_index())
     self.profile.action_item.set_selected_button(profile)
-    policy = load_model_policy(ui_state.params, backend)
-    policies = supported_model_policies(backend)
-    if policy in policies:
-      if backend.id == BackendId.EXPERIMENTAL:
-        self.experimental_model_policy.action_item.set_selected_button(policies.index(policy))
-      elif backend.id == BackendId.TN_NO_DEC:
-        self.tn_model_policy.action_item.set_selected_button(policies.index(policy))
     try:
       values = backend_values(ui_state.params, backend)
     except ValueError:
@@ -145,18 +118,6 @@ class TeslaPlannerSettingsLayout(Widget):
     self._show_values(apply_backend_profile(ui_state.params, self._backend(), profile))
     self._update_visibility()
 
-  def _on_experimental_model_policy_changed(self, index: int):
-    backend = next(backend for backend in self.backends if backend.id == BackendId.EXPERIMENTAL)
-    policies = supported_model_policies(backend)
-    if 0 <= index < len(policies):
-      save_model_policy(ui_state.params, backend, policies[index])
-
-  def _on_tn_model_policy_changed(self, index: int):
-    backend = next(backend for backend in self.backends if backend.id == BackendId.TN_NO_DEC)
-    policies = supported_model_policies(backend)
-    if 0 <= index < len(policies):
-      save_model_policy(ui_state.params, backend, policies[index])
-
   def _on_tuning_changed(self, _value):
     if self._setting_values or int(ui_state.params.get("MpcTuningProfile", return_default=True)) != 2:
       return
@@ -167,11 +128,8 @@ class TeslaPlannerSettingsLayout(Widget):
     save_backend_values(ui_state.params, self._backend(), values, profile=2)
 
   def _update_visibility(self):
-    backend_id = self._backend().id
-    tn = backend_id == BackendId.TN_NO_DEC
+    tn = self._backend().id == BackendId.TN_NO_DEC
     custom = int(ui_state.params.get("MpcTuningProfile", return_default=True)) == 2
-    self.experimental_model_policy.set_visible(backend_id == BackendId.EXPERIMENTAL)
-    self.tn_model_policy.set_visible(tn)
     self.tn_accel_enabled.set_visible(tn)
     self.tn_accel_profile.set_visible(tn and ui_state.params.get_bool("AccelPersonalityEnabled"))
     for option in self.options:
@@ -179,10 +137,7 @@ class TeslaPlannerSettingsLayout(Widget):
 
   def _update_state(self):
     super()._update_state()
-    session_active = planner_session_is_active(ui_state.sm)
-    self.planner.action_item.set_enabled(not session_active)
-    self.experimental_model_policy.action_item.set_enabled(not session_active)
-    self.tn_model_policy.action_item.set_enabled(not session_active)
+    self.planner.action_item.set_enabled(not planner_session_is_active(ui_state.sm))
     self._update_visibility()
 
   def _render(self, rect):

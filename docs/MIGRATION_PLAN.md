@@ -37,7 +37,7 @@ observable. The old unconditional `Panda.get_type() == 9` override is excluded.
 | P0 | C3XL Profile | AGNOS allowlist/manifest, hardware identity Adapter, Panda Startup, read-only probe | build profile define; AGNOS validator call; Panda startup call | Host-tested |
 | P0 | Tesla Control | DBC/HW4 decoding, MADS/coop steering, manual longitudinal selection, Dynamic Auto Stock, AP Hybrid, auto speed, safety validation | Tesla Control Profile at car init; Tesla Control Runtime at selfdrived | Core/opendbc ported; device test pending |
 | P0 | Radar Backend | OEM/ARS408/Off selector, ARS RX parser, tracker, diagnostics, bounded motion TX, Panda safety | one backend selector in opendbc; one enum Param/UI control | Host-tested; device test pending |
-| P1 | Planner Backend | Official, Experimental, and TN-NoDEC; session latch; independent live profiles/tuning and model policy; stopping policy | one planner factory; isolated backend registry/adapters; bounded MPC hooks | Host-tested; revised model policy device/on-road test pending |
+| P1 | Planner Backend | Official, Experimental, and TN-NoDEC; session latch; independent live profiles/tuning; stopping policy | one planner factory; isolated backend registry/adapters; bounded MPC hooks | Host-tested and imported on device; on-road behavior pending |
 | P1 | Traffic-control Plan Constraint | Off/Observe/Shadow/StopOnly/StopGo, Tesla event confirmation, CP model stop target, bounded confirmed-green departure, radar/lead/driver gates, HUD diagnostics | one planner decorator; card observation publisher; UI consumes Decision | Host-tested with route-derived candidate-jitter fixture; on-road behavior pending |
 | P2 | Device Query/Command | default-on fully unauthenticated settings/commands, Tesla/HW4 diagnostics and validation, hotspot, opt-in offroad terminal; no driving-information page/API | one managed service; query/command boundary | Device HTTP verified; physical command tests pending |
 | P2 | Update reliability | proxy Adapter, current-tree LFS hydrate, last-known-good clock | narrow updater/time hooks | LFS and clock host-tested; proxy pending |
@@ -72,11 +72,10 @@ Each backend has an independent Default/CrazyMax/Custom profile. Validated live
 values are revisioned in one configuration Param, polled at a bounded rate, and
 ramped before use. Official remains the upstream implementation; its tuning is
 applied only through the narrow MPC hooks, so future upstream planner updates do
-not require copying the planner. Experimental and TN-NoDEC also store their
-model-acceleration policy independently. Both default to ACC after route replay
-showed that the model candidate, not traffic control or the actuator path, caused
-the reported under-speed braking. Experimental may explicitly select Dynamic or
-E2E; TN-NoDEC may explicitly select E2E. Traffic control is a Plan Constraint with
+not require copying the planner. Model participation is not exposed as a new
+per-backend policy. Experimental retains the legacy DEC/Experimental Mode
+behavior, while TN-NoDEC ignores DEC and follows Experimental Mode directly,
+matching the final `sp-dev-egpu` and `sp-dev-rs408` trees. Traffic control is a Plan Constraint with
 `observe`, `decide`, and `constrain`; it cannot own a backend. Observe and Shadow
 are output-transparent and may add diagnostics only.
 

@@ -10,7 +10,6 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.long_mpc import (
   LongitudinalPlanSource as MpcLongitudinalPlanSource,
 )
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.model_policy import ModelPolicy, model_e2e_enabled
 
 
 class LongitudinalPlannerSP(UpstreamLongitudinalPlannerSP):
@@ -25,15 +24,10 @@ class LongitudinalPlannerSP(UpstreamLongitudinalPlannerSP):
     self._long_active_last_cycle = False
     self.previous_plan_accel = 0.0
     self.mpc_accel_seed = 0.0
-    self._model_policy = ModelPolicy.ACC
-
-  def set_model_policy(self, policy: ModelPolicy) -> None:
-    self._model_policy = ModelPolicy(policy)
 
   def is_e2e(self, sm: messaging.SubMaster) -> bool:
-    return model_e2e_enabled(
-      self._model_policy, experimental_mode=bool(sm['selfdriveState'].experimentalMode),
-    )
+    # TN-NoDEC deliberately ignores Dynamic Experimental Control.
+    return sm['selfdriveState'].experimentalMode
 
   def update_accel_controller(self, sm: messaging.SubMaster, v_cruise: float, prev_accel_constraint: bool,
                               stock_accel_max: float, reset_state: bool) -> tuple[bool, float]:
