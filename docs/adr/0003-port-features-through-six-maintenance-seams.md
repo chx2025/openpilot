@@ -15,11 +15,15 @@ Planner Backend, Plan Constraint, and Device Query/Device Command.
   or process boundary before UI is added.
 - A copy of an upstream planner, `selfdrived`, `card`, updater, or settings page
   is not an acceptable long-term Adapter; only a thin wrapper or hook is.
-- Planner Backends share the current upstream MPC and generated solver. A local
-  solver or live tuning profile is accepted only after a numerical regression
-  suite passes and upstream cannot supply the required Interface.
+- Official uses the current upstream planner and solver unchanged. Experimental
+  and TN-NoDEC share one local legacy cruise-obstacle equation source because
+  their confirmed old behavior cannot be expressed by the upstream lead-only
+  solver. It generates a legacy primary plus a numerical recovery variant; the
+  MPC family and live tuning profiles require route differential, convergence-
+  grid, and timing regression tests.
 - opendbc and the main repository are versioned as one Tesla safety unit.
-- UI defaults are a separate Local Defaults policy and never justify changing
-  upstream Param defaults.
+- UI defaults are a separate Local Defaults policy. Any changed Param default is
+  explicit, tested, and limited to a confirmed product decision (for example,
+  Simplified Chinese on this local build).
 - eGPU/model routing remains out of scope until these source-mode Modules pass
   device validation.

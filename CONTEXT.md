@@ -41,9 +41,27 @@ The interchangeable provider of standard `RadarData`. OEM Tesla radar, isolated 
 _Avoid_: ARS mode, radar toggle
 
 **Planner Backend**:
-An Adapter implementing the longitudinal planner Interface. Official upstream and local TN implementations must publish the same diagnostics and remain selectable only at session start.
+An Adapter implementing the longitudinal planner Interface. Official upstream,
+legacy Experimental, and legacy TN-NoDEC implementations publish the same
+diagnostics and remain selectable only at session start.
 _Avoid_: planner mode code path, copied official planner
 
+**Legacy Cruise MPC**:
+The single eight-parameter cruise-obstacle equation source shared by
+Experimental and TN-NoDEC. It generates the legacy primary solver and a
+numerically robust recovery variant, restoring the confirmed old candidate
+structure without copying either old platform-specific generated tree.
+_Avoid_: old Official solver, duplicated TN solver
+
+**Traffic Radar**:
+A typed, planner-only Traffic target produced by `trafficcontrold`. It may be an
+independent obstacle candidate but is never a physical radar lead, model input,
+FCW target, vehicle state, or CAN signal.
+_Avoid_: fake leadTwo, virtual vehicle, traffic radarState
+
 **Plan Constraint**:
-A decorator that can observe context and return a bounded change to a base longitudinal plan without becoming a Planner Backend. Traffic-control stopping is a Plan Constraint.
-_Avoid_: traffic planner, red-light MPC
+A decorator that can observe context and return a bounded change to a base
+longitudinal plan without becoming a Planner Backend. The direct Stop Profile
+is a Plan Constraint; the Traffic Radar strategy uses the same producer through
+the planner's optional target seam.
+_Avoid_: traffic planner, duplicated traffic controller

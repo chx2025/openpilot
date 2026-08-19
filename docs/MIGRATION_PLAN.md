@@ -12,10 +12,11 @@
 
 The fast startup premise needed one correction: sunnypilot `dev` is fast
 because it contains the `prebuilt` marker and compiled artifacts. It is not a
-non-precompiled development branch. Development therefore starts from
-`master-dev`; a separate branch such as `dev-c3xl-prebuilt-tici` publishes the
-prebuilt tree. The final deployed branch must end in `-tici` so upstream's
-existing channel check recognizes the target without a global bypass.
+non-precompiled development branch. Development therefore starts from the
+source commit named by that snapshot. The maintained source/device channel is
+`dev-sp-egpu`; only that exact published channel is classified as TICI-
+compatible, so unrelated development branches remain blocked without a global
+hardware-check bypass.
 
 ## Boot and Panda policy
 
@@ -37,11 +38,11 @@ observable. The old unconditional `Panda.get_type() == 9` override is excluded.
 | P0 | C3XL Profile | AGNOS allowlist/manifest, hardware identity Adapter, Panda Startup, read-only probe | build profile define; AGNOS validator call; Panda startup call | Host-tested |
 | P0 | Tesla Control | DBC/HW4 decoding, MADS/coop steering, manual longitudinal selection, Dynamic Auto Stock, AP Hybrid, auto speed, safety validation | Tesla Control Profile at car init; Tesla Control Runtime at selfdrived | Core/opendbc ported; device test pending |
 | P0 | Radar Backend | OEM/ARS408/Off selector, ARS RX parser, tracker, diagnostics, bounded motion TX, Panda safety | one backend selector in opendbc; one enum Param/UI control | Host-tested; device test pending |
-| P1 | Planner Backend | Official, Experimental, and TN-NoDEC; session latch; independent live profiles/tuning; stopping policy | one planner factory; isolated backend registry/adapters; bounded MPC hooks | Host-tested and imported on device; on-road behavior pending |
-| P1 | Traffic-control Plan Constraint | Off/Observe/Shadow/StopOnly/StopGo, Tesla event confirmation, CP model stop target, bounded confirmed-green departure, radar/lead/driver gates, HUD diagnostics | one planner decorator; card observation publisher; UI consumes Decision | Host-tested with route-derived candidate-jitter fixture; on-road behavior pending |
+| P1 | Planner Backend | Upstream Official plus restored legacy Experimental and TN-NoDEC; session latch; independent live profiles/tuning; TN stopping policy | one planner factory; isolated backend registry; one shared legacy MPC equation/build module | Old-route differential and host convergence tests pass; device timing/on-road behavior pending |
+| P1 | Traffic Radar / Stop Profile | Off/Observe/Shadow/StopOnly/StopGo, one Tesla event controller, CP model stop confirmation, independent typed Traffic target, bounded planner-only departure, radar/lead/driver gates, HUD diagnostics | one planner decorator; one `trafficcontrold` publisher; optional narrow MPC target setter | Host-tested with route-derived candidate-jitter fixture; on-road behavior pending |
 | P2 | Device Query/Command | default-on fully unauthenticated settings/commands, Tesla/HW4 diagnostics and validation, hotspot, opt-in offroad terminal; no driving-information page/API | one managed service; query/command boundary | Device HTTP verified; physical command tests pending |
 | P2 | Update reliability | proxy Adapter, current-tree LFS hydrate, last-known-good clock | narrow updater/time hooks | LFS and clock host-tested; proxy pending |
-| P3 | Local Defaults/UX | complete Simplified Chinese catalog and glyph coverage, legacy C3XL GPIO42 buzzer/sounds, offroad and on-road brightness controls, one-minute shutdown choice, speed offset cap, eGPU status/telemetry and safe eject | separate defaults policy and isolated UI rows | Translation/catalog/font host checks pass; device rendering, audible, and display checks pending |
+| P3 | Local Defaults/UX | complete Simplified Chinese catalog, legacy onroad-alert localization and glyph coverage; legacy C3XL GPIO42 buzzer; brightness controls; functional one-minute shutdown choice; speed offset cap; eGPU telemetry/safe eject | separate defaults policy, alert adapter, and isolated UI rows | Translation/font/alert/power host checks pass; device rendering, audible, and display checks pending |
 
 ### Tesla safety unit
 
@@ -59,32 +60,48 @@ motion frame is accepted.
 
 ### Planner migration rule
 
-Do not keep a forked `longitudinal_planner_official.py`. The Official Adapter
-constructs the Source Baseline planner directly. The registry exposes three
-session-latched selections: Official (`0`), Experimental (`1`), and TN-NoDEC
-(`2`). Experimental and TN-NoDEC own only their backend-specific deltas and
-reuse the upstream planner/MPC seams where possible. The old separate eight-
-parameter TN generated solver remains excluded: its status-4 failure is
-reproducible in the final old tree and it would add a second generated-code
-maintenance surface.
+Do not keep a forked Official planner. The Official Adapter constructs the
+Source Baseline planner directly. The registry exposes three session-latched
+selections: Official (`0`), Experimental (`1`), and TN-NoDEC (`2`). The user
+confirmed that Experimental and TN-NoDEC must reproduce the final old driving
+logic, not approximate it through the new upstream lead-only MPC. They therefore
+restore the old planner flow and share one reproducibly generated eight-
+parameter cruise-obstacle equation source. It builds the legacy primary solver
+and an active-only numerical recovery variant. Platform binaries and the two
+untracked old generated trees remain excluded.
+
+The old primary numerical configuration remains exact on its successful path
+and matches the 236-cycle retained route at `1e-5`; that route contains one
+inactive startup failure in both old planners. In a 28-point active cruise grid
+the same primary fails 11 cases. The recovery variant succeeds in all 28 and
+the combined host solve time is 0.124 ms median, 0.215 ms p95, and 0.913 ms max.
+Device/post98 generation, timing, and replay remain a deployment gate.
 
 Each backend has an independent Default/CrazyMax/Custom profile. Validated live
 values are revisioned in one configuration Param, polled at a bounded rate, and
-ramped before use. Official remains the upstream implementation; its tuning is
-applied only through the narrow MPC hooks, so future upstream planner updates do
-not require copying the planner. Model participation is not exposed as a new
-per-backend policy. Experimental retains the legacy DEC/Experimental Mode
-behavior, while TN-NoDEC ignores DEC and follows Experimental Mode directly,
-matching the final `sp-dev-egpu` and `sp-dev-rs408` trees. Traffic control is a Plan Constraint with
-`observe`, `decide`, and `constrain`; it cannot own a backend. Observe and Shadow
-are output-transparent and may add diagnostics only.
+ramped before use. The configuration format has an explicit schema identity and
+migrates both the old semantic layout and the interim per-backend layout without
+overwriting unknown input. Official remains the upstream implementation; its
+tuning is applied only through narrow MPC hooks. Experimental retains the legacy
+DEC/Experimental Mode behavior, while TN-NoDEC ignores DEC and follows
+Experimental Mode directly, matching the final old trees.
+
+`trafficcontrold` is the only Traffic state-machine owner and publishes
+`trafficRadarState`. The direct Stop Profile and independent Traffic Radar
+strategies consume that same decision. Traffic Radar is a fourth planner
+obstacle candidate identified by `lead2`; it never overwrites `leadOne` or
+`leadTwo`, never publishes `radarState`, never enters modeld, and does not make
+`hasLead` or FCW report a physical vehicle. Observe and Shadow are output-
+transparent and may add diagnostics only.
 
 The confirmed-stop policy follows the local CP reference: Tesla CAN supplies a
 fresh explicit red/yellow event and identity, while an aligned CP model stop
-supplies the primary stopping distance. Confirmed green may depart directly
-only in Stop/Go mode at or below 1 m/s, with valid radar and no lead, no pedal
-input, and no turn intent. Departure uses the Official planner's cruise
-candidate capped at 0.4 m/s²; it does not mutate backend persistent state.
+supplies the primary stopping distance. Confirmed green may request departure
+only in Stop/Go + Traffic Radar + Planner Start mode at or below 1 m/s, with
+valid radar and no lead, no pedal input, and no turn intent. The request is
+deduplicated per event, capped at 0.4 m/s², and affects only the selected
+longitudinal planner output; it does not mutate vehicle state, CAN, or backend
+persistent state.
 
 ### Local console boundary
 
@@ -115,8 +132,9 @@ must be reconsidered before broader deployment.
   IMEI/private hosts, and Params with no consumer.
 - Duplicate GPS time-sync process; only last-known-good clock persistence may
   be added to upstream `timed`.
-- A second generated longitudinal solver. Experimental and per-backend live
-  tuning are retained through isolated adapters and the upstream solver seams.
+- Duplicate Experimental/TN equation/build trees or copied platform binaries.
+  The two custom backends share one source-generated legacy MPC family.
+- A fake Traffic vehicle in `radarState`, model input, `leadOne`, or `leadTwo`.
 - Whole-file copies of old `updated.py`, `selfdrived.py`, UI settings pages, or
   planner files.
 
@@ -130,5 +148,6 @@ must be reconsidered before broader deployment.
 4. Offroad dry-run validates all AGNOS allowlist entries without writes.
 5. Bench CAN replay verifies no extra TX when a Module is disabled, followed by
    bounded ARS408 and Tesla handoff tests.
-6. Only after the above, build and publish `dev-c3xl-prebuilt-tici`; retain the
-   previous known-good Prebuilt Snapshot for rollback.
+6. Only after the above, build a prebuilt artifact from the verified
+   `dev-sp-egpu` source commit; retain the previous known-good device commit for
+   rollback.
