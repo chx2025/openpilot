@@ -42,8 +42,9 @@ transparent.
 - One shared equation/build module avoids the duplicate Experimental and TN
   solver sources in the old repository; its primary and recovery artifacts are
   generated for the target platform and never committed.
-- Old route output remains the behavioral oracle; synthetic convergence and
-  timing tests are additional deployment gates.
+- Old route output remains the behavioral oracle through target-specific
+  Darwin/arm64 and Linux/aarch64 baselines; synthetic convergence and timing
+  tests are additional deployment gates.
 - The old fake-`leadTwo` Traffic adapter is forbidden.
 - The three backend profiles remain independently adjustable and require an
   explicit, lossless configuration migration when their schema changes.

@@ -1,8 +1,10 @@
 import hashlib
 import json
+import platform
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from openpilot.selfdrive.test.process_replay.process_replay import replay_process_with_name
 from openpilot.tools.lib.logreader import LogReader
@@ -11,6 +13,18 @@ from openpilot.tools.lib.logreader import LogReader
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 ROUTE_FIXTURE = FIXTURE_DIR / "tesla_legacy_planner_warm.rlog.zst"
 ROUTE_FIXTURE_SHA256 = "36e4a6e774d33839b2b9f78d9f90d14b132020fb1cb88511d1096c737b0747f4"
+LINUX_AARCH64_GOLDEN_SHA256 = "30e5da2925023786fe21199c74bac81caf924791b81f93b5a2bf3fccd6c71c50"
+
+
+def _legacy_golden(backend: str) -> Path:
+  target = (platform.system(), platform.machine().lower())
+  if target == ("Darwin", "arm64"):
+    return FIXTURE_DIR / f"tesla_legacy_{backend}.json"
+  if target == ("Linux", "aarch64"):
+    golden = FIXTURE_DIR / "tesla_legacy_linux_aarch64.json"
+    assert hashlib.sha256(golden.read_bytes()).hexdigest() == LINUX_AARCH64_GOLDEN_SHA256
+    return golden
+  pytest.skip(f"no old-tree numerical golden recorded for {target[0]}/{target[1]}")
 
 
 def test_minimized_route_fixture_is_present_and_intact_in_a_clean_checkout():
@@ -56,13 +70,8 @@ def _assert_matches_legacy(actual_messages, expected_path: Path) -> None:
 
 
 def test_experimental_matches_the_comfortable_legacy_route_with_traffic_off():
-  # This route includes the legacy primary solver's one inactive status-4
-  # reset. Recovery is deliberately gated by carControl.longActive, so every
-  # decision field and numeric output remains the recorded rs408 value here.
-  _assert_matches_legacy(_replay(1), FIXTURE_DIR / "tesla_legacy_experimental.json")
+  _assert_matches_legacy(_replay(1), _legacy_golden("experimental"))
 
 
 def test_tn_matches_the_comfortable_legacy_route_with_traffic_off():
-  # Only an active primary failure may use the numerically robust solver; the
-  # inactive reference route must remain exact within solver float tolerance.
-  _assert_matches_legacy(_replay(2), FIXTURE_DIR / "tesla_legacy_tn.json")
+  _assert_matches_legacy(_replay(2), _legacy_golden("tn"))

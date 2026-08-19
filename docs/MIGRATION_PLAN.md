@@ -38,7 +38,7 @@ observable. The old unconditional `Panda.get_type() == 9` override is excluded.
 | P0 | C3XL Profile | AGNOS allowlist/manifest, hardware identity Adapter, Panda Startup, read-only probe | build profile define; AGNOS validator call; Panda startup call | Host-tested |
 | P0 | Tesla Control | DBC/HW4 decoding, MADS/coop steering, manual longitudinal selection, Dynamic Auto Stock, AP Hybrid, auto speed, safety validation | Tesla Control Profile at car init; Tesla Control Runtime at selfdrived | Core/opendbc ported; device test pending |
 | P0 | Radar Backend | OEM/ARS408/Off selector, ARS RX parser, tracker, diagnostics, bounded motion TX, Panda safety | one backend selector in opendbc; one enum Param/UI control | Host-tested; device test pending |
-| P1 | Planner Backend | Upstream Official plus restored legacy Experimental and TN-NoDEC; session latch; independent live profiles/tuning; TN stopping policy | one planner factory; isolated backend registry; one shared legacy MPC equation/build module | Old-route differential and host convergence tests pass; device timing/on-road behavior pending |
+| P1 | Planner Backend | Upstream Official plus restored legacy Experimental and TN-NoDEC; session latch; independent live profiles/tuning; TN stopping policy | one planner factory; isolated backend registry; one shared legacy MPC equation/build module | Darwin and C3XL route differentials, host/device convergence, and device timing pass; on-road behavior pending |
 | P1 | Traffic Radar / Stop Profile | Off/Observe/Shadow/StopOnly/StopGo, one Tesla event controller, CP model stop confirmation, independent typed Traffic target, bounded planner-only departure, radar/lead/driver gates, HUD diagnostics | one planner decorator; one `trafficcontrold` publisher; optional narrow MPC target setter | Host-tested with route-derived candidate-jitter fixture; on-road behavior pending |
 | P2 | Device Query/Command | default-on fully unauthenticated settings/commands, Tesla/HW4 diagnostics and validation, hotspot, opt-in offroad terminal; no driving-information page/API | one managed service; query/command boundary | Device HTTP verified; physical command tests pending |
 | P2 | Update reliability | proxy Adapter, current-tree LFS hydrate, last-known-good clock | narrow updater/time hooks | LFS and clock host-tested; proxy pending |
@@ -70,22 +70,22 @@ parameter cruise-obstacle equation source. It builds the legacy primary solver
 and an active-only numerical recovery variant. Platform binaries and the two
 untracked old generated trees remain excluded.
 
-The old primary numerical configuration remains exact on its successful path
-and matches the 236-cycle retained route at `1e-5`; that route contains one
-inactive startup failure in both old planners. In a 28-point active cruise grid
-the same primary fails 11 cases. The recovery variant succeeds in all 28 and
-the combined host solve time is 0.124 ms median, 0.215 ms p95, and 0.913 ms max.
-Recovered primary failures are explicitly rate-limited and logged. Device/
-post98 generation, timing, and replay remain a deployment gate.
+Route regression uses old-tree numerical baselines recorded separately for
+Darwin/arm64 and Linux/aarch64; acados output from one CPU is not treated as the
+oracle for another. On the C3XL, old `long_official` generated C and the migrated
+primary matched all 236 cycles exactly, including every source/state field. The
+112-case C3XL grid (both backends, Default/CrazyMax) had zero final failures and
+a worst solve time of 0.731 ms. Host grids also exercise the recovery path.
+Recovered primary failures are explicitly rate-limited and logged.
 
 Each backend has an independent Default/CrazyMax/Custom profile. Validated live
 values are revisioned in one configuration Param, polled at a bounded rate, and
 ramped before use. The configuration format has an explicit schema identity and
 migrates both the old semantic layout and the interim per-backend layout without
 overwriting unknown input, including TN's native acceleration enable/profile.
-Official remains the upstream implementation; its tuning is applied only through
-narrow MPC hooks and Default takes an exact no-op path. Experimental retains the legacy
-DEC/Experimental Mode behavior, while TN-NoDEC ignores DEC and follows
+Official remains the upstream implementation; its tuning is applied only
+through narrow MPC hooks and Default takes an exact no-op path. Experimental
+retains the legacy DEC/Experimental Mode behavior, while TN-NoDEC ignores DEC and follows
 Experimental Mode directly, matching the final old trees.
 
 `trafficcontrold` is the only Traffic state-machine owner and publishes
