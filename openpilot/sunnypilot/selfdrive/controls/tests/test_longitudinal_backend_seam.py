@@ -35,6 +35,14 @@ def test_registry_keeps_upstream_and_custom_providers_separate():
   assert [backend.id for backend in ordered_backends()] == [BackendId.OFFICIAL, BackendId.EXPERIMENTAL, BackendId.TN_NO_DEC]
 
 
+def test_custom_backends_advertise_the_solver_they_actually_use():
+  assert BACKENDS[BackendId.OFFICIAL].capabilities == frozenset({"upstream"})
+  assert "legacy_cruise_mpc" in BACKENDS[BackendId.EXPERIMENTAL].capabilities
+  assert "legacy_cruise_mpc" in BACKENDS[BackendId.TN_NO_DEC].capabilities
+  assert "upstream_mpc" not in BACKENDS[BackendId.EXPERIMENTAL].capabilities
+  assert "upstream_mpc" not in BACKENDS[BackendId.TN_NO_DEC].capabilities
+
+
 def test_unknown_backends_fail_closed_to_official():
   assert get_backend(None).id == BackendId.OFFICIAL
   assert get_backend("invalid").id == BackendId.OFFICIAL
@@ -110,12 +118,28 @@ def test_tn_backend_does_not_depend_on_dynamic_experimental_control():
   assert "return sm['selfdriveState'].experimentalMode" in source
 
 
-def test_tn_reuses_upstream_solver_instead_of_forking_generated_code():
-  root = Path(__file__).parents[1] / "lib" / "longitudinal_backends" / "tn_no_dec"
-  source = (root / "long_mpc.py").read_text()
-  assert "UpstreamLongitudinalMpc" in source
-  assert "gen_long_ocp" not in source
-  assert not (root / "SConscript").exists()
+def test_custom_backends_share_one_generated_legacy_solver_contract():
+  root = Path(__file__).parents[1] / "lib" / "longitudinal_backends"
+  experimental_source = (root / "experimental" / "long_mpc.py").read_text()
+  tn_source = (root / "tn_no_dec" / "long_mpc.py").read_text()
+
+  assert "LegacyCruiseLongitudinalMpc" in experimental_source
+  assert "LegacyCruiseLongitudinalMpc" in tn_source
+  assert ".legacy_mpc.c_generated_code." in experimental_source
+  assert ".legacy_mpc.c_generated_code." in tn_source
+  assert not (root / "experimental" / "SConscript").exists()
+  assert not (root / "tn_no_dec" / "SConscript").exists()
+  assert (root / "legacy_mpc" / "SConscript").is_file()
+  ignored = (root / "legacy_mpc" / ".gitignore").read_text().splitlines()
+  assert "/c_generated_code/" in ignored
+  assert "/c_generated_code_fallback/" in ignored
+
+
+def test_custom_planners_only_enable_solver_recovery_while_longitudinal_is_active():
+  root = Path(__file__).parents[1] / "lib" / "longitudinal_backends"
+  for backend in ("experimental", "tn_no_dec"):
+    source = (root / backend / "planner.py").read_text()
+    assert "set_recovery_enabled(sm['carControl'].longActive)" in source
 
 
 def test_tn_stopping_policy_fails_safe_on_invalid_inputs():

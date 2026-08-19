@@ -1,8 +1,8 @@
+"""Independent Traffic Radar producer state."""
+
 from __future__ import annotations
 
 from enum import IntEnum
-from types import SimpleNamespace
-
 import numpy as np
 
 import openpilot.cereal.messaging as messaging
@@ -18,59 +18,21 @@ from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import (
 )
 
 
-class TrafficObstacleGoPolicy(IntEnum):
+class TrafficRadarGoPolicy(IntEnum):
   passive = 0
   active = 1
 
 
 class TrafficControlStrategy(IntEnum):
   stopProfile = 0
-  obstacleChannel = 1
+  trafficRadar = 1
 
 
-class TrafficObstacleMpcAdapter:
-  """Project the independent traffic target into an MPC-local lead channel."""
-
-  def __init__(self, mpc) -> None:
-    self._mpc = mpc
-    self._obstacle = None
-    self.last_applied = False
-
-  def __getattr__(self, name):
-    return getattr(self._mpc, name)
-
-  def set_obstacle(self, obstacle, *, distance_correction: float = 0.0) -> None:
-    self._obstacle = None if obstacle is None else SimpleNamespace(
-      present=bool(obstacle.present),
-      desiredStopDistance=max(0.0, float(obstacle.desiredStopDistance) - max(0.0, distance_correction)),
-    )
-
-  def update(self, radarstate, *args, **kwargs):
-    obstacle = self._obstacle
-    physical_lead = bool(radarstate.leadOne.present or radarstate.leadTwo.present)
-    self.last_applied = bool(obstacle is not None and obstacle.present and not physical_lead)
-    if self.last_applied:
-      tuning = getattr(self._mpc, "runtime_tuning", None)
-      stop_distance = float(getattr(tuning, "stop_distance", 6.0))
-      virtual_lead = SimpleNamespace(
-        present=True,
-        dRel=max(0.0, float(obstacle.desiredStopDistance) + stop_distance),
-        vLead=0.0,
-        aLeadK=0.0,
-        aLeadTau=1.5,
-        modelProb=0.0,
-        radar=False,
-        radarTrackId=-1,
-      )
-      radarstate = SimpleNamespace(leadOne=radarstate.leadOne, leadTwo=virtual_lead)
-    return self._mpc.update(radarstate, *args, **kwargs)
-
-
-class TrafficObstacleSource:
+class TrafficRadarSource:
   """Publish a traffic-control target independently from physical radarState."""
 
   def __init__(self, config: TrafficControlConfig,
-               go_policy: TrafficObstacleGoPolicy = TrafficObstacleGoPolicy.passive) -> None:
+               go_policy: TrafficRadarGoPolicy = TrafficRadarGoPolicy.passive) -> None:
     self.controller = TeslaTrafficControlController(config)
     self.go_policy = go_policy
     self._lead_suppressed = False
@@ -145,29 +107,29 @@ class TrafficObstacleSource:
     valid_for_control = bool(
       radar_valid and not lead_present and not self._lead_suppressed and decision.apply_constraint
     )
-    msg = messaging.new_message('trafficObstacleState')
-    obstacle = msg.trafficObstacleState
-    obstacle.present = bool(active_stop and valid_for_control)
-    obstacle.dRel = float(decision.remaining_distance + decision.stop_reference) if active_stop else 0.0
-    obstacle.vRel = -float(car_state.vEgo) if active_stop else 0.0
-    obstacle.aRel = -float(car_state.aEgo) if active_stop else 0.0
-    obstacle.desiredStopDistance = float(decision.remaining_distance)
-    obstacle.phase = int(decision.phase)
-    obstacle.lightState = int(decision.light_state)
-    obstacle.sourceBus = int(decision.source_bus)
-    obstacle.quality = int(decision.quality)
-    obstacle.confidence = 1.0 if active_stop else 0.0
-    obstacle.eventId = int(self.controller.event_id)
-    obstacle.frameMonoTime = int(now_ns)
-    obstacle.validForControl = valid_for_control
-    obstacle.suppressedByLead = bool(lead_present or self._lead_suppressed)
-    obstacle.shouldStop = bool(decision.should_stop)
-    obstacle.startRequested = bool(
-      self.go_policy == TrafficObstacleGoPolicy.active and
+    msg = messaging.new_message('trafficRadarState')
+    target = msg.trafficRadarState
+    target.targetPresent = bool(active_stop)
+    target.oemTargetDistance = float(decision.remaining_distance + decision.stop_reference) if active_stop else 0.0
+    target.targetRelativeVelocity = -float(car_state.vEgo) if active_stop else 0.0
+    target.targetRelativeAcceleration = -float(car_state.aEgo) if active_stop else 0.0
+    target.distanceToStopPoint = float(decision.remaining_distance)
+    target.phase = int(decision.phase)
+    target.lightState = int(decision.light_state)
+    target.sourceBus = int(decision.source_bus)
+    target.quality = int(decision.quality)
+    target.confidence = 1.0 if active_stop else 0.0
+    target.eventId = int(self.controller.event_id)
+    target.publishMonoTime = int(now_ns)
+    target.controlAllowed = valid_for_control
+    target.suppressedByPhysicalLead = bool(lead_present or self._lead_suppressed)
+    target.shouldStop = bool(decision.should_stop)
+    target.plannerStartRequested = bool(
+      self.go_policy == TrafficRadarGoPolicy.active and
       decision.mode == TrafficControlMode.stopGo and
       decision.phase == TrafficControlPhase.release and
       valid_for_control
     )
-    obstacle.mode = int(decision.mode)
+    target.mode = int(decision.mode)
     msg.valid = bool(model_valid and car_state_sp_valid and radar_valid)
     return msg

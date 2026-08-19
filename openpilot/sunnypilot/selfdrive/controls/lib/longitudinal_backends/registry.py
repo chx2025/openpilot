@@ -34,7 +34,7 @@ EXPERIMENTAL_BACKEND = BackendSpec(
   slug="experimental",
   label="Experimental",
   provider="openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.experimental.planner:LongitudinalPlanner",
-  capabilities=frozenset({"upstream_mpc", "cruise_obstacle", "dynamic_experimental_control"}),
+  capabilities=frozenset({"legacy_cruise_mpc", "cruise_obstacle", "dynamic_experimental_control"}),
 )
 
 TN_NO_DEC_BACKEND = BackendSpec(
@@ -42,7 +42,7 @@ TN_NO_DEC_BACKEND = BackendSpec(
   slug="tn_no_dec",
   label="TN-NoDEC",
   provider="openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.planner:LongitudinalPlanner",
-  capabilities=frozenset({"upstream_mpc", "no_dynamic_experimental_control", "accel_controller"}),
+  capabilities=frozenset({"legacy_cruise_mpc", "no_dynamic_experimental_control", "accel_controller"}),
   stopping_policy="openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.longcontrol_policy:TNStoppingPolicy",
 )
 

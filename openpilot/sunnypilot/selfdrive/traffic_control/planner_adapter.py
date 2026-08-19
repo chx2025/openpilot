@@ -2,34 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from types import SimpleNamespace
 
 import numpy as np
 
+from openpilot.cereal import log
 from openpilot.common.params import Params
-from openpilot.common.swaglog import cloudlog
+from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import (
-  TeslaTrafficControlController,
-  TrafficControlConfig,
   TrafficControlDecision,
   TrafficControlMode,
   TrafficControlPhase,
 )
+from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import TrafficControlStrategy
 from openpilot.sunnypilot.selfdrive.traffic_control.stop_profile import StopProfileGenerator
-from openpilot.sunnypilot.selfdrive.traffic_control.obstacle_state import (
-  TrafficControlStrategy,
-  TrafficObstacleMpcAdapter,
-)
-from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import TRAFFIC_CONTROL_STALE_NS, TeslaTrafficControlObservation
+from openpilot.sunnypilot.selfdrive.traffic_control.target import TrafficMpcTarget
 
 
-MIN_STOP_REFERENCE = 2.0
-MAX_STOP_REFERENCE = 12.0
-# Match the producer state machine's observation dropout window. The producer
-# keeps advancing its latched stop point during a short raw-CAN gap, so a single
-# delayed IPC frame must not abruptly remove an already-active red constraint.
-TRAFFIC_OBSTACLE_STALE_NS = 750_000_000
+TRAFFIC_RADAR_STALE_NS = 250_000_000
+ACTIVE_PHASES = {
+  TrafficControlPhase.approachRed,
+  TrafficControlPhase.braking,
+  TrafficControlPhase.hold,
+  TrafficControlPhase.release,
+}
 
 
 @dataclass
@@ -47,6 +43,16 @@ class _PlannerOutputSnapshot:
   a_target: float
   should_stop: bool
   allow_throttle: bool
+
+
+@dataclass(frozen=True)
+class _TrafficRadarSnapshot:
+  decision: TrafficControlDecision
+  event_id: int
+  publish_mono_time: int
+  target_present: bool
+  control_allowed: bool
+  planner_start_requested: bool
 
 
 class _PublishProxy:
@@ -77,158 +83,195 @@ class _PublishProxy:
 
 
 class TrafficControlPlannerAdapter:
-  """Optional Tesla stop/go constraint around any selected longitudinal backend."""
+  """Traffic-only constraint around a planner whose base behavior stays intact."""
 
   def __init__(self, planner, CP, params: Params | None = None) -> None:
     self._planner = planner
     self._CP = CP
     self._params = params or Params()
-    self._controller = TeslaTrafficControlController()
     self._profile = StopProfileGenerator(actuator_delay=float(CP.longitudinalActuatorDelay))
-    self._diagnostics = TrafficControlDiagnostics(self._controller._decision())
-    self._last_transition_seq = self._controller.transition_seq
     self._base_output: _PlannerOutputSnapshot | None = None
-    self._read_config()
-    self._obstacle_mpc = None
-    self._latched_hold_obstacle = None
-    if self._strategy == TrafficControlStrategy.obstacleChannel and hasattr(self._planner, "mpc"):
-      self._obstacle_mpc = TrafficObstacleMpcAdapter(self._planner.mpc)
-      self._planner.mpc = self._obstacle_mpc
-
-  def __getattr__(self, name):
-    return getattr(self._planner, name)
-
-  @staticmethod
-  def _mode(value) -> TrafficControlMode:
-    try:
-      return TrafficControlMode(int(value or 0))
-    except (TypeError, ValueError):
-      return TrafficControlMode.off
-
-  def _read_config(self) -> None:
-    reference_dm = self._params.get("TeslaTrafficStopReference", return_default=True)
-    reference = float(np.clip(float(reference_dm or 60) / 10.0, MIN_STOP_REFERENCE, MAX_STOP_REFERENCE))
-    config = TrafficControlConfig(
-      mode=self._mode(self._params.get("TeslaTrafficControlMode", return_default=True)),
-      default_stop_reference=reference,
-      adaptive_reference=bool(self._params.get("TeslaTrafficAdaptiveReference", return_default=True)),
-    )
-    self._controller.set_config(config)
-    self._profile.comfort_brake = config.comfort_brake
+    self._latched_hold: _TrafficRadarSnapshot | None = None
+    self._last_start_event_id = -1
     try:
       self._strategy = TrafficControlStrategy(int(
         self._params.get("TeslaTrafficControlStrategy", return_default=True) or 0,
       ))
     except (TypeError, ValueError):
       self._strategy = TrafficControlStrategy.stopProfile
+    self._diagnostics = TrafficControlDiagnostics(self._empty_decision(self._configured_mode()))
+
+  def __getattr__(self, name):
+    return getattr(self._planner, name)
+
+  def _configured_mode(self) -> TrafficControlMode:
+    try:
+      return TrafficControlMode(int(self._params.get("TeslaTrafficControlMode", return_default=True) or 0))
+    except (TypeError, ValueError):
+      return TrafficControlMode.off
 
   @staticmethod
-  def _observation(msg, now_ns: int) -> TeslaTrafficControlObservation:
-    observation = TeslaTrafficControlObservation.from_message(msg)
-    age_ns = now_ns - observation.frame_mono_time
-    return observation if 0 <= age_ns <= TRAFFIC_CONTROL_STALE_NS else TeslaTrafficControlObservation()
-
-  @staticmethod
-  def _model_stop(model, v_ego: float, lead_distance: float | None) -> tuple[float | None, bool]:
-    x = list(model.position.x)
-    velocity = list(model.velocity.x)
-    if not x or not velocity:
-      return None, False
-    index = min(31, len(x) - 1, len(velocity) - 1)
-    distance = float(x[index])
-    terminal_speed = float(velocity[index])
-    below_lead = lead_distance is None or distance < lead_distance - 3.0
-    max_distance = float(np.interp(v_ego * 3.6, [60.0, 80.0], [120.0, 150.0]))
-    stopped = (v_ego < 0.28 and distance < 20.0 and terminal_speed < 10.0) or (
-      v_ego < 82.0 / 3.6 and distance < max_distance and terminal_speed < min(3.0, v_ego * 0.7)
+  def _empty_decision(mode: TrafficControlMode) -> TrafficControlDecision:
+    return TrafficControlDecision(
+      mode=mode,
+      phase=TrafficControlPhase.off,
+      active=False,
+      apply_constraint=False,
+      shadow=False,
+      should_stop=False,
+      remaining_distance=0.0,
+      stop_reference=0.0,
+      light_state=0,
+      source_bus=0,
+      quality=0,
     )
-    return distance, bool(stopped and below_lead)
 
   @staticmethod
-  def _traffic_obstacle(sm, now_ns: int):
+  def _physical_radar_clear(sm) -> bool:
+    healthy = bool(sm.seen["radarState"] and sm.alive["radarState"] and sm.valid["radarState"])
+    return healthy and not (sm["radarState"].leadOne.present or sm["radarState"].leadTwo.present)
+
+  def _read_traffic_radar(self, sm, now_ns: int) -> _TrafficRadarSnapshot | None:
     healthy = bool(
-      sm.seen['trafficObstacleState'] and sm.alive['trafficObstacleState'] and sm.valid['trafficObstacleState']
+      sm.seen["trafficRadarState"] and sm.alive["trafficRadarState"] and sm.valid["trafficRadarState"]
     )
     if not healthy:
       return None
-    obstacle = sm['trafficObstacleState']
-    age_ns = now_ns - int(obstacle.frameMonoTime)
-    return obstacle if 0 <= age_ns <= TRAFFIC_OBSTACLE_STALE_NS else None
-
-  def _decision_from_obstacle(self, obstacle) -> TrafficControlDecision:
-    if obstacle is None:
-      return TrafficControlDecision(
-        mode=self._controller.config.mode, phase=TrafficControlPhase.off,
-        active=False, apply_constraint=False, shadow=False, should_stop=False,
-        remaining_distance=0.0, stop_reference=self._controller.config.default_stop_reference,
-        light_state=0, source_bus=0, quality=0,
-      )
+    message = sm["trafficRadarState"]
+    age_ns = now_ns - int(message.publishMonoTime)
+    if not 0 <= age_ns <= TRAFFIC_RADAR_STALE_NS:
+      return None
     try:
-      mode = TrafficControlMode(int(obstacle.mode))
-      phase = TrafficControlPhase(int(obstacle.phase))
+      mode = TrafficControlMode(int(message.mode))
+      phase = TrafficControlPhase(int(message.phase))
     except (TypeError, ValueError):
-      mode = TrafficControlMode.off
-      phase = TrafficControlPhase.off
-    active = phase in self._controller.ACTIVE_PHASES or phase == TrafficControlPhase.release
-    return TrafficControlDecision(
-      mode=mode, phase=phase, active=active,
-      apply_constraint=mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and active,
-      shadow=mode == TrafficControlMode.shadow and active,
-      should_stop=bool(obstacle.shouldStop),
-      remaining_distance=max(0.0, float(obstacle.desiredStopDistance)),
-      stop_reference=max(0.0, float(obstacle.dRel) - float(obstacle.desiredStopDistance)),
-      light_state=int(obstacle.lightState), source_bus=int(obstacle.sourceBus), quality=int(obstacle.quality),
+      return None
+    active = phase in ACTIVE_PHASES
+    control_allowed = bool(message.controlAllowed and self._physical_radar_clear(sm))
+    decision = TrafficControlDecision(
+      mode=mode,
+      phase=phase,
+      active=active,
+      apply_constraint=bool(
+        control_allowed and mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and active
+      ),
+      shadow=bool(mode == TrafficControlMode.shadow and active),
+      should_stop=bool(message.shouldStop),
+      remaining_distance=max(0.0, float(message.distanceToStopPoint)),
+      stop_reference=max(0.0, float(message.oemTargetDistance) - float(message.distanceToStopPoint)),
+      light_state=int(message.lightState),
+      source_bus=int(message.sourceBus),
+      quality=int(message.quality),
+    )
+    return _TrafficRadarSnapshot(
+      decision=decision,
+      event_id=int(message.eventId),
+      publish_mono_time=int(message.publishMonoTime),
+      target_present=bool(message.targetPresent),
+      control_allowed=control_allowed,
+      planner_start_requested=bool(message.plannerStartRequested),
     )
 
-  def _update_obstacle_strategy(self, sm, now_ns: int) -> None:
-    obstacle = self._traffic_obstacle(sm, now_ns)
-    if obstacle is not None:
-      try:
-        phase = TrafficControlPhase(int(obstacle.phase))
-      except (TypeError, ValueError):
-        phase = TrafficControlPhase.off
-      if bool(obstacle.validForControl) and bool(obstacle.shouldStop) and phase == TrafficControlPhase.hold:
-        self._latched_hold_obstacle = SimpleNamespace(
-          present=True, dRel=float(obstacle.dRel), desiredStopDistance=float(obstacle.desiredStopDistance),
-          phase=int(obstacle.phase), lightState=int(obstacle.lightState), mode=int(obstacle.mode),
-          shouldStop=True, sourceBus=int(obstacle.sourceBus), quality=int(obstacle.quality),
-          eventId=int(obstacle.eventId), frameMonoTime=now_ns, validForControl=True,
-          startRequested=False,
-        )
-      elif phase == TrafficControlPhase.release:
-        self._latched_hold_obstacle = None
-
-    car_state = sm['carState']
-    car_control = sm['carControl']
-    driver_override = bool(car_state.gasPressed or not car_control.enabled or not car_control.longActive)
+  def _traffic_snapshot(self, sm, now_ns: int) -> _TrafficRadarSnapshot | None:
+    snapshot = self._read_traffic_radar(sm, now_ns)
+    car_state = sm["carState"]
+    car_control = sm["carControl"]
+    driver_override = bool(
+      car_state.gasPressed or car_state.brakePressed or not car_control.enabled or not car_control.longActive
+    )
     if driver_override:
-      self._latched_hold_obstacle = None
-    elif obstacle is None and self._latched_hold_obstacle is not None:
-      obstacle = self._latched_hold_obstacle
+      self._latched_hold = None
+      return snapshot
 
-    if self._obstacle_mpc is not None:
-      age_s = (0.0 if obstacle is None else
-               max(0.0, (now_ns - int(obstacle.frameMonoTime)) / 1e9))
-      self._obstacle_mpc.set_obstacle(
-        obstacle if obstacle is not None and bool(obstacle.validForControl) else None,
-        distance_correction=max(0.0, float(sm['carState'].vEgo)) * age_s,
-      )
-    self._planner.update(sm)
+    if snapshot is not None:
+      if snapshot.decision.phase == TrafficControlPhase.release:
+        self._latched_hold = None
+      elif (snapshot.control_allowed and snapshot.decision.phase == TrafficControlPhase.hold
+            and snapshot.decision.should_stop):
+        self._latched_hold = snapshot
+      return snapshot
 
-    decision = self._decision_from_obstacle(obstacle)
-    applied = bool(self._obstacle_mpc is not None and self._obstacle_mpc.last_applied)
+    if (self._latched_hold is not None and float(car_state.vEgo) <= 1.0
+        and self._physical_radar_clear(sm)):
+      return self._latched_hold
+    return None
+
+  def _set_mpc_target(self, snapshot: _TrafficRadarSnapshot | None) -> bool:
+    mpc = getattr(self._planner, "mpc", None)
+    setter = getattr(mpc, "set_traffic_target", None)
+    active = bool(
+      snapshot is not None and snapshot.target_present and snapshot.decision.apply_constraint
+      and snapshot.control_allowed
+    )
+    if setter is not None:
+      setter(TrafficMpcTarget(
+        event_id=snapshot.event_id,
+        distance_to_stop_point=snapshot.decision.remaining_distance,
+        should_stop=snapshot.decision.should_stop,
+      ) if active else None)
+    return active
+
+  def _run_traffic_radar(self, sm, snapshot: _TrafficRadarSnapshot | None) -> tuple[bool, float]:
+    target_set = self._set_mpc_target(snapshot)
+    try:
+      self._planner.update(sm)
+    finally:
+      self._set_mpc_target(None)
+
+    applied = bool(
+      target_set and self._planner.mpc.source == log.LongitudinalPlan.LongitudinalPlanSource.lead2
+    )
     constraint_accel = float(self._planner.output_a_target) if applied else 0.0
-    if applied and decision.should_stop:
+    if target_set and snapshot is not None and snapshot.decision.should_stop:
       self._capture_base_output()
       self._planner.output_should_stop = True
       self._planner.allow_throttle = False
-    if obstacle is not None and bool(obstacle.validForControl) and bool(obstacle.startRequested):
-      release_applied, constraint_accel = self._apply_constraint(decision, sm)
-      applied = applied or release_applied
-    self._diagnostics = TrafficControlDiagnostics(decision, applied, constraint_accel)
+      applied = True
 
-  def _apply_constraint(self, decision: TrafficControlDecision, sm) -> tuple[bool, float]:
-    if not decision.apply_constraint:
+    if snapshot is not None and snapshot.planner_start_requested:
+      start_applied, start_accel = self._apply_planner_start(snapshot, sm)
+      applied = applied or start_applied
+      if start_applied:
+        constraint_accel = start_accel
+    return applied, constraint_accel
+
+  def _apply_planner_start(self, snapshot: _TrafficRadarSnapshot, sm) -> tuple[bool, float]:
+    if snapshot.event_id == self._last_start_event_id:
+      return False, 0.0
+    decision = snapshot.decision
+    car_state = sm["carState"]
+    car_control = sm["carControl"]
+    driver_allows = not (
+      car_state.brakePressed or car_state.gasPressed or car_control.leftBlinker or car_control.rightBlinker
+    )
+    v_cruise = float(car_state.vCruise)
+    cruise_initialized = 0.0 < v_cruise < V_CRUISE_UNSET
+    departure_allowed = bool(
+      self._strategy == TrafficControlStrategy.trafficRadar
+      and decision.mode == TrafficControlMode.stopGo
+      and decision.phase == TrafficControlPhase.release
+      and decision.light_state == 2
+      and float(car_state.vEgo) <= 1.0
+      and car_control.enabled and car_control.longActive
+      and self._physical_radar_clear(sm)
+      and driver_allows and cruise_initialized
+    )
+    if not departure_allowed:
+      return False, 0.0
+
+    self._last_start_event_id = snapshot.event_id
+    start_accel = float(np.clip(v_cruise / 3.6 - float(car_state.vEgo), 0.0, 0.4))
+    if start_accel <= 0.0:
+      return False, 0.0
+    self._capture_base_output()
+    previous = float(self._planner.output_a_target)
+    self._planner.output_a_target = max(previous, start_accel)
+    self._planner.output_should_stop = False
+    self._planner.allow_throttle = True
+    return bool(self._planner.output_a_target > previous + 1e-3), float(self._planner.output_a_target)
+
+  def _apply_stop_profile(self, decision: TrafficControlDecision, sm) -> tuple[bool, float]:
+    if not decision.apply_constraint or decision.phase == TrafficControlPhase.release:
       if not decision.active:
         self._profile.reset()
       return False, 0.0
@@ -236,56 +279,25 @@ class TrafficControlPlannerAdapter:
     planner = self._planner
     base_speeds = np.asarray(planner.v_desired_trajectory, dtype=float)
     times = np.asarray(ModelConstants.T_IDXS[:len(base_speeds)], dtype=float)
-    v_ego = float(sm['carState'].vEgo)
-    a_ego = float(sm['carState'].aEgo)
-
-    # CP moves directly from e2eStopped to cruise on a confirmed green. Keep
-    # that behavior narrowly scoped to the same Tesla event, low speed, valid
-    # no-lead radar, and no driver brake/turn intent. The departure acceleration
-    # comes from the official planner's cruise candidate and is capped here.
-    if decision.phase == TrafficControlPhase.release:
-      self._profile.reset()
-      car_state = sm['carState']
-      car_control = sm['carControl']
-      radar_valid = bool(sm.seen['radarState'] and sm.alive['radarState'] and sm.valid['radarState'])
-      leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo) if radar_valid else ()
-      no_lead = radar_valid and not any(lead.present for lead in leads)
-      low_speed = float(car_state.vEgo) <= 1.0
-      driver_allows = (not car_state.brakePressed and not car_state.gasPressed and
-                       not car_control.leftBlinker and not car_control.rightBlinker)
-      cruise_accel = float(np.clip(getattr(planner, "a_cruise", 0.0), 0.0, 0.4))
-      departure_allowed = (decision.mode == TrafficControlMode.stopGo and decision.light_state == 2 and
-                           low_speed and no_lead and driver_allows and cruise_accel > 0.0)
-      if not departure_allowed:
-        return False, 0.0
-
-      self._capture_base_output()
-      previous_accel = float(planner.output_a_target)
-      previous_should_stop = bool(planner.output_should_stop)
-      previous_allow_throttle = bool(planner.allow_throttle)
-      planner.output_a_target = max(previous_accel, cruise_accel)
-      planner.output_should_stop = False
-      planner.allow_throttle = True
-      applied = (planner.output_a_target > previous_accel + 1e-3 or previous_should_stop or
-                 not previous_allow_throttle)
-      return applied, float(planner.output_a_target)
-
     stop_speeds, stop_accels, _ = self._profile.build_stop(
-      v_ego=v_ego, a_ego=a_ego, remaining_distance=decision.remaining_distance,
-      times=times, hold=decision.phase == TrafficControlPhase.hold,
+      v_ego=float(sm["carState"].vEgo),
+      a_ego=float(sm["carState"].aEgo),
+      remaining_distance=decision.remaining_distance,
+      times=times,
+      hold=decision.phase == TrafficControlPhase.hold,
     )
-
     base_accels = np.asarray(planner.a_desired_trajectory, dtype=float)
     merged_speeds = np.minimum(base_speeds, stop_speeds)
     merged_accels = np.minimum(base_accels, stop_accels)
     merged_jerks = np.diff(merged_accels) / np.maximum(np.diff(times), 1e-3)
-
     delay = float(self._CP.longitudinalActuatorDelay) + 0.05
-    stop_constraint_accel = float(np.interp(delay, times, stop_accels))
-    constraint_accel = min(float(planner.output_a_target), stop_constraint_accel)
-    applied = (bool(np.any(merged_speeds < base_speeds - 1e-3)) or
-               bool(np.any(merged_accels < base_accels - 1e-3)) or
-               constraint_accel < float(planner.output_a_target) - 1e-3)
+    stop_accel = float(np.interp(delay, times, stop_accels))
+    constraint_accel = min(float(planner.output_a_target), stop_accel)
+    applied = bool(
+      np.any(merged_speeds < base_speeds - 1e-3)
+      or np.any(merged_accels < base_accels - 1e-3)
+      or constraint_accel < float(planner.output_a_target) - 1e-3
+    )
     if not applied:
       return False, constraint_accel
 
@@ -298,7 +310,7 @@ class TrafficControlPlannerAdapter:
     planner.output_a_target = constraint_accel
     planner.output_should_stop = bool(planner.output_should_stop or decision.should_stop)
     planner.allow_throttle = bool(planner.allow_throttle and not decision.should_stop)
-    return applied, constraint_accel
+    return True, constraint_accel
 
   def _capture_base_output(self) -> None:
     if self._base_output is not None:
@@ -325,66 +337,15 @@ class TrafficControlPlannerAdapter:
     planner.allow_throttle = self._base_output.allow_throttle
     self._base_output = None
 
-  def _log_transition(self, decision: TrafficControlDecision, observation: TeslaTrafficControlObservation,
-                      *, v_ego: float, lead_present: bool, radar_valid: bool,
-                      applied: bool, constraint_accel: float) -> None:
-    if self._controller.transition_seq == self._last_transition_seq:
-      return
-    self._last_transition_seq = self._controller.transition_seq
-    cloudlog.event(
-      "tesla_traffic_control_transition",
-      transition=self._controller.transition_reason,
-      mode=int(decision.mode), phase=int(decision.phase), applied=applied,
-      sourceBus=observation.source_bus, featureState=observation.feature_state,
-      stateMachine=observation.state_machine, controlSource=observation.control_source,
-      lightState=observation.light_state, observationDistance=round(observation.distance, 2),
-      candidateDistance=round(self._controller.candidate_distance, 2),
-      distanceInnovation=round(self._controller.last_distance_innovation, 2),
-      confirmationRequiredS=round(self._controller.candidate_confirm_s, 2),
-      remainingDistance=round(decision.remaining_distance, 2), vEgo=round(v_ego, 3),
-      leadPresent=lead_present, radarValid=radar_valid,
-      constraintAccel=round(constraint_accel, 3),
-    )
-
   def update(self, sm) -> None:
-    # A previous constrained publish must never seed the next backend cycle.
-    # The normal plannerd loop always publishes, but restoring here as well
-    # keeps the boundary safe if a caller skips publish after an exception.
     self._restore_base_output()
-    now_ns = time.monotonic_ns()
-    if self._strategy == TrafficControlStrategy.obstacleChannel:
-      self._update_obstacle_strategy(sm, now_ns)
-      return
-    self._planner.update(sm)
-
-    car_state_sp_valid = bool(sm.seen['carStateSP'] and sm.alive['carStateSP'] and sm.valid['carStateSP'])
-    observation = (self._observation(sm['carStateSP'].teslaTrafficControl, now_ns)
-                   if car_state_sp_valid else TeslaTrafficControlObservation())
-    car_state = sm['carState']
-    car_control = sm['carControl']
-    radar_valid = bool(sm.seen['radarState'] and sm.alive['radarState'] and sm.valid['radarState'])
-    leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo) if radar_valid else ()
-    present_leads = [lead for lead in leads if lead.present]
-    lead_present = bool(present_leads)
-    lead_distance = min(float(lead.dRel) for lead in present_leads) if present_leads else None
-    model_valid = bool(sm.seen['modelV2'] and sm.alive['modelV2'] and sm.valid['modelV2'])
-    if model_valid:
-      model_distance, model_candidate = self._model_stop(sm['modelV2'], float(car_state.vEgo), lead_distance)
+    snapshot = self._traffic_snapshot(sm, time.monotonic_ns())
+    decision = snapshot.decision if snapshot is not None else self._empty_decision(self._configured_mode())
+    if self._strategy == TrafficControlStrategy.trafficRadar:
+      applied, constraint_accel = self._run_traffic_radar(sm, snapshot)
     else:
-      model_distance, model_candidate = None, False
-    decision = self._controller.update(
-      observation, now_ns, v_ego=float(car_state.vEgo), a_ego=float(car_state.aEgo),
-      model_stop_distance=model_distance, model_stop_candidate=model_candidate,
-      lead_present=lead_present, radar_valid=radar_valid, enabled=bool(car_control.enabled),
-      long_active=bool(car_control.longActive), gas_pressed=bool(car_state.gasPressed),
-      brake_pressed=bool(car_state.brakePressed),
-      turn_signal_active=bool(car_control.leftBlinker or car_control.rightBlinker),
-    )
-    applied, constraint_accel = self._apply_constraint(decision, sm)
-    self._log_transition(
-      decision, observation, v_ego=float(car_state.vEgo), lead_present=lead_present,
-      radar_valid=radar_valid, applied=applied, constraint_accel=constraint_accel,
-    )
+      self._planner.update(sm)
+      applied, constraint_accel = self._apply_stop_profile(decision, sm)
     self._diagnostics = TrafficControlDiagnostics(decision, applied, constraint_accel)
 
   def publish(self, sm, pm) -> None:

@@ -1,32 +1,39 @@
 from copy import deepcopy
 from types import SimpleNamespace
-import time
 
 import numpy as np
 import pytest
 
+from openpilot.cereal import log
 from openpilot.sunnypilot.selfdrive.traffic_control import decorate_planner
 from openpilot.sunnypilot.selfdrive.traffic_control import planner_adapter as planner_adapter_module
-from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlDecision, TrafficControlMode, TrafficControlPhase
+from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlMode, TrafficControlPhase
 from openpilot.sunnypilot.selfdrive.traffic_control.planner_adapter import TrafficControlPlannerAdapter
 
 
+def ns(**kwargs):
+  return SimpleNamespace(**kwargs)
+
+
 class FakeParams:
-  def __init__(self, mode=0, adaptive_reference=False, strategy=0, go_policy=0):
-    self.mode = mode
-    self.adaptive_reference = adaptive_reference
-    self.strategy = strategy
-    self.go_policy = go_policy
+  def __init__(self, mode=0, strategy=0):
+    self.values = {
+      "TeslaTrafficControlMode": mode,
+      "TeslaTrafficControlStrategy": strategy,
+    }
 
   def get(self, key, *, return_default=False):
     assert return_default
-    return {
-      "TeslaTrafficControlMode": self.mode,
-      "TeslaTrafficStopReference": 60,
-      "TeslaTrafficAdaptiveReference": self.adaptive_reference,
-      "TeslaTrafficControlStrategy": self.strategy,
-      "TeslaTrafficObstacleGoPolicy": self.go_policy,
-    }[key]
+    return self.values[key]
+
+
+class FakeMpc:
+  def __init__(self):
+    self.target = None
+    self.source = log.LongitudinalPlan.LongitudinalPlanSource.cruise
+
+  def set_traffic_target(self, target):
+    self.target = target
 
 
 class FakePlanner:
@@ -39,46 +46,54 @@ class FakePlanner:
     self.allow_throttle = True
     self.a_desired = -0.2
     self.v_desired_filter = ns(x=9.5)
+    self.mpc = FakeMpc()
     self.update_calls = 0
+    self.received_targets = []
 
   def update(self, sm):
     del sm
     self.update_calls += 1
+    self.received_targets.append(self.mpc.target)
+    self.mpc.source = (
+      log.LongitudinalPlan.LongitudinalPlanSource.lead2
+      if self.mpc.target is not None
+      else log.LongitudinalPlan.LongitudinalPlanSource.cruise
+    )
 
   def publish(self, sm, pm):
     del sm, pm
 
 
-def ns(**kwargs):
-  return SimpleNamespace(**kwargs)
-
-
 def fake_sm():
-  traffic = ns(
-    available=True, validForControl=True, sourceBus=2, dlc=6, featureState=3,
-    stateMachine=4, controlSource=3, controlType=3, distance=80.0, lightState=1,
-    continuationReason=0, confirmationType=0, warningSuppressionReason=0,
-    unavailableReason=0, visionLight=True, visionSign=False, visionRoadMarking=False,
-    visionLine=False, frameMonoTime=1, quality=2,
-  )
   messages = {
-    "carStateSP": ns(teslaTrafficControl=traffic),
-    "carState": ns(vEgo=15.0, aEgo=0.0, gasPressed=False, brakePressed=False),
+    "carState": ns(vEgo=0.0, aEgo=0.0, vCruise=50.0, gasPressed=False, brakePressed=False),
     "carControl": ns(enabled=True, longActive=True, leftBlinker=False, rightBlinker=False),
     "radarState": ns(leadOne=ns(present=False, dRel=0.0), leadTwo=ns(present=False, dRel=0.0)),
-    "modelV2": ns(position=ns(x=[200.0] * 33), velocity=ns(x=[15.0] * 33)),
-    "trafficObstacleState": ns(
-      present=False, dRel=0.0, vRel=0.0, aRel=0.0, desiredStopDistance=0.0,
-      phase=0, lightState=0, sourceBus=0, quality=0, confidence=0.0,
-      eventId=0, frameMonoTime=0, validForControl=False, suppressedByLead=False,
-      shouldStop=False, startRequested=False, mode=0,
+    "trafficRadarState": ns(
+      targetPresent=False,
+      oemTargetDistance=0.0,
+      targetRelativeVelocity=0.0,
+      targetRelativeAcceleration=0.0,
+      distanceToStopPoint=0.0,
+      phase=0,
+      lightState=0,
+      sourceBus=0,
+      quality=0,
+      confidence=0.0,
+      eventId=0,
+      publishMonoTime=0,
+      controlAllowed=False,
+      suppressedByPhysicalLead=False,
+      shouldStop=False,
+      plannerStartRequested=False,
+      mode=0,
     ),
   }
 
   class FakeSubMaster:
-    seen = {"carStateSP": True, "radarState": True, "modelV2": True, "trafficObstacleState": True}
-    alive = {"carStateSP": True, "radarState": True, "modelV2": True, "trafficObstacleState": True}
-    valid = {"carStateSP": True, "radarState": True, "modelV2": True, "trafficObstacleState": True}
+    seen = {"radarState": True, "trafficRadarState": True}
+    alive = {"radarState": True, "trafficRadarState": True}
+    valid = {"radarState": True, "trafficRadarState": True}
 
     def __getitem__(self, key):
       return messages[key]
@@ -86,521 +101,234 @@ def fake_sm():
   return FakeSubMaster()
 
 
-def test_obstacle_strategy_reaches_mpc_only_through_the_independent_channel():
-  class RecordingMpc:
-    runtime_tuning = ns(stop_distance=6.0)
+def set_red_target(sm, now_ns: int, *, distance=30.0, phase=TrafficControlPhase.braking, event_id=7):
+  target = sm["trafficRadarState"]
+  target.targetPresent = True
+  target.oemTargetDistance = distance + 6.0
+  target.distanceToStopPoint = distance
+  target.phase = int(phase)
+  target.lightState = 1
+  target.eventId = event_id
+  target.publishMonoTime = now_ns
+  target.controlAllowed = True
+  target.shouldStop = phase == TrafficControlPhase.hold
+  target.mode = int(TrafficControlMode.stopGo)
+  return target
 
-    def update(self, radar_state):
-      self.received = radar_state
 
-  class MpcPlanner(FakePlanner):
-    def __init__(self):
-      super().__init__()
-      self.mpc = RecordingMpc()
-
-    def update(self, sm):
-      self.mpc.update(sm["radarState"])
-
-  planner = MpcPlanner()
+def test_traffic_radar_reaches_mpc_without_replacing_physical_leads(monkeypatch):
+  now_ns = 1_000_000_000
+  monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: now_ns)
+  planner = FakePlanner()
   adapter = TrafficControlPlannerAdapter(
     planner, ns(longitudinalActuatorDelay=0.2),
     FakeParams(mode=TrafficControlMode.stopGo, strategy=1),
   )
   sm = fake_sm()
-  obstacle = sm["trafficObstacleState"]
-  obstacle.present = True
-  obstacle.validForControl = True
-  obstacle.desiredStopDistance = 30.0
-  obstacle.phase = int(TrafficControlPhase.braking)
-  obstacle.lightState = 1
-  obstacle.mode = int(TrafficControlMode.stopGo)
-  obstacle.frameMonoTime = time.monotonic_ns()
+  lead_one = sm["radarState"].leadOne
+  lead_two = sm["radarState"].leadTwo
+  set_red_target(sm, now_ns)
 
   adapter.update(sm)
 
-  assert planner.mpc.received.leadTwo.present
-  assert planner.mpc.received.leadTwo.dRel == pytest.approx(36.0, abs=0.01)
-  assert not sm["radarState"].leadOne.present
-  assert not sm["radarState"].leadTwo.present
+  assert planner.received_targets[0].distance_to_stop_point == 30.0
+  assert planner.mpc.target is None
+  assert sm["radarState"].leadOne is lead_one and sm["radarState"].leadTwo is lead_two
+  assert not lead_one.present and not lead_two.present
 
 
-def test_obstacle_channel_tolerates_the_controller_dropout_window():
-  class RecordingMpc:
-    runtime_tuning = ns(stop_distance=6.0)
-
-    def update(self, radar_state):
-      self.received = radar_state
-
-  class MpcPlanner(FakePlanner):
-    def __init__(self):
-      super().__init__()
-      self.mpc = RecordingMpc()
-
-    def update(self, sm):
-      self.mpc.update(sm["radarState"])
-
-  planner = MpcPlanner()
+def test_real_lead_suppresses_traffic_again_at_the_planner_boundary(monkeypatch):
+  now_ns = 1_000_000_000
+  monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: now_ns)
+  planner = FakePlanner()
   adapter = TrafficControlPlannerAdapter(
     planner, ns(longitudinalActuatorDelay=0.2),
     FakeParams(mode=TrafficControlMode.stopGo, strategy=1),
   )
   sm = fake_sm()
-  obstacle = sm["trafficObstacleState"]
-  obstacle.present = True
-  obstacle.validForControl = True
-  obstacle.desiredStopDistance = 30.0
-  obstacle.phase = int(TrafficControlPhase.braking)
-  obstacle.lightState = 1
-  obstacle.mode = int(TrafficControlMode.stopGo)
-  obstacle.frameMonoTime = time.monotonic_ns() - 500_000_000
+  set_red_target(sm, now_ns)
+  sm["radarState"].leadOne.present = True
+  sm["radarState"].leadOne.dRel = 18.0
 
   adapter.update(sm)
 
-  assert planner.mpc.received.leadTwo.present
-  assert 28.0 <= planner.mpc.received.leadTwo.dRel <= 29.0
+  assert planner.received_targets == [None]
+  assert sm["radarState"].leadOne.present and sm["radarState"].leadOne.dRel == 18.0
 
 
-def test_confirmed_hold_survives_loss_of_the_optional_obstacle_daemon(monkeypatch):
-  class RecordingMpc:
-    runtime_tuning = ns(stop_distance=6.0)
+@pytest.mark.parametrize("age_ns", [250_000_001, -1])
+def test_stale_or_future_traffic_radar_is_rejected(monkeypatch, age_ns):
+  now_ns = 1_000_000_000
+  monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: now_ns)
+  planner = FakePlanner()
+  adapter = TrafficControlPlannerAdapter(
+    planner, ns(longitudinalActuatorDelay=0.2),
+    FakeParams(mode=TrafficControlMode.stopGo, strategy=1),
+  )
+  sm = fake_sm()
+  set_red_target(sm, now_ns - age_ns)
 
-    def update(self, radar_state):
-      self.received = radar_state
+  adapter.update(sm)
 
-  class MpcPlanner(FakePlanner):
-    def __init__(self):
-      super().__init__()
-      self.mpc = RecordingMpc()
+  assert planner.received_targets == [None]
 
-    def update(self, sm):
-      self.mpc.update(sm["radarState"])
-      self.output_should_stop = False
-      self.allow_throttle = True
 
+def test_confirmed_hold_survives_a_short_publisher_loss(monkeypatch):
   times = iter((1_000_000_000, 2_000_000_000))
   monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: next(times))
-  planner = MpcPlanner()
+  planner = FakePlanner()
   adapter = TrafficControlPlannerAdapter(
     planner, ns(longitudinalActuatorDelay=0.2),
     FakeParams(mode=TrafficControlMode.stopGo, strategy=1),
   )
   sm = fake_sm()
-  sm["carState"].vEgo = 0.0
-  obstacle = sm["trafficObstacleState"]
-  obstacle.present = True
-  obstacle.validForControl = True
-  obstacle.desiredStopDistance = 0.0
-  obstacle.dRel = 6.0
-  obstacle.phase = int(TrafficControlPhase.hold)
-  obstacle.lightState = 1
-  obstacle.mode = int(TrafficControlMode.stopGo)
-  obstacle.shouldStop = True
-  obstacle.eventId = 7
-  obstacle.frameMonoTime = 1_000_000_000
+  set_red_target(sm, 1_000_000_000, distance=0.0, phase=TrafficControlPhase.hold)
 
   adapter.update(sm)
-  assert planner.output_should_stop
+  sm.alive["trafficRadarState"] = False
   adapter.update(sm)
 
-  assert planner.mpc.received.leadTwo.present
+  assert planner.received_targets[0] is not None and planner.received_targets[1] is not None
   assert planner.output_should_stop
   assert not planner.allow_throttle
 
 
-def test_passive_obstacle_go_does_not_override_a_stopped_planner():
+def test_passive_release_only_removes_the_target(monkeypatch):
+  now_ns = 1_000_000_000
+  monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: now_ns)
   planner = FakePlanner()
-  planner.output_a_target = -0.2
   planner.output_should_stop = True
-  planner.a_cruise = 0.25
   adapter = TrafficControlPlannerAdapter(
     planner, ns(longitudinalActuatorDelay=0.2),
-    FakeParams(mode=TrafficControlMode.stopGo, strategy=1, go_policy=0),
+    FakeParams(mode=TrafficControlMode.stopGo, strategy=1),
   )
   sm = fake_sm()
-  sm["carState"].vEgo = 0.0
-  obstacle = sm["trafficObstacleState"]
-  obstacle.phase = int(TrafficControlPhase.release)
-  obstacle.lightState = 2
-  obstacle.mode = int(TrafficControlMode.stopGo)
-  obstacle.validForControl = True
-  obstacle.startRequested = False
-  obstacle.frameMonoTime = time.monotonic_ns()
+  target = set_red_target(sm, now_ns, phase=TrafficControlPhase.release)
+  target.targetPresent = False
+  target.controlAllowed = True
 
   adapter.update(sm)
 
+  assert planner.received_targets == [None]
   assert planner.output_a_target == -0.2
   assert planner.output_should_stop
 
 
-def test_active_obstacle_go_only_requests_a_bounded_planner_departure():
+def test_planner_start_is_bounded_deduplicated_and_never_mutates_car_control(monkeypatch):
+  now_ns = 1_000_000_000
+  monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: now_ns)
   planner = FakePlanner()
-  planner.output_a_target = -0.2
   planner.output_should_stop = True
-  planner.a_cruise = 0.25
   adapter = TrafficControlPlannerAdapter(
     planner, ns(longitudinalActuatorDelay=0.2),
-    FakeParams(mode=TrafficControlMode.stopGo, strategy=1, go_policy=1),
+    FakeParams(mode=TrafficControlMode.stopGo, strategy=1),
   )
   sm = fake_sm()
-  sm["carState"].vEgo = 0.0
   original_car_control = deepcopy(sm["carControl"])
-  obstacle = sm["trafficObstacleState"]
-  obstacle.phase = int(TrafficControlPhase.release)
-  obstacle.lightState = 2
-  obstacle.mode = int(TrafficControlMode.stopGo)
-  obstacle.validForControl = True
-  obstacle.startRequested = True
-  obstacle.frameMonoTime = time.monotonic_ns()
+  target = set_red_target(sm, now_ns, phase=TrafficControlPhase.release, event_id=9)
+  target.targetPresent = False
+  target.controlAllowed = True
+  target.lightState = 2
+  target.plannerStartRequested = True
 
   adapter.update(sm)
+  first_accel = planner.output_a_target
+  adapter.publish(sm, None)
+  adapter.update(sm)
 
-  assert planner.output_a_target == 0.25
-  assert not planner.output_should_stop
-  assert planner.allow_throttle
+  assert 0.0 < first_accel <= 0.4
+  assert planner.output_a_target == -0.2
   assert sm["carControl"] == original_car_control
 
 
-def test_stale_observation_is_rejected_at_planner_boundary():
-  msg = fake_sm()["carStateSP"].teslaTrafficControl
-  msg.frameMonoTime = 1_000_000_000
-  assert not TrafficControlPlannerAdapter._observation(msg, 1_000_000_000 + 250_000_001).available
+@pytest.mark.parametrize(
+  "mode", (TrafficControlMode.off, TrafficControlMode.observe, TrafficControlMode.shadow),
+)
+def test_off_and_monitoring_modes_match_the_unwrapped_planner_output(monkeypatch, mode):
+  class DeterministicPlanner(FakePlanner):
+    def update(self, sm):
+      super().update(sm)
+      self.v_desired_trajectory = np.linspace(12.0, 9.0, 17)
+      self.a_desired_trajectory = np.linspace(0.3, -0.4, 17)
+      self.j_desired_trajectory = np.linspace(-0.1, 0.1, 17)
+      self.output_a_target = 0.15
+      self.output_should_stop = True
+      self.allow_throttle = False
+      self.a_desired = 0.12
+      self.v_desired_filter.x = 10.25
 
-
-def test_future_observation_is_rejected_at_planner_boundary():
-  msg = fake_sm()["carStateSP"].teslaTrafficControl
-  msg.frameMonoTime = 1_000_000_001
-  assert not TrafficControlPlannerAdapter._observation(msg, 1_000_000_000).available
-
-
-def test_mode_off_is_output_identical_to_unwrapped_backend():
-  planner = FakePlanner()
-  before = deepcopy((planner.v_desired_trajectory, planner.a_desired_trajectory,
-                     planner.j_desired_trajectory, planner.output_a_target,
-                     planner.output_should_stop, planner.allow_throttle))
-  adapter = TrafficControlPlannerAdapter(
-    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=0),
-  )
-  adapter.update(fake_sm())
-  after = (planner.v_desired_trajectory, planner.a_desired_trajectory,
-           planner.j_desired_trajectory, planner.output_a_target,
-           planner.output_should_stop, planner.allow_throttle)
-
-  assert planner.update_calls == 1
-  for expected, actual in zip(before[:3], after[:3], strict=True):
-    assert np.array_equal(expected, actual)
-  assert before[3:] == after[3:]
-
-
-@pytest.mark.parametrize("mode", [TrafficControlMode.observe, TrafficControlMode.shadow])
-def test_non_actuating_modes_leave_complete_backend_output_unchanged(mode):
-  planner = FakePlanner()
-  adapter = TrafficControlPlannerAdapter(
-    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=mode),
-  )
-  decision = TrafficControlDecision(
-    mode=mode, phase=TrafficControlPhase.braking, active=True,
-    apply_constraint=False, shadow=mode == TrafficControlMode.shadow,
-    should_stop=True, remaining_distance=24.0, stop_reference=6.0,
-    light_state=1, source_bus=2, quality=2,
-  )
-  adapter._controller.update = lambda *args, **kwargs: decision
-  before = deepcopy((planner.v_desired_trajectory, planner.a_desired_trajectory,
-                     planner.j_desired_trajectory, planner.output_a_target,
-                     planner.output_should_stop, planner.allow_throttle,
-                     planner.a_desired, planner.v_desired_filter.x))
-
-  adapter.update(fake_sm())
-  adapter.publish(fake_sm(), None)
-
-  after = (planner.v_desired_trajectory, planner.a_desired_trajectory,
-           planner.j_desired_trajectory, planner.output_a_target,
-           planner.output_should_stop, planner.allow_throttle,
-           planner.a_desired, planner.v_desired_filter.x)
-  for expected, actual in zip(before[:3], after[:3], strict=True):
-    assert np.array_equal(expected, actual)
-  assert before[3:] == after[3:]
-
-
-def test_more_restrictive_backend_command_is_never_replaced():
-  planner = FakePlanner()
-  planner.v_desired_trajectory = np.zeros(17)
-  planner.a_desired_trajectory = np.full(17, -2.0)
-  planner.output_a_target = -2.0
-  before = deepcopy((planner.v_desired_trajectory, planner.a_desired_trajectory,
-                     planner.j_desired_trajectory, planner.output_a_target))
-  adapter = TrafficControlPlannerAdapter(
-    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=3),
-  )
-  decision = TrafficControlDecision(
-    mode=TrafficControlMode.stopGo, phase=TrafficControlPhase.braking, active=True,
-    apply_constraint=True, shadow=False, should_stop=True, remaining_distance=70.0,
-    stop_reference=6.0, light_state=1, source_bus=2, quality=2,
-  )
-  applied, _ = adapter._apply_constraint(decision, fake_sm())
-
-  assert not applied
-  assert np.array_equal(before[0], planner.v_desired_trajectory)
-  assert np.array_equal(before[1], planner.a_desired_trajectory)
-  assert np.array_equal(before[2], planner.j_desired_trajectory)
-  assert planner.output_a_target == before[3]
-
-
-def test_mode_is_latched_once_at_planner_initialization():
-  params = FakeParams(mode=TrafficControlMode.shadow)
-  adapter = TrafficControlPlannerAdapter(
-    FakePlanner(), ns(longitudinalActuatorDelay=0.2), params,
-  )
-  assert adapter._controller.config.mode == TrafficControlMode.shadow
-
-  params.mode = TrafficControlMode.stopGo
-  adapter.update(fake_sm())
-  assert adapter._controller.config.mode == TrafficControlMode.shadow
-
-
-@pytest.mark.parametrize("mode", list(TrafficControlMode))
-def test_all_monitoring_stages_share_one_decision_adapter(mode):
-  params = FakeParams(mode=mode)
-  base = FakePlanner()
-  planner = decorate_planner(base, ns(brand="tesla", longitudinalActuatorDelay=0.2), params)
-
-  if mode == TrafficControlMode.off:
-    assert planner is base
-  else:
-    assert isinstance(planner, TrafficControlPlannerAdapter)
-    assert planner._planner is base
-
-
-def test_non_tesla_never_installs_traffic_control_adapter():
-  base = FakePlanner()
+  now_ns = 1_000_000_000
+  monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: now_ns)
+  expected = DeterministicPlanner()
+  expected.update(fake_sm())
+  expected.publish(fake_sm(), None)
   planner = decorate_planner(
-    base, ns(brand="toyota", longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
+    DeterministicPlanner(), ns(brand="tesla", longitudinalActuatorDelay=0.2),
+    FakeParams(mode=mode, strategy=1),
   )
-  assert planner is base
+  sm = fake_sm()
+  target = set_red_target(sm, now_ns)
+  target.mode = int(mode)
+  target.controlAllowed = False
+
+  planner.update(sm)
+  planner.publish(sm, None)
+  expected_output = (
+    expected.v_desired_trajectory, expected.a_desired_trajectory, expected.j_desired_trajectory,
+    expected.output_a_target, expected.output_should_stop, expected.allow_throttle,
+    expected.a_desired, expected.v_desired_filter.x,
+  )
+  actual_output = (
+    planner.v_desired_trajectory, planner.a_desired_trajectory, planner.j_desired_trajectory,
+    planner.output_a_target, planner.output_should_stop, planner.allow_throttle,
+    planner.a_desired, planner.v_desired_filter.x,
+  )
+
+  for expected_value, actual_value in zip(expected_output[:3], actual_output[:3], strict=True):
+    assert np.array_equal(expected_value, actual_value)
+  assert expected_output[3:] == actual_output[3:]
 
 
-def test_stop_constraint_never_raises_any_backend_trajectory_value():
+def test_stop_profile_never_raises_a_backend_trajectory():
   planner = FakePlanner()
   base_speeds = planner.v_desired_trajectory.copy()
   base_accels = planner.a_desired_trajectory.copy()
-  base_output_accel = planner.output_a_target
+  base_output = planner.output_a_target
   adapter = TrafficControlPlannerAdapter(
-    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
+    planner, ns(longitudinalActuatorDelay=0.2),
+    FakeParams(mode=TrafficControlMode.stopGo, strategy=0),
   )
-  decision = TrafficControlDecision(
-    mode=TrafficControlMode.stopGo, phase=TrafficControlPhase.braking, active=True,
-    apply_constraint=True, shadow=False, should_stop=False, remaining_distance=8.0,
-    stop_reference=6.0, light_state=1, source_bus=2, quality=2,
+  sm = fake_sm()
+  decision = planner_adapter_module.TrafficControlDecision(
+    mode=TrafficControlMode.stopGo,
+    phase=TrafficControlPhase.braking,
+    active=True,
+    apply_constraint=True,
+    shadow=False,
+    should_stop=False,
+    remaining_distance=8.0,
+    stop_reference=6.0,
+    light_state=1,
+    source_bus=2,
+    quality=2,
   )
 
-  applied, constraint_accel = adapter._apply_constraint(decision, fake_sm())
+  applied, _ = adapter._apply_stop_profile(decision, sm)
 
   assert applied
-  assert np.all(planner.v_desired_trajectory <= base_speeds + 1e-9)
-  assert np.all(planner.a_desired_trajectory <= base_accels + 1e-9)
-  assert planner.output_a_target <= base_output_accel
-  assert constraint_accel == planner.output_a_target
-  assert not planner.output_should_stop
-  assert planner.allow_throttle
+  assert np.all(planner.v_desired_trajectory <= base_speeds)
+  assert np.all(planner.a_desired_trajectory <= base_accels)
+  assert planner.output_a_target <= base_output
 
 
-def test_green_release_only_removes_constraint_and_never_builds_acceleration():
-  planner = FakePlanner()
-  before = deepcopy((planner.v_desired_trajectory, planner.a_desired_trajectory,
-                     planner.j_desired_trajectory, planner.output_a_target,
-                     planner.output_should_stop, planner.allow_throttle))
-  adapter = TrafficControlPlannerAdapter(
-    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
-  )
-  decision = TrafficControlDecision(
-    mode=TrafficControlMode.stopGo, phase=TrafficControlPhase.release, active=True,
-    apply_constraint=True, shadow=False, should_stop=False, remaining_distance=0.0,
-    stop_reference=6.0, light_state=2, source_bus=2, quality=2,
-  )
+@pytest.mark.parametrize("mode", list(TrafficControlMode))
+def test_adapter_is_installed_for_tesla_only_when_traffic_is_not_off(mode):
+  params = FakeParams(mode=mode)
+  base = FakePlanner()
+  planner = decorate_planner(base, ns(brand="tesla", longitudinalActuatorDelay=0.2), params)
+  assert (planner is base) if mode == TrafficControlMode.off else isinstance(planner, TrafficControlPlannerAdapter)
 
-  applied, constraint_accel = adapter._apply_constraint(decision, fake_sm())
-
-  assert not applied
-  assert constraint_accel == 0.0
-  after = (planner.v_desired_trajectory, planner.a_desired_trajectory,
-           planner.j_desired_trajectory, planner.output_a_target,
-           planner.output_should_stop, planner.allow_throttle)
-  for expected, actual in zip(before[:3], after[:3], strict=True):
-    assert np.array_equal(expected, actual)
-  assert before[3:] == after[3:]
-
-
-def test_stopped_explicit_green_uses_bounded_cp_cruise_departure():
-  planner = FakePlanner()
-  planner.v_desired_trajectory = np.linspace(0.0, 4.0, 17)
-  planner.a_desired_trajectory = np.full(17, 0.4)
-  planner.output_a_target = -0.2
-  planner.output_should_stop = True
-  planner.a_desired = -0.2
-  planner.a_cruise = 0.25
-  adapter = TrafficControlPlannerAdapter(
-    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
-  )
-  sm = fake_sm()
-  sm["carState"].vEgo = 0.0
-  before = deepcopy((planner.v_desired_trajectory, planner.a_desired_trajectory,
-                     planner.j_desired_trajectory, planner.output_a_target,
-                     planner.output_should_stop, planner.allow_throttle,
-                     planner.a_desired, planner.v_desired_filter.x))
-  decision = TrafficControlDecision(
-    mode=TrafficControlMode.stopGo, phase=TrafficControlPhase.release, active=True,
-    apply_constraint=True, shadow=False, should_stop=False, remaining_distance=0.0,
-    stop_reference=6.0, light_state=2, source_bus=2, quality=2,
-  )
-
-  applied, constraint_accel = adapter._apply_constraint(decision, sm)
-
-  assert applied
-  assert constraint_accel == 0.25
-  after = (planner.v_desired_trajectory, planner.a_desired_trajectory,
-           planner.j_desired_trajectory, planner.output_a_target,
-           planner.output_should_stop, planner.allow_throttle,
-           planner.a_desired, planner.v_desired_filter.x)
-  for expected, actual in zip(before[:3], after[:3], strict=True):
-    assert np.array_equal(expected, actual)
-  assert planner.output_a_target == 0.25
-  assert not planner.output_should_stop
-  assert planner.allow_throttle
-  # Do not feed the local release into the backend's persistent state.
-  assert planner.a_desired == before[6]
-  assert planner.v_desired_filter.x == before[7]
-
-
-def test_stopped_green_release_does_not_override_lead_or_base_stop():
-  decision = TrafficControlDecision(
-    mode=TrafficControlMode.stopGo, phase=TrafficControlPhase.release, active=True,
-    apply_constraint=True, shadow=False, should_stop=False, remaining_distance=0.0,
-    stop_reference=6.0, light_state=2, source_bus=2, quality=2,
-  )
-
-  for lead_present, departure_accel in ((True, 0.4), (False, 0.0)):
-    planner = FakePlanner()
-    planner.v_desired_trajectory = np.linspace(0.0, departure_accel * 4.0, 17)
-    planner.a_desired_trajectory = np.full(17, departure_accel)
-    planner.output_should_stop = True
-    adapter = TrafficControlPlannerAdapter(
-      planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
-    )
-    sm = fake_sm()
-    sm["carState"].vEgo = 0.0
-    sm["radarState"].leadTwo.present = lead_present
-    before = (planner.output_a_target, planner.output_should_stop, planner.a_desired)
-
-    applied, _ = adapter._apply_constraint(decision, sm)
-
-    assert not applied
-    assert (planner.output_a_target, planner.output_should_stop, planner.a_desired) == before
-
-
-def test_stop_constraint_never_mutates_backend_persistent_state():
-  planner = FakePlanner()
-  planner.a_desired = 0.35
-  planner.v_desired_filter.x = 12.5
-  adapter = TrafficControlPlannerAdapter(
-    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
-  )
-  decision = TrafficControlDecision(
-    mode=TrafficControlMode.stopGo, phase=TrafficControlPhase.braking, active=True,
-    apply_constraint=True, shadow=False, should_stop=False, remaining_distance=8.0,
-    stop_reference=6.0, light_state=1, source_bus=2, quality=2,
-  )
-
-  applied, _ = adapter._apply_constraint(decision, fake_sm())
-
-  assert applied
-  assert planner.a_desired == 0.35
-  assert planner.v_desired_filter.x == 12.5
-
-
-@pytest.mark.parametrize("publish_between", [False, True])
-def test_constrained_output_is_restored_before_next_backend_cycle(publish_between):
-  class FeedbackPlanner(FakePlanner):
-    def __init__(self):
-      super().__init__()
-      self.entry_accels = []
-
-    def update(self, sm):
-      del sm
-      self.entry_accels.append(self.output_a_target)
-      self.v_desired_trajectory = np.linspace(10.0, 8.0, 17)
-      self.a_desired_trajectory = np.linspace(0.3, 0.1, 17)
-      self.j_desired_trajectory = np.zeros(17)
-      self.output_a_target = 0.25
-      self.output_should_stop = False
-      self.allow_throttle = True
-
-  decision = TrafficControlDecision(
-    mode=TrafficControlMode.stopGo, phase=TrafficControlPhase.braking, active=True,
-    apply_constraint=True, shadow=False, should_stop=False, remaining_distance=8.0,
-    stop_reference=6.0, light_state=1, source_bus=2, quality=2,
-  )
-  planner = FeedbackPlanner()
-  adapter = TrafficControlPlannerAdapter(
-    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
-  )
-  adapter._controller.update = lambda *args, **kwargs: decision
-  sm = fake_sm()
-
-  adapter.update(sm)
-  assert planner.output_a_target < 0.25
-  if publish_between:
-    adapter.publish(sm, None)
-    assert planner.output_a_target == 0.25
-
-  adapter.update(sm)
-  assert planner.entry_accels == [-0.2, 0.25]
-
-
-def test_dead_radar_and_invalid_model_fail_closed_before_controller():
-  adapter = TrafficControlPlannerAdapter(
-    FakePlanner(), ns(longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
-  )
-  sm = fake_sm()
-  sm.alive["radarState"] = False
-  sm.valid["modelV2"] = False
-  captured = {}
-  decision = TrafficControlDecision(
-    mode=TrafficControlMode.stopGo, phase=TrafficControlPhase.off, active=False,
-    apply_constraint=False, shadow=False, should_stop=False, remaining_distance=0.0,
-    stop_reference=6.0, light_state=1, source_bus=2, quality=2,
-  )
-
-  def capture_update(*args, **kwargs):
-    captured.update(kwargs)
-    return decision
-
-  adapter._controller.update = capture_update
-  adapter.update(sm)
-
-  assert captured["radar_valid"] is False
-  assert captured["lead_present"] is False
-  assert captured["model_stop_distance"] is None
-  assert captured["model_stop_candidate"] is False
-
-
-def test_transition_logging_records_candidate_replacement_without_per_frame_spam(monkeypatch):
-  events = []
-  update_times = (0, int(0.4e9), int(0.6e9), int(1.0e9), int(1.7e9))
-  times = iter(update_times)
-  monkeypatch.setattr(planner_adapter_module.time, "monotonic_ns", lambda: next(times))
-  monkeypatch.setattr(
-    planner_adapter_module.cloudlog, "event",
-    lambda name, **kwargs: events.append((name, kwargs)),
-  )
-  adapter = TrafficControlPlannerAdapter(
-    FakePlanner(), ns(longitudinalActuatorDelay=0.2), FakeParams(mode=TrafficControlMode.stopGo),
-  )
-  sm = fake_sm()
-
-  for now_ns, distance in zip(update_times, (150.0, 144.0, 30.0, 24.0, 13.5), strict=True):
-    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
-    sm["carStateSP"].teslaTrafficControl.distance = distance
-    adapter.update(sm)
-
-  assert [event[1]["transition"] for event in events] == ["candidate_started", "candidate_replaced"]
-  assert events[-1][1]["observationDistance"] == 13.5
-  assert events[-1][1]["distanceInnovation"] < -100.0
+  non_tesla = FakePlanner()
+  assert decorate_planner(
+    non_tesla, ns(brand="toyota", longitudinalActuatorDelay=0.2), params,
+  ) is non_tesla

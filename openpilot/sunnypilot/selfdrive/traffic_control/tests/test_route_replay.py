@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlConfig, TrafficControlMode
-from openpilot.sunnypilot.selfdrive.traffic_control.obstacle_state import TrafficObstacleGoPolicy, TrafficObstacleSource
+from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import TrafficRadarGoPolicy, TrafficRadarSource
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tesla_traffic_routes.json"
@@ -74,11 +74,11 @@ class ReplaySubMaster:
 )
 def test_recorded_traffic_candidates_replay_deterministically(route_name, expected_present, minimum_suppressed):
   routes = {route['route']: route for route in json.loads(FIXTURE.read_text())['routes']}
-  source = TrafficObstacleSource(
+  source = TrafficRadarSource(
     TrafficControlConfig(
       mode=TrafficControlMode.stopGo, adaptive_reference=True, retain_event_with_lead=True,
     ),
-    go_policy=TrafficObstacleGoPolicy.active,
+    go_policy=TrafficRadarGoPolicy.active,
   )
   sm = ReplaySubMaster()
   present_distances = []
@@ -86,11 +86,11 @@ def test_recorded_traffic_candidates_replay_deterministically(route_name, expect
   start_requests = 0
 
   for frame in routes[route_name]['frames']:
-    obstacle = source.update(sm, sm.load(frame)).trafficObstacleState
-    suppressed_frames += int(obstacle.suppressedByLead)
-    start_requests += int(obstacle.startRequested)
-    if obstacle.present:
-      present_distances.append(float(obstacle.desiredStopDistance))
+    target = source.update(sm, sm.load(frame)).trafficRadarState
+    suppressed_frames += int(target.suppressedByPhysicalLead)
+    start_requests += int(target.plannerStartRequested)
+    if target.targetPresent and target.controlAllowed:
+      present_distances.append(float(target.distanceToStopPoint))
 
   positive_jumps = [
     current - previous
