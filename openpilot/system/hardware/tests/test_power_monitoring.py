@@ -196,6 +196,23 @@ class TestPowerMonitoring(OpenpilotTestCase):
                                        started_seen), \
                     f"Should shutdown after {DELAY_SHUTDOWN_TIME_S} seconds offroad time"
 
+  def test_explicit_one_minute_limit_is_not_delayed_to_five_minutes(self):
+    self.params.put("MaxTimeOffroad", 1, block=True)
+    pm = PowerMonitoring()
+    pm.car_battery_capacity_uWh = CAR_BATTERY_CAPACITY_uWh
+    offroad_timestamp = ssb
+
+    # mock_time_monotonic advances one second on each call.
+    set_mock_time(offroad_timestamp + 58)
+    assert not pm.should_shutdown(False, True, offroad_timestamp, True)
+    set_mock_time(offroad_timestamp + 59)
+    assert pm.should_shutdown(False, True, offroad_timestamp, True)
+
+    # A manager restart must not turn a selected one-minute deadline into the
+    # generic one-hour minimum-on-time fallback.
+    set_mock_time(offroad_timestamp + 59)
+    assert pm.should_shutdown(False, True, offroad_timestamp, False)
+
   @parameterized.expand(
     [
       # No max time set – fallback to default (30 hours)

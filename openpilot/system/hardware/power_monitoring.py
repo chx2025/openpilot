@@ -117,17 +117,18 @@ class PowerMonitoring:
       return False
 
     now = time.monotonic()
-    should_shutdown = False
     offroad_time = (now - offroad_timestamp)
+    max_time_offroad_shutdown = self.max_time_offroad_exceeded(offroad_time)
     low_voltage_shutdown = (self.car_voltage_mV < (VBATT_PAUSE_CHARGING * 1e3) and
                             offroad_time > VOLTAGE_SHUTDOWN_MIN_OFFROAD_TIME_S)
-    should_shutdown |= self.max_time_offroad_exceeded(offroad_time)
-    should_shutdown |= low_voltage_shutdown
-    should_shutdown |= (self.car_battery_capacity_uWh <= 0)
+    should_shutdown = max_time_offroad_shutdown or low_voltage_shutdown or (self.car_battery_capacity_uWh <= 0)
     should_shutdown &= not ignition
     should_shutdown &= (not self.params.get_bool("DisablePowerDown"))
     should_shutdown &= in_car
-    should_shutdown &= offroad_time > DELAY_SHUTDOWN_TIME_S
+    # A user-selected deadline is authoritative. The five-minute guard only
+    # protects automatic battery/voltage shutdowns; otherwise the exposed
+    # one-minute option could never take effect.
+    should_shutdown &= max_time_offroad_shutdown or offroad_time > DELAY_SHUTDOWN_TIME_S
     should_shutdown |= self.params.get_bool("ForcePowerDown")
-    should_shutdown &= started_seen or (now > MIN_ON_TIME_S)
+    should_shutdown &= max_time_offroad_shutdown or started_seen or (now > MIN_ON_TIME_S)
     return should_shutdown
