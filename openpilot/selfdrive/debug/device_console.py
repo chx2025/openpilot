@@ -16,7 +16,6 @@ from openpilot.selfdrive.debug.device_settings import settings_snapshot, validat
 from openpilot.selfdrive.debug.device_hotspot import hotspot_status, set_hotspot_enabled
 from openpilot.selfdrive.debug.device_console_auth import client_is_local, require_offroad
 from openpilot.selfdrive.debug.device_terminal import run_command, terminal_status
-from openpilot.selfdrive.debug.driving_status import driving_status_snapshot
 from openpilot.selfdrive.debug.tesla_speed_button_test import SpeedButtonAction, run_validation
 
 
@@ -69,9 +68,8 @@ def render_page() -> bytes:
   </style>
 </head><body><main>
   <h1>车载设置</h1><p>测试版本：连接设备局域网后可直接访问，无账号、口令或令牌。</p>
-  <div class="tabs"><button class="tab active" id="settings-tab" onclick="showPanel('settings')">设置</button><button class="tab" id="driving-tab" onclick="showPanel('driving')">行驶信息</button><button class="tab" id="turn-tab" onclick="showPanel('turn')">转向测试</button><button class="tab" id="terminal-tab" onclick="showPanel('terminal')">终端</button></div>
+  <div class="tabs"><button class="tab active" id="settings-tab" onclick="showPanel('settings')">设置</button><button class="tab" id="turn-tab" onclick="showPanel('turn')">转向测试</button><button class="tab" id="terminal-tab" onclick="showPanel('terminal')">终端</button></div>
   <section id="settings-panel"><div id="mode" class="notice">正在读取设置…</div><div id="category-nav" class="category-nav"></div><div id="settings"></div></section>
-  <section id="driving-panel" hidden><h1>行驶道路视图</h1><p>只读实时视图；融合 SP 模型与 HW4 Model Y 原车 CAN，不启动视频或屏幕采集。</p><div id="driving-state" class="notice">正在连接车辆数据…</div><div class="ped-coordinate-lab"><strong>行人坐标</strong><select id="pedestrian-coordinate-mode" onchange="setPedestrianCoordinateMode(this.value)"><option value="off">关闭（默认）</option><option value="dx_forward_dy_left">dX 前后 / dY 左右</option><option value="dx_forward_dy_right">dX 前后 / -dY 左右</option><option value="dy_forward_dx_left">dY 前后 / dX 左右</option><option value="dy_forward_dx_right">dY 前后 / -dX 左右</option></select><span>黄色/蓝色/粉色对应行人 #1/#2/#3；坐标单位为米。</span></div><canvas id="driving-canvas" aria-label="预测道路轨迹与原车感知"></canvas><details id="can-diagnostics" class="can-diagnostics"><summary>CAN 诊断详情（可选）</summary><div id="can-details" class="can-grid"></div></details><div id="driving-alert" class="notice drive-alert" hidden></div></section>
   <section id="turn-panel" hidden>
     <h1>Tesla CAN 验证</h1><p>转向请求由 card 实时线程跟随原车 0x3E9 模板持续发送；速度按钮使用新鲜的原车 0x3C2 模板。</p>
     <div class="buttons"><button class="turn" id="left" onclick="run('left')">← 左转</button><button class="turn" id="right" onclick="run('right')">右转 →</button></div>
@@ -84,16 +82,12 @@ def render_page() -> bytes:
     <textarea id="terminal-command" spellcheck="false" placeholder="git status --short"></textarea><pre id="terminal-output"></pre>
   </section>
 <script>
-let settingsState = null, hotspotState = null, selectedCategory = null, currentPanel = 'settings', drivingLoading = false;
+let settingsState = null, hotspotState = null, selectedCategory = null, currentPanel = 'settings';
 function apiFetch(url, options = {}) { return fetch(url, options); }
-let pedestrianCoordinateMode = localStorage.getItem('pedestrianCoordinateMode') || 'off';
-function setPedestrianCoordinateMode(value) { pedestrianCoordinateMode = value; localStorage.setItem('pedestrianCoordinateMode', value); loadDrivingStatus(); }
-document.getElementById('pedestrian-coordinate-mode').value = pedestrianCoordinateMode;
 function showPanel(name) {
   currentPanel = name;
-  document.getElementById('settings-panel').hidden = name !== 'settings'; document.getElementById('driving-panel').hidden = name !== 'driving'; document.getElementById('turn-panel').hidden = name !== 'turn'; document.getElementById('terminal-panel').hidden = name !== 'terminal';
-  document.getElementById('settings-tab').classList.toggle('active', name === 'settings'); document.getElementById('driving-tab').classList.toggle('active', name === 'driving'); document.getElementById('turn-tab').classList.toggle('active', name === 'turn'); document.getElementById('terminal-tab').classList.toggle('active', name === 'terminal');
-  if (name === 'driving') loadDrivingStatus();
+  document.getElementById('settings-panel').hidden = name !== 'settings'; document.getElementById('turn-panel').hidden = name !== 'turn'; document.getElementById('terminal-panel').hidden = name !== 'terminal';
+  document.getElementById('settings-tab').classList.toggle('active', name === 'settings'); document.getElementById('turn-tab').classList.toggle('active', name === 'turn'); document.getElementById('terminal-tab').classList.toggle('active', name === 'terminal');
 }
 function element(tag, attrs = {}, text = '') { const e = document.createElement(tag); Object.assign(e, attrs); if (text) e.textContent = text; return e; }
 function renderSettings(data) {
@@ -259,8 +253,6 @@ function drawDrivingGeometry(geometry, data) {
   const nav=can.navigation||{}; if(nav.available){const panelW=Math.min(172,width*.42);fillRoundedRect(ctx,width-panelW-10,10,panelW,50,'#020617b8',12);ctx.textAlign='right';ctx.fillStyle='#dbeafe';ctx.font='bold 14px sans-serif';const branch=nav.next_branch_distance_m!=null?nav.next_branch_distance_m+'m '+(nav.next_branch_left_off_ramp?'↖ 左出口':nav.next_branch_right_off_ramp?'右出口 ↗':'下一分支'):nav.route_active?'导航路线已激活':'导航可用';ctx.fillText(branch,width-20,31);ctx.font='12px sans-serif';const limit=nav.speed_limit_unlimited?'不限速':nav.speed_limit!=null?'限速 '+nav.speed_limit+' '+nav.speed_limit_unit.toUpperCase():ct(nav.road_class);ctx.fillText(limit,width-20,50);ctx.textAlign='left';}
   if(geometry.lane_change!=='off'){ctx.fillStyle='#fbbf24';ctx.font='bold 15px sans-serif';ctx.fillText('变道 '+(geometry.lane_change_direction==='left'?'←':geometry.lane_change_direction==='right'?'→':'进行中'),width-92,70);} drawCanvasSummary(ctx,can,width); renderOptionalCanDetails(can);
 }
-async function loadDrivingStatus() { if (drivingLoading) return; drivingLoading = true; const state = document.getElementById('driving-state'), alert = document.getElementById('driving-alert'); try { const r = await apiFetch('/api/driving-status', {cache:'no-store'}); const data = await r.json(); if (!r.ok) throw new Error(data.message || 'HTTP ' + r.status); const connected = Object.values(data.connected).every(Boolean); state.textContent = !data.onroad ? '设置模式：等待车辆启动。' : connected ? '行驶中：车辆数据正常。' : '行驶中：部分车辆数据暂未收到。'; state.className = 'notice' + ((!data.onroad || !connected) ? ' onroad' : ''); drawDrivingGeometry(data.geometry, data); alert.hidden = !data.alert; alert.textContent = data.alert || ''; } catch (e) { state.textContent = '行驶数据读取失败：' + e; state.className = 'notice onroad'; } finally { drivingLoading = false; } }
-setInterval(() => { if (currentPanel === 'driving') loadDrivingStatus(); }, 500);
 async function loadTerminalStatus() { const el = document.getElementById('terminal-state'); try { const r = await apiFetch('/api/terminal/status', {cache:'no-store'}); const s = await r.json(); el.textContent = !s.terminal_enabled ? '终端未启用：请在设备上显式启用。' : s.onroad ? '行驶中：请先进入设置模式。' : '终端已启用且无需认证。'; el.className = 'notice' + ((!s.terminal_enabled || s.onroad) ? ' onroad' : ''); } catch (e) { el.textContent = '终端状态读取失败：' + e; } }
 async function runTerminal() { const command = document.getElementById('terminal-command').value, output = document.getElementById('terminal-output'); output.textContent = '正在运行…'; try { const r = await apiFetch('/api/terminal/exec', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command})}); const result = await r.json(); if (!r.ok) throw new Error(result.message || 'HTTP ' + r.status); output.textContent = `[exit ${result.exit_code}${result.timed_out ? ', timeout' : ''}${result.blocked_onroad ? ', onroad blocked' : ''}]\n` + result.output; } catch (e) { output.textContent = '运行失败：' + e; } }
 loadTerminalStatus();
@@ -346,14 +338,6 @@ class TurnSignalHandler(BaseHTTPRequestHandler):
       return
     if self.path == "/api/hotspot":
       self._json(HTTPStatus.OK, hotspot_status())
-      return
-    if self.path == "/api/driving-status":
-      try:
-        self._json(HTTPStatus.OK, driving_status_snapshot())
-      except PermissionError as error:
-        self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": str(error)})
-      except Exception as error:
-        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "message": f"行驶数据暂不可用：{error}"})
       return
     if self.path == "/api/terminal/status":
       self._json(HTTPStatus.OK, terminal_status())

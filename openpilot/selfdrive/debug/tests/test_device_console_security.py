@@ -3,6 +3,7 @@ from unittest.mock import Mock
 import pytest
 
 from openpilot.selfdrive.debug.device_console_auth import authorize, client_is_local
+from openpilot.selfdrive.debug.device_console import render_page
 from openpilot.selfdrive.debug.device_terminal import run_command
 
 
@@ -38,6 +39,14 @@ def test_public_or_invalid_addresses_are_rejected(address):
 def test_console_is_completely_unauthenticated_in_this_test_version():
   authorize(None, FakeParams(enabled=False))
   authorize("wrong", FakeParams())
+
+
+def test_console_page_does_not_expose_driving_information():
+  page = render_page().decode()
+
+  assert "driving-tab" not in page
+  assert "driving-panel" not in page
+  assert "/api/driving-status" not in page
 
 
 def test_terminal_is_offroad_only():
