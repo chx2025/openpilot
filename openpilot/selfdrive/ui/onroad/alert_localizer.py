@@ -96,9 +96,50 @@ _ZH_CHS_EXACT = {
   "Vehicle Sensors Calibrating": "车辆传感器校准中",
   "Vehicle Sensors Invalid": "车辆传感器无效",
   "Vehicle Steering Time Limit": "转向时间限制",
-  "WARNING: This branch is not tested": "请注意路况，安全驾驶",
+  "WARNING: This branch is not tested": "警告：此分支未经测试",
   "Enable your car's LKAS to engage": "启用车辆的LKAS系统以启用",
   "Disable your car's stock LKAS to engage": "禁用原车的LKAS系统以启用",
+  "AEB: Risk of Collision": "AEB：存在碰撞风险",
+  "Always keep hands on wheel and eyes on road": "请始终手握方向盘并注视道路",
+  "BRAKE!": "刹车！",
+  "Bookmark Saved": "书签已保存",
+  "CAN Bus Disconnected": "CAN 总线已断开",
+  "Camera Frame Rate Low": "相机帧率过低",
+  "Camera Frame Rate Low: Reboot Your Device": "相机帧率过低：请重启设备",
+  "Cancel Pressed": "已按下取消键",
+  "Car Not Ready": "车辆未就绪",
+  "Driving Model Lagging": "驾驶模型运行延迟",
+  "Emergency Braking: Risk of Collision": "紧急制动：存在碰撞风险",
+  "Enable Adaptive Cruise to Engage": "启用自适应巡航后再启用辅助驾驶",
+  "Enable Main Switch to Engage": "开启巡航主开关后再启用辅助驾驶",
+  "Harness Relay Malfunction": "线束继电器故障",
+  "Joystick Mode": "摇杆模式",
+  "LKAS Fault: Restart the Car": "LKAS 故障：请重启车辆",
+  "LKAS Fault: Restart the car to engage": "LKAS 故障：请重启车辆后再启用",
+  "Lateral Maneuver Mode": "横向操控模式",
+  "Low Communication Rate Between Processes": "进程间通信频率过低",
+  "Model uncertain at this speed": "模型在此速度下置信度不足",
+  "Pay Attention to Engage": "请集中注意力后再启用",
+  "Radar Error: Restart the Car": "雷达错误：请重启车辆",
+  "Radar Temporarily Unavailable": "雷达暂时不可用",
+  "Reboot your Device": "请重启设备",
+  "Risk of Collision": "存在碰撞风险",
+  "Security Key Not Available": "安全密钥不可用",
+  "Selfdrive Process Lagging: Reboot Your Device": "Selfdrive 进程延迟：请重启设备",
+  "Sensor Data Invalid": "传感器数据无效",
+  "Speed Too High": "车速过高",
+  "Speed too low": "车速过低",
+  "Stock AEB: Risk of Collision": "原车 AEB：存在碰撞风险",
+  "Stock LKAS: Lane Departure Detected": "原车 LKAS：检测到车道偏离",
+  "System Lagging": "系统运行延迟",
+  "TAKE CONTROL IMMEDIATELY": "请立即接管车辆",
+  "Too Distracted": "过度分心",
+  "locationd Permanent Error": "locationd 永久错误",
+  "locationd Temporary Error": "locationd 临时错误",
+  "openpilot Canceled": "openpilot 已取消",
+  "openpilot Unavailable": "openpilot 暂不可用",
+  "openpilot will disengage": "openpilot 即将退出",
+  "paramsd Permanent Error": "paramsd 永久错误",
 }
 
 _ZH_CHS_CONTEXT = {
@@ -125,6 +166,9 @@ _STEER_RATIO_RE = re.compile(r"^Steering rack geometry may be off \(Ratio: (.+)\
 _STIFFNESS_FACTOR_RE = re.compile(r"^Check tires, pressure, or alignment \(Factor: (.+)\)$")
 _PERSONALITY_RE = re.compile(r"^Driving Personality: (.+)$")
 _SPEED_LIMIT_ADJUST_RE = re.compile(r"^Adjusting to (.+) speed limit$")
+_FRAME_DROP_RE = re.compile(r"^(.+)% frames dropped$")
+_JOYSTICK_RE = re.compile(r"^Gas: (.+)%, Steer: (.+)%$")
+_MINUTES_LEFT_RE = re.compile(r"^(\d+) minutes? Left$")
 
 _ZH_CHS_DYNAMIC_TEXT = "".join((
   "限速辅助：手动将设定速度更改为以激活正在调整限速速度至已使用",
@@ -132,6 +176,7 @@ _ZH_CHS_DYNAMIC_TEXT = "".join((
   "重新校准自动校准进行中车速高于车速异常请调整设备安装",
   "角度偏移过大偏移转向齿条位置可能异常比例",
   "请检查轮胎胎压或四轮定位系数驾驶风格",
+  "已丢弃的帧油门转向剩余分钟",
 ))
 
 
@@ -167,6 +212,12 @@ def _localize_zh_chs(alert_type: str, text: str) -> str:
     return f"请检查轮胎、胎压或四轮定位 (系数: {match.group(1)})"
   if match := _PERSONALITY_RE.fullmatch(text):
     return f"驾驶风格: {match.group(1)}"
+  if match := _FRAME_DROP_RE.fullmatch(text):
+    return f"已丢弃 {match.group(1)}% 的帧"
+  if match := _JOYSTICK_RE.fullmatch(text):
+    return f"油门: {match.group(1)}%，转向: {match.group(2)}%"
+  if match := _MINUTES_LEFT_RE.fullmatch(text):
+    return f"剩余 {match.group(1)} 分钟"
   return _ZH_CHS_EXACT.get(text, text)
 
 

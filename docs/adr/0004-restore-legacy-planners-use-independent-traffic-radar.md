@@ -2,7 +2,10 @@
 
 ## Decision
 
-Official remains the unmodified upstream planner path. Experimental and
+Official continues to instantiate the upstream planner provider. Its shared MPC
+has only the optional Traffic-target setter and the existing tuning adapter;
+with Traffic Off and the Default profile, explicit fast paths preserve upstream
+inputs and outputs without a floating-point round trip. Experimental and
 TN-NoDEC restore the final `sp-dev-rs408`/`sp-dev-egpu` planner decision flow:
 the legacy cruise obstacle is solved inside MPC, final arbitration is MPC plus
 the legacy optional E2E candidate, state recursion and acceleration clipping
@@ -14,7 +17,10 @@ equation source. It generates the old numerical configuration as the primary
 solver plus a less aggressively condensed recovery solver. Recovery runs only
 after a primary failure while longitudinal control is active; the primary
 success and inactive paths therefore retain the old route output. Neither old
-platform-specific generated tree is copied.
+platform-specific generated tree is copied. A recovered primary failure is
+rate-limited but always logged; this numerical fail-safe is the sole non-Traffic
+behavioral exception, because reproducing the old zero-trajectory failure while
+engaged would violate the safety-first deployment gate.
 
 Traffic control is produced once by `trafficcontrold` as a typed
 `trafficRadarState`. The message is not `radarState`, is not fed to modeld, and

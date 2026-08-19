@@ -5,9 +5,17 @@ import pytest
 
 from openpilot.cereal import log
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LIMIT_COST, N, T_IDXS
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.experimental.long_mpc import LongitudinalMpc
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.experimental.long_mpc import (
+  LongitudinalMpc as ExperimentalLongitudinalMpc,
+)
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.legacy_mpc import long_mpc as legacy_mpc_module
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.legacy_mpc.long_mpc import LegacyCruiseLongitudinalMpc
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import LongitudinalTuning
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec.long_mpc import (
+  LongitudinalMpc as TNLongitudinalMpc,
+)
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import (
+  CRAZYMAX_VALUES, LongitudinalTuning,
+)
 
 
 def _radar_without_leads():
@@ -69,10 +77,13 @@ def _solver_with_status(status):
   return Solver
 
 
+@pytest.mark.parametrize("mpc_class", [ExperimentalLongitudinalMpc, TNLongitudinalMpc], ids=["experimental", "tn"])
+@pytest.mark.parametrize("tuning", [LongitudinalTuning(), LongitudinalTuning(**CRAZYMAX_VALUES)], ids=["default", "crazymax"])
 @pytest.mark.parametrize("v_ego", [0.0, 2.0, 5.0, 10.0, 20.0, 30.0, 40.0])
 @pytest.mark.parametrize("cruise_delta", [-10.0, 0.0, 5.0, 20.0])
-def test_legacy_solver_converges_across_the_cruise_state_grid(v_ego, cruise_delta):
-  mpc = LongitudinalMpc(dt=0.05)
+def test_legacy_solver_converges_across_the_cruise_state_grid(mpc_class, tuning, v_ego, cruise_delta):
+  mpc = mpc_class(dt=0.05)
+  mpc.runtime_tuning = tuning
   mpc.set_recovery_enabled(True)
   mpc.set_cur_state(v_ego, 0.0)
   mpc.set_weights(prev_accel_constraint=False, personality=log.LongitudinalPersonality.standard)
@@ -85,6 +96,8 @@ def test_legacy_solver_converges_across_the_cruise_state_grid(v_ego, cruise_delt
   assert np.all(np.isfinite(mpc.v_solution))
   assert np.all(np.isfinite(mpc.a_solution))
   assert np.all(np.isfinite(mpc.j_solution))
+  assert np.isfinite(mpc.solve_time)
+  assert 0.0 <= mpc.solve_time < 0.05
   assert not (
     np.allclose(mpc.v_solution, 0.0)
     and np.allclose(mpc.a_solution, 0.0)
@@ -104,20 +117,29 @@ def test_inactive_primary_failure_preserves_the_legacy_reset_path():
   assert np.allclose(mpc.v_solution, 0.0)
 
 
-def test_active_primary_failure_uses_the_robust_solver_once():
+def test_active_primary_failure_uses_the_robust_solver_once(monkeypatch):
+  warnings = []
+  monkeypatch.setattr(legacy_mpc_module.cloudlog, "warning", warnings.append)
+  monotonic_values = iter([10.0, 12.0, 16.0])
+  monkeypatch.setattr(legacy_mpc_module.time, "monotonic", lambda: next(monotonic_values))
   mpc = LegacyCruiseLongitudinalMpc(_solver_with_status(4), _solver_with_status(0), dt=0.05)
   mpc.set_recovery_enabled(True)
 
-  mpc.run()
+  for _ in range(3):
+    mpc.run()
 
   assert mpc.last_primary_solution_status == 4
   assert mpc.last_fallback_solution_status == 0
   assert mpc.last_solution_status == 0
-  assert mpc.fallback_solver.solve_calls == 1
+  assert mpc.fallback_solver.solve_calls == 3
   assert np.all(np.isfinite(mpc.v_solution))
+  assert len(warnings) == 2
+  assert all("primary_status: 4" in warning and "fallback_status: 0" in warning for warning in warnings)
 
 
-def test_successful_primary_never_calls_the_fallback():
+def test_successful_primary_never_calls_the_fallback(monkeypatch):
+  warnings = []
+  monkeypatch.setattr(legacy_mpc_module.cloudlog, "warning", warnings.append)
   mpc = LegacyCruiseLongitudinalMpc(_solver_with_status(0), _solver_with_status(0), dt=0.05)
   mpc.set_recovery_enabled(True)
 
@@ -127,6 +149,7 @@ def test_successful_primary_never_calls_the_fallback():
   assert mpc.last_fallback_solution_status is None
   assert mpc.last_solution_status == 0
   assert mpc.fallback_solver.solve_calls == 0
+  assert warnings == []
 
 
 def test_legacy_solver_consumes_all_weight_and_constraint_tuning():

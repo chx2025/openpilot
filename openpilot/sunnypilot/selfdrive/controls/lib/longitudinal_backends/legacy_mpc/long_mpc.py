@@ -317,6 +317,13 @@ class LegacyCruiseLongitudinalMpc(UpstreamLongitudinalMpc):
       self.solution_status = primary_status
 
     self._save_backend_solution_status()
+    if primary_status != 0 and self.last_fallback_solution_status == 0:
+      now = time.monotonic()
+      if now > self.last_cloudlog_t + 5.0:
+        self.last_cloudlog_t = now
+        warning = f"Legacy long mpc recovered, primary_status: {primary_status}, " + \
+                  f"fallback_status: {self.last_fallback_solution_status}"
+        cloudlog.warning(warning)
     self.solve_time = solve_time
     for index in range(N + 1):
       self.x_sol[index] = selected_solver.get(index, "x")

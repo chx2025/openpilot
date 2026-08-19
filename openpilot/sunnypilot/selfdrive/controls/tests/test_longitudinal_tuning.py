@@ -3,6 +3,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from openpilot.cereal import log, messaging
@@ -220,10 +221,35 @@ def test_rs408_tn_native_overrides_do_not_block_mpc_tuning_migration():
       },
     },
   }
-  params = FakeParams({CONFIG_PARAM: source})
+  params = FakeParams({
+    CONFIG_PARAM: source,
+    "AccelPersonalityEnabled": False,
+    "AccelPersonality": 0,
+  })
 
   assert backend_values(params, get_backend(BackendId.TN_NO_DEC)).j_ego_cost == 4.5
+  assert params.values["AccelPersonalityEnabled"] is True
+  assert params.values["AccelPersonality"] == 2
   assert params.values[CONFIG_PARAM]["sourceBackup"]["config"] == source
+
+
+def test_rs408_missing_tn_native_overrides_preserve_current_params():
+  source = {
+    "schemaVersion": 1,
+    "revision": 5,
+    "shared": {},
+    "families": {"acados_long_v1": {}},
+    "backends": {"tn_no_dec": {"profileId": 0, "overrides": {"mpc.jerk_cost": 4.5}}},
+  }
+  params = FakeParams({
+    CONFIG_PARAM: source,
+    "AccelPersonalityEnabled": True,
+    "AccelPersonality": 2,
+  })
+
+  assert backend_values(params, get_backend(BackendId.TN_NO_DEC)).j_ego_cost == 4.5
+  assert params.values["AccelPersonalityEnabled"] is True
+  assert params.values["AccelPersonality"] == 2
 
 
 def test_tesla_settings_display_invalid_config_without_repairing_it(monkeypatch):
@@ -263,6 +289,15 @@ def test_default_profile_is_numerically_identical_to_upstream():
 
   assert tuning.as_dict() == DEFAULT_VALUES
   assert adjusted_obstacle(42.0, 15.0, 15.0, tuning, 1.45) == 42.0
+
+
+def test_default_tuning_returns_the_original_obstacle_without_float_math():
+  raw = np.array([42.0, 42.00000000000001, 1.0e8], dtype=np.float64)
+
+  adjusted = adjusted_obstacle(raw, 15.0, 15.0, LongitudinalTuning(), 1.45)
+
+  assert adjusted is raw
+  assert np.array_equal(adjusted, raw)
 
 
 def test_comfort_brake_and_stop_distance_adjust_the_solver_obstacle():

@@ -75,14 +75,16 @@ and matches the 236-cycle retained route at `1e-5`; that route contains one
 inactive startup failure in both old planners. In a 28-point active cruise grid
 the same primary fails 11 cases. The recovery variant succeeds in all 28 and
 the combined host solve time is 0.124 ms median, 0.215 ms p95, and 0.913 ms max.
-Device/post98 generation, timing, and replay remain a deployment gate.
+Recovered primary failures are explicitly rate-limited and logged. Device/
+post98 generation, timing, and replay remain a deployment gate.
 
 Each backend has an independent Default/CrazyMax/Custom profile. Validated live
 values are revisioned in one configuration Param, polled at a bounded rate, and
 ramped before use. The configuration format has an explicit schema identity and
 migrates both the old semantic layout and the interim per-backend layout without
-overwriting unknown input. Official remains the upstream implementation; its
-tuning is applied only through narrow MPC hooks. Experimental retains the legacy
+overwriting unknown input, including TN's native acceleration enable/profile.
+Official remains the upstream implementation; its tuning is applied only through
+narrow MPC hooks and Default takes an exact no-op path. Experimental retains the legacy
 DEC/Experimental Mode behavior, while TN-NoDEC ignores DEC and follows
 Experimental Mode directly, matching the final old trees.
 

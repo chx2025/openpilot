@@ -74,6 +74,7 @@ htmlcov
 *.bz2
 *.zst
 *.rlog
+!openpilot/sunnypilot/selfdrive/controls/tests/fixtures/tesla_legacy_planner_warm.rlog.zst
 
 build/
 

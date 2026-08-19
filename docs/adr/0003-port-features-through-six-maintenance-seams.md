@@ -15,8 +15,9 @@ Planner Backend, Plan Constraint, and Device Query/Device Command.
   or process boundary before UI is added.
 - A copy of an upstream planner, `selfdrived`, `card`, updater, or settings page
   is not an acceptable long-term Adapter; only a thin wrapper or hook is.
-- Official uses the current upstream planner and solver unchanged. Experimental
-  and TN-NoDEC share one local legacy cruise-obstacle equation source because
+- Official instantiates the current upstream planner and preserves exact
+  Traffic-Off/Default behavior through no-op MPC seams. Experimental and
+  TN-NoDEC share one local legacy cruise-obstacle equation source because
   their confirmed old behavior cannot be expressed by the upstream lead-only
   solver. It generates a legacy primary plus a numerical recovery variant; the
   MPC family and live tuning profiles require route differential, convergence-

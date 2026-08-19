@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,6 +10,12 @@ from openpilot.tools.lib.logreader import LogReader
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 ROUTE_FIXTURE = FIXTURE_DIR / "tesla_legacy_planner_warm.rlog.zst"
+ROUTE_FIXTURE_SHA256 = "36e4a6e774d33839b2b9f78d9f90d14b132020fb1cb88511d1096c737b0747f4"
+
+
+def test_minimized_route_fixture_is_present_and_intact_in_a_clean_checkout():
+  assert ROUTE_FIXTURE.is_file(), "the minimized replay route must be tracked with this test"
+  assert hashlib.sha256(ROUTE_FIXTURE.read_bytes()).hexdigest() == ROUTE_FIXTURE_SHA256
 
 
 def _replay(backend: int):

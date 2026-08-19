@@ -276,6 +276,19 @@ def _migrate_v1(raw: object) -> dict[str, Any]:
   raise ValueError("unknown or mixed longitudinal tuning v1 config")
 
 
+def _rs408_tn_param_updates(raw: object) -> dict[str, bool | int]:
+  if not isinstance(raw, dict):
+    return {}
+  backend = raw.get("backends", {}).get("tn_no_dec", {})
+  overrides = backend.get("overrides", {}) if isinstance(backend, dict) else {}
+  updates: dict[str, bool | int] = {}
+  if "tn.accel_personality.enabled" in overrides:
+    updates["AccelPersonalityEnabled"] = overrides["tn.accel_personality.enabled"]
+  if "tn.accel_personality.profile" in overrides:
+    updates["AccelPersonality"] = overrides["tn.accel_personality.profile"]
+  return updates
+
+
 @contextmanager
 def _config_lock():
   with open(CONFIG_LOCK_PATH, "a") as lock_file:
@@ -293,6 +306,9 @@ def _config_locked(params: Any) -> dict[str, Any]:
   if isinstance(raw, dict) and raw.get("schemaVersion") == SCHEMA_VERSION:
     return _parse_v2(raw)
   migrated = _migrate_v1(raw)
+  if migrated.get("sourceBackup", {}).get("format") == "rs408-semantic-v1":
+    for key, value in _rs408_tn_param_updates(raw).items():
+      params.put(key, value, block=True)
   params.put(CONFIG_PARAM, migrated, block=True)
   return migrated
 
@@ -367,6 +383,8 @@ def adjusted_obstacle(raw_upstream_obstacle: float, v_lead: float, v_ego: float,
                       tuning: LongitudinalTuning, t_follow: float) -> float:
   """Translate an obstacle for the unchanged upstream 6-parameter solver."""
   default = LongitudinalTuning()
+  if tuning == default:
+    return raw_upstream_obstacle
   lead_equivalence_delta = v_lead ** 2 / (2 * tuning.comfort_brake) - v_lead ** 2 / (2 * default.comfort_brake)
   default_safe = v_ego ** 2 / (2 * default.comfort_brake) + t_follow * v_ego + default.stop_distance
   tuned_safe = v_ego ** 2 / (2 * tuning.comfort_brake) + t_follow * v_ego + tuning.stop_distance
