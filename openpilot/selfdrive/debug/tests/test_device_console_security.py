@@ -49,6 +49,14 @@ def test_console_page_does_not_expose_driving_information():
   assert "/api/driving-status" not in page
 
 
+def test_console_page_does_not_expose_retired_tesla_can_experiments():
+  page = render_page().decode()
+
+  assert "turn-tab" not in page
+  assert "/api/turn/" not in page
+  assert "/api/speed/" not in page
+
+
 def test_terminal_is_offroad_only():
   with pytest.raises(PermissionError, match="行驶中"):
     run_command("true", None, FakeParams(offroad=False))

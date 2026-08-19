@@ -187,6 +187,10 @@ class Multilang:
   def tr(self, text: str) -> str:
     return self._translations.get(text, text) or text
 
+  def trf(self, text: str, *args, **kwargs) -> str:
+    """Translate a stable template before substituting runtime values."""
+    return self.tr(text).format(*args, **kwargs)
+
   def trn(self, singular: str, plural: str, n: int) -> str:
     if singular in self._plurals:
       idx = self._plural_selector(n)
@@ -209,7 +213,7 @@ class Multilang:
 multilang = Multilang()
 multilang.setup()
 
-tr, trn = multilang.tr, multilang.trn
+tr, trf, trn = multilang.tr, multilang.trf, multilang.trn
 
 
 # no-op marker for static strings translated later

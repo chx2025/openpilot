@@ -2,13 +2,15 @@ import json
 import re
 import string
 from pathlib import Path
+from unittest.mock import patch
 
 
 from openpilot.common.parameterized import parameterized
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.selfdrive.ui.translations.potools import extract_strings, parse_po
-from openpilot.system.ui.lib.multilang import LANGUAGES_FILE, SYSTEM_UI_DIR, TRANSLATIONS_DIR, UI_DIR
+from openpilot.system.ui.lib import application
+from openpilot.system.ui.lib.multilang import LANGUAGES_FILE, SYSTEM_UI_DIR, TRANSLATIONS_DIR, UI_DIR, Multilang
 
 PERCENT_PLACEHOLDER_RE = re.compile(r"%(?:n|\d+)")
 BAD_ENTITY_RE = re.compile(r'@(\w+);')
@@ -49,6 +51,24 @@ def load_po_text(po_path: Path) -> str:
 
 
 class TestTranslations(OpenpilotTestCase):
+  def test_formatted_translation_looks_up_template_before_substitution(self):
+    translator = Multilang.__new__(Multilang)
+    translator._translations = {
+      "Only works above {speed} {unit}.": "仅在 {speed} {unit} 以上有效。",
+    }
+
+    assert translator.trf("Only works above {speed} {unit}.", speed=23, unit="km/h") == "仅在 23 km/h 以上有效。"
+
+  def test_chinese_fallback_font_is_installed_for_raygui_controls(self):
+    base_font = object()
+    chinese_font = object()
+    with patch.object(application.multilang, "requires_font_fallback", return_value=True), \
+         patch.object(application.gui_app, "fallback_font", return_value=chinese_font), \
+         patch.object(application.rl, "gui_set_font") as set_font:
+      application.set_gui_font(base_font)
+
+    set_font.assert_called_once_with(chinese_font)
+
   def test_translation_template_covers_runtime_ui_strings(self):
     runtime_roots = (
       Path(SYSTEM_UI_DIR),
@@ -93,7 +113,7 @@ class TestTranslations(OpenpilotTestCase):
       if entry.is_plural:
         assert set(entry.msgstr_plural) == expected_slots, (
           f"{po_path.name}: {entry.msgid!r} has plural slots "
-          f"{sorted(entry.msgstr_plural)}, expected {sorted(expected_slots)}"
+          + f"{sorted(entry.msgstr_plural)}, expected {sorted(expected_slots)}"
         )
 
   @parameterized.expand(sorted(TRANSLATION_LANGUAGES.values()))

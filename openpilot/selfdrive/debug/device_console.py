@@ -1,40 +1,17 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  # The embedded HTML/CSS/JavaScript is intentionally compact.
 import json
-import threading
-import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from openpilot.sunnypilot.selfdrive.car.tesla.validation_controller import VALIDATION_LOG_PATH
-from openpilot.selfdrive.debug.tesla_turn_signal_test import (
-  cancel_validation_session,
-  get_validation_status,
-  start_validation_session,
-)
 from openpilot.selfdrive.debug.device_settings import settings_snapshot, validate_and_write
 from openpilot.selfdrive.debug.device_hotspot import hotspot_status, set_hotspot_enabled
 from openpilot.selfdrive.debug.device_console_auth import client_is_local, require_offroad
 from openpilot.selfdrive.debug.device_terminal import run_command, terminal_status
-from openpilot.selfdrive.debug.tesla_speed_button_test import SpeedButtonAction, run_validation
 
 
 HOST = "0.0.0.0"
 PORT = 8088
-_SESSION_LOCK = threading.Lock()
-_ACTIVE_WEB_TEST_ID: str | None = None
-_ACTIVE_WEB_SESSION_STARTED = 0.0
-WEB_SESSION_TIMEOUT_S = 20.0
-
-
-def _clear_active_session(test_id: str) -> None:
-  global _ACTIVE_WEB_SESSION_STARTED, _ACTIVE_WEB_TEST_ID
-  with _SESSION_LOCK:
-    if _ACTIVE_WEB_TEST_ID == test_id:
-      _ACTIVE_WEB_TEST_ID = None
-      _ACTIVE_WEB_SESSION_STARTED = 0.0
-
-
 def render_page() -> bytes:
   return """<!doctype html>
 <html lang="zh-CN">
@@ -55,9 +32,6 @@ def render_page() -> bytes:
     .card h2 { font-size:16px; margin:0 0 5px; } .card p { font-size:13px; margin:0; } .lock { color:#fbbf24; font-size:12px; }
     input[type=number], select { width:120px; padding:9px; border:1px solid #475569; border-radius:9px; background:#0f172a; color:white; font-size:16px; }
     input[type=checkbox] { width:28px; height:28px; accent-color:#2563eb; } input:disabled, select:disabled, button:disabled { opacity:.45; }
-    #turn-panel { text-align:center; } .buttons { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:28px; }
-    .turn { min-height:120px; font-size:26px; } #left { background:#2563eb; } #right { background:#ea580c; } #cancel { display:none; width:100%; min-height:64px; margin-top:16px; background:#dc2626; }
-    #status { min-height:52px; margin-top:18px; color:#fde68a; white-space:pre-wrap; }
     textarea { width:100%; min-height:130px; box-sizing:border-box; padding:11px; border:1px solid #475569; border-radius:10px; background:#020617; color:#e2e8f0; font:14px ui-monospace,monospace; }
     #terminal-output { min-height:100px; max-height:420px; overflow:auto; text-align:left; white-space:pre-wrap; background:#020617; border-radius:10px; padding:12px; color:#cbd5e1; }
     .terminal-row { display:flex; gap:8px; margin:10px 0; } .terminal-row input { min-width:0; flex:1; padding:9px; border:1px solid #475569; border-radius:9px; background:#0f172a; color:white; }
@@ -68,14 +42,8 @@ def render_page() -> bytes:
   </style>
 </head><body><main>
   <h1>车载设置</h1><p>测试版本：连接设备局域网后可直接访问，无账号、口令或令牌。</p>
-  <div class="tabs"><button class="tab active" id="settings-tab" onclick="showPanel('settings')">设置</button><button class="tab" id="turn-tab" onclick="showPanel('turn')">转向测试</button><button class="tab" id="terminal-tab" onclick="showPanel('terminal')">终端</button></div>
+  <div class="tabs"><button class="tab active" id="settings-tab" onclick="showPanel('settings')">设置</button><button class="tab" id="terminal-tab" onclick="showPanel('terminal')">终端</button></div>
   <section id="settings-panel"><div id="mode" class="notice">正在读取设置…</div><div id="category-nav" class="category-nav"></div><div id="settings"></div></section>
-  <section id="turn-panel" hidden>
-    <h1>Tesla CAN 验证</h1><p>转向请求由 card 实时线程跟随原车 0x3E9 模板持续发送；速度按钮使用新鲜的原车 0x3C2 模板。</p>
-    <div class="buttons"><button class="turn" id="left" onclick="run('left')">← 左转</button><button class="turn" id="right" onclick="run('right')">右转 →</button></div>
-    <div class="buttons"><button onclick="runSpeed('decrease')">− 速度按钮</button><button onclick="runSpeed('increase')">+ 速度按钮</button></div>
-    <button id="cancel" onclick="cancelSession()">立即取消</button><div id="status"></div>
-  </section>
   <section id="terminal-panel" hidden>
     <h1>设备终端</h1><p>仅在设置模式（非行驶状态）且设备端显式启用后可用。无需认证；命令最长 20 秒，输出上限 64 KiB。</p>
     <div id="terminal-state" class="notice">正在检查终端状态…</div><button onclick="runTerminal()">运行命令</button>
@@ -86,8 +54,8 @@ let settingsState = null, hotspotState = null, selectedCategory = null, currentP
 function apiFetch(url, options = {}) { return fetch(url, options); }
 function showPanel(name) {
   currentPanel = name;
-  document.getElementById('settings-panel').hidden = name !== 'settings'; document.getElementById('turn-panel').hidden = name !== 'turn'; document.getElementById('terminal-panel').hidden = name !== 'terminal';
-  document.getElementById('settings-tab').classList.toggle('active', name === 'settings'); document.getElementById('turn-tab').classList.toggle('active', name === 'turn'); document.getElementById('terminal-tab').classList.toggle('active', name === 'terminal');
+  document.getElementById('settings-panel').hidden = name !== 'settings'; document.getElementById('terminal-panel').hidden = name !== 'terminal';
+  document.getElementById('settings-tab').classList.toggle('active', name === 'settings'); document.getElementById('terminal-tab').classList.toggle('active', name === 'terminal');
 }
 function element(tag, attrs = {}, text = '') { const e = document.createElement(tag); Object.assign(e, attrs); if (text) e.textContent = text; return e; }
 function renderSettings(data) {
@@ -256,62 +224,11 @@ function drawDrivingGeometry(geometry, data) {
 async function loadTerminalStatus() { const el = document.getElementById('terminal-state'); try { const r = await apiFetch('/api/terminal/status', {cache:'no-store'}); const s = await r.json(); el.textContent = !s.terminal_enabled ? '终端未启用：请在设备上显式启用。' : s.onroad ? '行驶中：请先进入设置模式。' : '终端已启用且无需认证。'; el.className = 'notice' + ((!s.terminal_enabled || s.onroad) ? ' onroad' : ''); } catch (e) { el.textContent = '终端状态读取失败：' + e; } }
 async function runTerminal() { const command = document.getElementById('terminal-command').value, output = document.getElementById('terminal-output'); output.textContent = '正在运行…'; try { const r = await apiFetch('/api/terminal/exec', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command})}); const result = await r.json(); if (!r.ok) throw new Error(result.message || 'HTTP ' + r.status); output.textContent = `[exit ${result.exit_code}${result.timed_out ? ', timeout' : ''}${result.blocked_onroad ? ', onroad blocked' : ''}]\n` + result.output; } catch (e) { output.textContent = '运行失败：' + e; } }
 loadTerminalStatus();
-let activeTestId = null;
-const phaseText = {
-  queued: '请求已提交', waiting_vehicle_feedback: '等待车辆转向灯响应',
-  waiting_sp_start: '等待 SP 开始变道', lane_changing: 'SP 正在执行变道',
-  cancelling: '变道完成，正在关闭转向灯', confirming_cancel: '正在确认转向灯关闭'
-};
-async function run(direction) {
-  document.querySelectorAll('#left,#right').forEach(button => button.disabled = true);
-  const status = document.getElementById('status');
-  status.textContent = '正在提交…';
-  try {
-    const response = await apiFetch('/api/turn/' + direction, {method:'POST'});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || '提交失败');
-    activeTestId = result.test_id;
-    document.getElementById('cancel').style.display = 'block';
-    await pollStatus();
-  } catch (error) { finishUi('请求失败：' + error); }
-}
-async function pollStatus() {
-  if (!activeTestId) return;
-  try {
-    const response = await apiFetch('/api/status/' + activeTestId, {cache:'no-store'});
-    const result = await response.json();
-    const detail = '已发送 ' + (result.action_frames_sent || 0) + ' 帧';
-    if (result.done) {
-      const ok = result.result === 'PASS';
-      finishUi((ok ? '完成：转向灯已自动关闭' : '结束：' + result.result) + '\\n' + detail);
-      return;
-    }
-    document.getElementById('status').textContent = (phaseText[result.phase] || result.phase) + '\\n' + detail;
-    setTimeout(pollStatus, 200);
-  } catch (error) { finishUi('状态读取失败：' + error); }
-}
-async function cancelSession() {
-  if (!activeTestId) return;
-  document.getElementById('status').textContent = '正在请求关闭转向灯…';
-  try { await apiFetch('/api/cancel/' + activeTestId, {method:'POST'}); }
-  catch (error) { finishUi('取消请求失败：' + error); }
-}
-function finishUi(message) {
-  document.getElementById('status').textContent = message;
-  document.querySelectorAll('#left,#right').forEach(button => button.disabled = false);
-  document.getElementById('cancel').style.display = 'none';
-  activeTestId = null;
-}
-async function runSpeed(action) {
-  const status = document.getElementById('status'); status.textContent = '正在发送速度按钮模板…';
-  try { const response = await apiFetch('/api/speed/' + action, {method:'POST'}); const result = await response.json(); if (!response.ok) throw new Error(result.message || '测试失败'); status.textContent = result.message; }
-  catch (error) { status.textContent = '速度按钮测试失败：' + error; }
-}
 </script></main></body></html>""".encode()
 
 
-class TurnSignalHandler(BaseHTTPRequestHandler):
-  server_version = "TeslaTurnSignalTest/1.0"
+class DeviceConsoleHandler(BaseHTTPRequestHandler):
+  server_version = "DeviceConsole/1.0"
 
   def _send(self, status: HTTPStatus, content_type: str, body: bytes) -> None:
     self.send_response(status)
@@ -344,21 +261,6 @@ class TurnSignalHandler(BaseHTTPRequestHandler):
       return
     if self.path == "/api/settings":
       self._json(HTTPStatus.OK, settings_snapshot())
-      return
-    if self.path.startswith("/api/status/"):
-      test_id = self.path.removeprefix("/api/status/")
-      with _SESSION_LOCK:
-        session_expired = (_ACTIVE_WEB_TEST_ID == test_id and
-                           time.monotonic() - _ACTIVE_WEB_SESSION_STARTED >= WEB_SESSION_TIMEOUT_S)
-      if session_expired:
-        cancel_validation_session(test_id)
-        _clear_active_session(test_id)
-        self._json(HTTPStatus.OK, {"test_id": test_id, "done": True, "result": "WEB_SESSION_TIMEOUT"})
-        return
-      status = get_validation_status(test_id)
-      if status.get("done"):
-        _clear_active_session(test_id)
-      self._json(HTTPStatus.OK, status)
       return
     if self.path not in ("/", "/index.html"):
       self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found")
@@ -419,54 +321,7 @@ class TurnSignalHandler(BaseHTTPRequestHandler):
       except (TypeError, ValueError, json.JSONDecodeError) as error:
         self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(error)})
       return
-    if self.path.startswith("/api/cancel/"):
-      test_id = self.path.removeprefix("/api/cancel/")
-      cancel_validation_session(test_id)
-      self._json(HTTPStatus.ACCEPTED, {"ok": True, "test_id": test_id})
-      return
-    if self.path.startswith("/api/speed/"):
-      action_value = self.path.removeprefix("/api/speed/")
-      if action_value not in (SpeedButtonAction.increase.value, SpeedButtonAction.decrease.value):
-        self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "未知速度按钮测试"})
-        return
-      result = run_validation(SpeedButtonAction(action_value))
-      messages = {
-        0: "验证通过：设定速度已按预期改变",
-        1: "验证被阻止：检查车辆状态、参数和新鲜原车模板",
-        2: "验证失败：Panda 拒绝或未观察到发送回显",
-        3: "模板已发送；请观察车辆设定速度显示",
-      }
-      self._json(HTTPStatus.OK if result in (0, 3) else HTTPStatus.CONFLICT,
-                 {"ok": result in (0, 3), "result": result, "message": messages[result]})
-      return
-    direction = self.path.removeprefix("/api/turn/")
-    if direction not in ("left", "right") or self.path != f"/api/turn/{direction}":
-      self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "未知测试请求"})
-      return
-    try:
-      global _ACTIVE_WEB_SESSION_STARTED, _ACTIVE_WEB_TEST_ID
-      with _SESSION_LOCK:
-        if _ACTIVE_WEB_TEST_ID is not None:
-          existing = get_validation_status(_ACTIVE_WEB_TEST_ID)
-          session_expired = time.monotonic() - _ACTIVE_WEB_SESSION_STARTED >= WEB_SESSION_TIMEOUT_S
-          if not existing.get("done") and not session_expired:
-            self._json(HTTPStatus.CONFLICT, {"ok": False, "message": "已有变道请求正在运行"})
-            return
-          if not existing.get("done"):
-            expired_test_id = _ACTIVE_WEB_TEST_ID
-            cancel_validation_session(expired_test_id)
-            _ACTIVE_WEB_TEST_ID = None
-            _ACTIVE_WEB_SESSION_STARTED = 0.0
-            self._json(HTTPStatus.CONFLICT, {
-              "ok": False, "message": "上一变道请求已超时并取消，请稍后重试", "test_id": expired_test_id,
-            })
-            return
-        test_id = start_validation_session(direction)
-        _ACTIVE_WEB_TEST_ID = test_id
-        _ACTIVE_WEB_SESSION_STARTED = time.monotonic()
-      self._json(HTTPStatus.ACCEPTED, {"ok": True, "test_id": test_id, "log": VALIDATION_LOG_PATH})
-    except RuntimeError as error:
-      self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "message": f"测试被阻止：{error}"})
+    self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "未知请求"})
 
   def _json(self, status: HTTPStatus, payload: dict) -> None:
     self._send(status, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode())
@@ -476,7 +331,7 @@ class TurnSignalHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-  server = ThreadingHTTPServer((HOST, PORT), TurnSignalHandler)
+  server = ThreadingHTTPServer((HOST, PORT), DeviceConsoleHandler)
   server.serve_forever()
 
 

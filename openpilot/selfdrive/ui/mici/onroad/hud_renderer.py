@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
-from openpilot.selfdrive.ui.egpu_status import draw_egpu_status_panel
+from openpilot.selfdrive.ui.egpu_status import draw_egpu_status_panel, egpu_icon_visible
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -192,7 +192,7 @@ class HudRenderer(Widget):
     if self.is_cruise_set:
       self._draw_set_speed(rect)
 
-    if ui_state.usbgpu and ui_state.usbgpu_compiled:
+    if egpu_icon_visible(connected=bool(ui_state.sm['deviceState'].chestnutPresent)):
       self._draw_model_source(rect)
 
     draw_egpu_status_panel(rect, self._font_medium, compact=True)
@@ -226,7 +226,7 @@ class HudRenderer(Widget):
     if icon is not self._egpu_icon:
       self._egpu_fade_time = rl.get_time()
       self._egpu_icon = icon
-    alpha = self._egpu_alpha_filter.update(loading or 0 < rl.get_time() - self._egpu_fade_time < SET_SPEED_PERSISTENCE)
+    alpha = self._egpu_alpha_filter.update(egpu_icon_visible(connected=bool(ui_state.sm['deviceState'].chestnutPresent)))
     if alpha < 1e-2:
       return
 

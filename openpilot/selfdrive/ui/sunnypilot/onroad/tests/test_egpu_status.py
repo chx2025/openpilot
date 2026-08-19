@@ -1,4 +1,16 @@
-from openpilot.selfdrive.ui.egpu_status import build_egpu_status
+from openpilot.selfdrive.ui.egpu_status import build_egpu_status, egpu_icon_visible, egpu_panel_style
+
+
+def test_connected_egpu_icon_stays_visible_onroad():
+  assert egpu_icon_visible(connected=True)
+  assert not egpu_icon_visible(connected=False)
+
+
+def test_egpu_panel_is_at_least_twice_as_large_with_transparent_background():
+  style = egpu_panel_style(compact=True)
+  assert style.font_size >= 48
+  assert style.line_height >= 58
+  assert style.background_alpha == 0
 
 
 def test_egpu_status_explains_fallback_reason():

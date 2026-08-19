@@ -125,6 +125,11 @@ def font_fallback(font: rl.Font) -> rl.Font:
   return font
 
 
+def set_gui_font(font: rl.Font) -> None:
+  """Keep raygui controls on the same active-language font as custom text."""
+  rl.gui_set_font(font_fallback(font))
+
+
 class MousePos(NamedTuple):
   x: float
   y: float
@@ -739,7 +744,7 @@ class GuiApplication(GuiApplicationExt):
         self._fonts[font_weight_file] = font
     if multilang.requires_font_fallback():
       self.fallback_font()
-    rl.gui_set_font(self._fonts[FontWeight.NORMAL])
+    set_gui_font(self._fonts[FontWeight.NORMAL])
 
   def _set_styles(self):
     rl.gui_set_style(rl.GuiControl.DEFAULT, rl.GuiControlProperty.BORDER_WIDTH, 0)

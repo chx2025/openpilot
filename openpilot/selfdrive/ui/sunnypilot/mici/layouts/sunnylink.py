@@ -178,7 +178,7 @@ class SunnylinkLayoutMici(NavScroller):
       if backup_status == custom.BackupManagerSP.Status.inProgress:
         self._backup_in_progress = True
         self._backup_btn.set_text(tr("backing up"))
-        text = tr(f"{backup_progress}%")
+        text = f"{backup_progress}%"
         self._backup_btn.set_value(text)
 
       elif backup_status == custom.BackupManagerSP.Status.failed:
@@ -200,7 +200,7 @@ class SunnylinkLayoutMici(NavScroller):
       if restore_status == custom.BackupManagerSP.Status.inProgress:
         self._restore_in_progress = True
         self._restore_btn.set_text(tr("restoring"))
-        text = tr(f"{restore_progress}%")
+        text = f"{restore_progress}%"
         self._restore_btn.set_value(text)
 
       elif restore_status == custom.BackupManagerSP.Status.failed:

@@ -8,7 +8,7 @@ from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.base import BrandSettings
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.tesla_control import TeslaControlSettingsAdapter
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.multilang import tr
+from openpilot.system.ui.lib.multilang import tr, trf
 from openpilot.system.ui.sunnypilot.widgets.list_view import multiple_button_item_sp, toggle_item_sp
 
 COOP_STEERING_MIN_KMH = 23
@@ -29,7 +29,8 @@ class TeslaSettings(BrandSettings):
       inline=False,
     )
     self.items = [self.control_profile.radar_backend, self.coop_steering_toggle,
-                  self.mads_screen_button, self.control_profile.settings_button]
+                  self.mads_screen_button, self.control_profile.traffic_control_mode,
+                  self.control_profile.settings_button]
 
   def update_settings(self):
     is_metric = ui_state.is_metric
@@ -39,12 +40,14 @@ class TeslaSettings(BrandSettings):
     display_value_oem = OEM_STEERING_MIN_KMH if is_metric else round(OEM_STEERING_MIN_KMH * KM_TO_MILE)
 
     coop_steering_disabled_msg = tr("Enable \"Always Offroad\" in Device panel, or turn vehicle off to toggle.")
-    coop_steering_warning = tr(f"Warning: May experience steering oscillations below {display_value_oem} {unit} during turns, " +
-                               "recommend disabling this feature if you experience these.")
+    coop_steering_warning = trf(
+      "Warning: May experience steering oscillations below {speed} {unit} during turns, recommend disabling this feature if you experience these.",
+      speed=display_value_oem, unit=unit,
+    )
     coop_steering_desc = (
       f"<b>{coop_steering_warning}</b><br><br>" +
       f"{tr('Allows the driver to provide limited steering input while openpilot is engaged.')}<br>" +
-      f"{tr(f'Only works above {display_value_coop} {unit}.')}"
+      f"{trf('Only works above {speed} {unit}.', speed=display_value_coop, unit=unit)}"
     )
 
     if not ui_state.is_offroad():

@@ -10,7 +10,7 @@ from openpilot.selfdrive.ui.sunnypilot.layouts.onboarding import SunnylinkConsen
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.sunnylink.api import UNREGISTERED_SUNNYLINK_DONGLE_ID
 from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.lib.multilang import tr
+from openpilot.system.ui.lib.multilang import tr, trf
 from openpilot.system.ui.sunnypilot.widgets.list_view import button_item_sp
 from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp
 from openpilot.system.ui.sunnypilot.widgets.sunnylink_pairing_dialog import SunnylinkPairingDialog
@@ -259,7 +259,7 @@ class SunnylinkLayout(Widget):
 
       if backup_status == custom.BackupManagerSP.Status.inProgress:
         self._backup_in_progress = True
-        text = tr(f"Backing up {backup_progress}%")
+        text = trf("Backing up {}%", backup_progress)
         self._backup_btn.set_text(text)
 
       elif backup_status == custom.BackupManagerSP.Status.failed:
@@ -280,7 +280,7 @@ class SunnylinkLayout(Widget):
 
       if restore_status == custom.BackupManagerSP.Status.inProgress:
         self._restore_in_progress = True
-        text = tr(f"Restoring {restore_progress}%")
+        text = trf("Restoring {}%", restore_progress)
         self._restore_btn.set_text(text)
 
       elif restore_status == custom.BackupManagerSP.Status.failed:

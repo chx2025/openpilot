@@ -156,14 +156,6 @@ msgstr "所有状态 (~6.0 GB)"
 msgid "Allow a configured dynamic mode to select Tesla control above this speed."
 msgstr "允许已配置的动态模式在高于此速度时选择 Tesla 控制。"
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Allow the local browser to validate speed-button requests using fresh OEM 0x3C2 templates. Restart after changing."
-msgstr "允许本地浏览器使用最新原车 0x3C2 模板验证速度按钮请求。更改后请重启。"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Allow the local browser to validate turn requests using fresh OEM 0x3E9 templates. Restart after changing."
-msgstr "允许本地浏览器使用最新原车 0x3E9 模板验证转向请求。更改后请重启。"
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
 msgid "Allows the driver to provide limited steering input while openpilot is engaged."
 msgstr "允许驾驶员在 openpilot 处于激活状态时提供有限的转向输入。"
@@ -254,6 +246,10 @@ msgid "Back"
 msgstr "返回"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
+msgid "Backing up {}%"
+msgstr "正在备份 {}%"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Backup Failed"
 msgstr "备份失败"
 
@@ -284,10 +280,6 @@ msgstr "将 connect.comma.ai 添加到主屏幕，像应用一样使用"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 msgid "Bottom"
 msgstr "底部"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
-msgid "C3XL Custom Alert Sounds"
-msgstr "C3XL 自定义提示音"
 
 #: openpilot/selfdrive/ui/layouts/settings/device.py
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
@@ -1317,6 +1309,10 @@ msgstr "同策略模型"
 msgid "Only available when vehicle is off, or always offroad mode is on"
 msgstr "仅在车辆处于设置模式时可用"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
+msgid "Only works above {speed} {unit}."
+msgstr "仅在 {speed} {unit} 以上有效。"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/display.py
 msgid "Onroad Brightness"
 msgstr "行驶时的屏幕亮度"
@@ -1507,6 +1503,10 @@ msgstr "重启设备"
 msgid "Reboot and Update"
 msgstr "重启并更新"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Record Road Video"
+msgstr "录制前向道路视频"
+
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Record and Upload Driver Camera"
 msgstr "录制并上传车内摄像头"
@@ -1577,6 +1577,10 @@ msgstr "恢复失败"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Restore Settings"
 msgstr "恢复设置"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
+msgid "Restoring {}%"
+msgstr "正在恢复 {}%"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Return Dynamic Auto Stock ACC to sunnypilot after a confirmed turn signal."
@@ -1702,6 +1706,10 @@ msgstr "选择并分别调校官方、实验或 TN-NoDEC 规划器。"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/platform_selector.py
 msgid "Select vehicle to force fingerprint manually."
 msgstr "选择车型以手动匹配。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
+msgid "Select {}"
+msgstr "选择{}"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
 msgid "Selecting a higher finger count may reduce accidental activations."
@@ -1873,6 +1881,10 @@ msgstr "带手动驻车制动的停止与行驶辅助系统 (Beta)"
 msgid "Stop/Go"
 msgstr "停车/起步"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Store forward road-camera video with each route. Disabled by default to save storage; qlog/rlog diagnostics remain available."
+msgstr "随每条路线保存前向道路摄像头视频。默认关闭以节省存储空间；仍保留用于诊断的 qlog/rlog。"
+
 #: openpilot/selfdrive/ui/onroad/alert_renderer.py
 msgid "System Unresponsive"
 msgstr "系统无响应"
@@ -1925,17 +1937,9 @@ msgstr "Tesla 控制配置"
 msgid "Tesla Radar Backend"
 msgstr "Tesla 雷达后端"
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Tesla Speed Button Validation"
-msgstr "Tesla 车速按钮验证"
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Tesla Traffic Control"
 msgstr "Tesla 交通控制"
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Tesla Turn Signal Validation"
-msgstr "Tesla 转向灯验证"
 
 #: openpilot/system/ui/widgets/network.py
 msgid "Tethering Password"
@@ -2141,10 +2145,6 @@ msgstr "利用地图数据预测前方弯道并估算合适的通过车速。"
 msgid "Use speed hysteresis to select both Tesla AP control axes or sunnypilot control axes."
 msgstr "使用速度滞环，同时选择 Tesla AP 或 sunnypilot 的横向与纵向控制。"
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
-msgid "Use the C3XL engage and disengage sound profile after restart."
-msgstr "重启后使用 C3XL 接管和退出提示音配置。"
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise.py
 msgid "Use vision path predictions to estimate the appropriate speed to drive through turns ahead."
 msgstr "使用视觉路径预测来估算通过前方弯道时的合适车速。"
@@ -2190,6 +2190,10 @@ msgstr "系统唤醒行为设置"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Warning"
 msgstr "超速警告"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
+msgid "Warning: May experience steering oscillations below {speed} {unit} during turns, recommend disabling this feature if you experience these."
+msgstr "警告：弯道中低于 {speed} {unit} 时可能出现方向盘振荡；若遇到此问题，建议关闭该功能。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Warning: Provides a warning when exceeding the current road's speed limit."

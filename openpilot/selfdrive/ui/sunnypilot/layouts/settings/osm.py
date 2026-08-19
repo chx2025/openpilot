@@ -18,7 +18,7 @@ from openpilot.selfdrive.ui.ui_state import device, ui_state
 from openpilot.selfdrive.ui.layouts.settings.software import time_ago
 from openpilot.common.hardware.hw import Paths
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.system.ui.lib.multilang import tr
+from openpilot.system.ui.lib.multilang import tr, trf
 from openpilot.system.ui.widgets import DialogResult, Widget
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from openpilot.system.ui.widgets.list_view import text_item
@@ -148,7 +148,12 @@ class OSMLayout(Widget):
     key = "OsmLocation" if region_type == "Country" else "OsmState"
     current = ui_state.params.get(f"{key}Name") or ""
 
-    dialog = TreeOptionDialog(tr(f"Select {region_type}"), [TreeFolder(folder="", nodes=locations)], current_ref=current, search_prompt="Perform a search")
+    dialog = TreeOptionDialog(
+      trf("Select {}", tr(region_type)),
+      [TreeFolder(folder="", nodes=locations)],
+      current_ref=current,
+      search_prompt="Perform a search",
+    )
     dialog.on_exit = lambda res: self._handle_region_selection(region_type, locations, key, res, dialog.selection_ref)
     gui_app.push_widget(dialog)
 

@@ -87,13 +87,6 @@ class TeslaControlSettingsLayout(Widget):
       label_callback=lambda value: f"{value} km/h",
       description=tr("Return a configured dynamic mode to sunnypilot below this speed."),
     )
-    self.traffic_control_mode = multiple_button_item_sp(
-      title=lambda: tr("Tesla Traffic Control"),
-      description=lambda: tr("Observe and Shadow never alter control. Stop and Stop/Go are experimental closed-course constraints."),
-      buttons=[lambda: tr("Off"), lambda: tr("Observe"), lambda: tr("Shadow"), lambda: tr("Stop"), lambda: tr("Stop/Go")],
-      param="TeslaTrafficControlMode",
-      inline=False,
-    )
     self.traffic_stop_reference = option_item_sp(
       title=tr("Traffic Stop Reference"),
       param="TeslaTrafficStopReference",
@@ -118,7 +111,6 @@ class TeslaControlSettingsLayout(Widget):
       self.curve_to_sp,
       self.speed_high,
       self.speed_low,
-      self.traffic_control_mode,
       self.traffic_stop_reference,
       self.traffic_adaptive_reference,
     ]
@@ -150,8 +142,6 @@ class TeslaControlSettingsLayout(Widget):
     self.speed_high.action_item.set_enabled(offroad)
     self.speed_low.action_item.set_enabled(offroad)
     planner_stopped = not planner_session_is_active(ui_state.sm)
-    self.traffic_control_mode.action_item.set_enabled(planner_stopped)
-    self.traffic_control_mode.action_item.set_enabled_buttons(None if has_longitudinal else {0, 1, 2})
     self.traffic_stop_reference.action_item.set_enabled(planner_stopped)
     self.traffic_adaptive_reference.action_item.set_enabled(planner_stopped)
     self._update_visibility()
@@ -188,6 +178,13 @@ class TeslaControlSettingsAdapter:
       param="TeslaARS408Radar",
       inline=False,
     )
+    self.traffic_control_mode = multiple_button_item_sp(
+      title=lambda: tr("Tesla Traffic Control"),
+      description=lambda: tr("Observe and Shadow never alter control. Stop and Stop/Go are experimental closed-course constraints."),
+      buttons=[lambda: tr("Off"), lambda: tr("Observe"), lambda: tr("Shadow"), lambda: tr("Stop"), lambda: tr("Stop/Go")],
+      param="TeslaTrafficControlMode",
+      inline=False,
+    )
     self._settings_layout = TeslaControlSettingsLayout(lambda: gui_app.pop_widget())
     self.settings_button = button_item_sp(
       title=tr("Tesla Control Profile"),
@@ -198,3 +195,6 @@ class TeslaControlSettingsAdapter:
 
   def update_settings(self) -> None:
     self.radar_backend.action_item.set_enabled(ui_state.is_offroad())
+    planner_stopped = not planner_session_is_active(ui_state.sm)
+    self.traffic_control_mode.action_item.set_enabled(planner_stopped)
+    self.traffic_control_mode.action_item.set_enabled_buttons(None if ui_state.has_longitudinal_control else {0, 1, 2})

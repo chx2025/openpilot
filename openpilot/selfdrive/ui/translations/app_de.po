@@ -156,14 +156,6 @@ msgstr ""
 msgid "Allow a configured dynamic mode to select Tesla control above this speed."
 msgstr ""
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Allow the local browser to validate speed-button requests using fresh OEM 0x3C2 templates. Restart after changing."
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Allow the local browser to validate turn requests using fresh OEM 0x3E9 templates. Restart after changing."
-msgstr ""
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
 msgid "Allows the driver to provide limited steering input while openpilot is engaged."
 msgstr ""
@@ -254,6 +246,10 @@ msgid "Back"
 msgstr "Zurück"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
+msgid "Backing up {}%"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Backup Failed"
 msgstr ""
 
@@ -283,10 +279,6 @@ msgstr "Fügen Sie connect.comma.ai Ihrem Startbildschirm hinzu, um es wie eine 
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/visuals.py
 msgid "Bottom"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
-msgid "C3XL Custom Alert Sounds"
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/settings/device.py
@@ -1315,6 +1307,10 @@ msgstr ""
 msgid "Only available when vehicle is off, or always offroad mode is on"
 msgstr ""
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
+msgid "Only works above {speed} {unit}."
+msgstr ""
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/display.py
 msgid "Onroad Brightness"
 msgstr ""
@@ -1505,6 +1501,10 @@ msgstr "Gerät neu starten"
 msgid "Reboot and Update"
 msgstr "Neustarten und aktualisieren"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Record Road Video"
+msgstr ""
+
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Record and Upload Driver Camera"
 msgstr "Fahrerkamera aufzeichnen und hochladen"
@@ -1574,6 +1574,10 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
 msgid "Restore Settings"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/sunnylink.py
+msgid "Restoring {}%"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
@@ -1699,6 +1703,10 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/platform_selector.py
 msgid "Select vehicle to force fingerprint manually."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/osm.py
+msgid "Select {}"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
@@ -1871,6 +1879,10 @@ msgstr ""
 msgid "Stop/Go"
 msgstr ""
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Store forward road-camera video with each route. Disabled by default to save storage; qlog/rlog diagnostics remain available."
+msgstr ""
+
 #: openpilot/selfdrive/ui/onroad/alert_renderer.py
 msgid "System Unresponsive"
 msgstr "System reagiert nicht"
@@ -1923,16 +1935,8 @@ msgstr ""
 msgid "Tesla Radar Backend"
 msgstr ""
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Tesla Speed Button Validation"
-msgstr ""
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Tesla Traffic Control"
-msgstr ""
-
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
-msgid "Tesla Turn Signal Validation"
 msgstr ""
 
 #: openpilot/system/ui/widgets/network.py
@@ -2136,10 +2140,6 @@ msgstr ""
 msgid "Use speed hysteresis to select both Tesla AP control axes or sunnypilot control axes."
 msgstr ""
 
-#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
-msgid "Use the C3XL engage and disengage sound profile after restart."
-msgstr ""
-
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise.py
 msgid "Use vision path predictions to estimate the appropriate speed to drive through turns ahead."
 msgstr ""
@@ -2184,6 +2184,10 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Warning"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla.py
+msgid "Warning: May experience steering oscillations below {speed} {unit} during turns, recommend disabling this feature if you experience these."
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py

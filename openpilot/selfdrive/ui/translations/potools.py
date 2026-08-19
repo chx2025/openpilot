@@ -215,13 +215,13 @@ def extract_strings(files: list[str], basedir: str) -> list[POEntry]:
       else:
         continue
 
-      if name not in ('tr', 'trn', 'tr_noop'):
+      if name not in ('tr', 'trf', 'trn', 'tr_noop'):
         continue
 
       ref = f'{filepath}:{node.lineno}'
       is_flagged = name in ('tr', 'trn')
 
-      if name in ('tr', 'tr_noop'):
+      if name in ('tr', 'trf', 'tr_noop'):
         if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
           continue
         msgid = node.args[0].value

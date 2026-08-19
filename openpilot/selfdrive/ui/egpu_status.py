@@ -16,6 +16,30 @@ class EgpuStatus:
   details: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class EgpuPanelStyle:
+  font_size: int
+  line_height: int
+  panel_width: int
+  bottom_gap: int
+  background_alpha: int
+
+
+def egpu_icon_visible(*, connected: bool) -> bool:
+  """The onroad source icon is persistent for exactly the USB-connected state."""
+  return connected
+
+
+def egpu_panel_style(*, compact: bool) -> EgpuPanelStyle:
+  return EgpuPanelStyle(
+    font_size=48,
+    line_height=58,
+    panel_width=1200,
+    bottom_gap=73 if compact else 293,
+    background_alpha=0,
+  )
+
+
 def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active: bool | None,
                       model_alive: bool, model_big: bool, telemetry_valid: bool,
                       usb_speed_mbps: int = 0, model_fps: float = 0.0,
@@ -84,14 +108,19 @@ def draw_egpu_status_panel(rect: rl.Rectangle, font: rl.Font, *, compact: bool) 
   if not status.visible:
     return
 
-  panel_width = 440
-  panel_height = 132 if len(status.details) >= 3 else 82
-  bottom_margin = 205 if compact else 425
-  panel = rl.Rectangle(rect.x + 12, rect.y + rect.height - bottom_margin, panel_width, panel_height)
-  rl.draw_rectangle_rounded(panel, 0.16, 8, rl.Color(0, 0, 0, 170))
+  style = egpu_panel_style(compact=compact)
   lines = (status.headline, *status.details)
+  panel_height = len(lines) * style.line_height
+  panel = rl.Rectangle(
+    rect.x + 12,
+    rect.y + rect.height - style.bottom_gap - panel_height,
+    style.panel_width,
+    panel_height,
+  )
+  if style.background_alpha:
+    rl.draw_rectangle_rounded(panel, 0.16, 8, rl.Color(0, 0, 0, style.background_alpha))
   for index, line in enumerate(lines):
     color = rl.Color(80, 220, 120, 245) if status.healthy and index == 0 else (
       rl.Color(255, 180, 60, 245) if index == 0 else rl.Color(255, 255, 255, 225)
     )
-    rl.draw_text_ex(font, line, rl.Vector2(panel.x + 12, panel.y + 8 + index * 29), 24, 0, color)
+    rl.draw_text_ex(font, line, rl.Vector2(panel.x + 12, panel.y + index * style.line_height), style.font_size, 0, color)

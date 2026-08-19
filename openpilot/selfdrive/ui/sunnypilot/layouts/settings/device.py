@@ -11,7 +11,7 @@ from openpilot.common.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets.list_view import option_item_sp, multiple_button_item_sp, button_item_sp, \
-  dual_button_item_sp, toggle_item_sp, Spacer
+  dual_button_item_sp, Spacer
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.button import ButtonStyle
 from openpilot.system.ui.widgets.confirm_dialog import alert_dialog, ConfirmDialog
@@ -87,12 +87,6 @@ class DeviceLayoutSP(DeviceLayout):
     )
     self._quiet_mode_and_dcam.action_item.right_button.set_button_style(ButtonStyle.NORMAL)
 
-    self._custom_alert_sounds = toggle_item_sp(
-      title=tr("C3XL Custom Alert Sounds"),
-      param="CustomAlertSounds",
-      description=tr("Use the C3XL engage and disengage sound profile after restart."),
-    )
-
     self._reg_and_training = dual_button_item_sp(
       left_text=lambda: tr("Regulatory"),
       left_callback=self._on_regulatory,
@@ -131,7 +125,6 @@ class DeviceLayoutSP(DeviceLayout):
       self._max_time_offroad,
       LineSeparator(height=10),
       self._quiet_mode_and_dcam,
-      self._custom_alert_sounds,
       self._reg_and_training,
       self._onroad_uploads_and_reset_settings,
       Spacer(10),

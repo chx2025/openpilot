@@ -109,6 +109,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RecordAudio", {PERSISTENT | BACKUP, BOOL}},
     {"RecordFront", {PERSISTENT | BACKUP, BOOL}},
     {"RecordFrontLock", {PERSISTENT, BOOL}},  // for the internal fleet
+    {"RecordRoadVideo", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"SecOCKey", {PERSISTENT | DONT_LOG | BACKUP, STRING}},
     {"ShowDebugInfo", {PERSISTENT, BOOL}},
     {"RouteCount", {PERSISTENT, INT, "0"}},
@@ -237,8 +238,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TeslaTouchLongitudinalSwitch", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaApHybrid", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaDynamicApLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"TeslaSpeedButtonValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"TeslaTurnSignalValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaTurnSignalTestRequest", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
     {"TeslaTurnSignalTestResult", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
     {"TeslaTurnSignalTestStatus", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
@@ -268,7 +267,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"AccelPersonality", {PERSISTENT | BACKUP, INT, "1"}},
     // Test-only local device console starts by default and has no authentication.
     {"WebTerminalEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
-    {"CustomAlertSounds", {PERSISTENT | BACKUP, BOOL, "1"}},
     {"TeslaTrafficControlMode", {PERSISTENT | BACKUP, INT, "1"}},
     {"TeslaTrafficStopReference", {PERSISTENT | BACKUP, INT, "60"}},  // decimeters
     {"TeslaTrafficAdaptiveReference", {PERSISTENT | BACKUP, BOOL, "0"}},
