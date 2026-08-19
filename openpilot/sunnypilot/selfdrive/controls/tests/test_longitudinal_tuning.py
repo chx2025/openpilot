@@ -1,8 +1,10 @@
+from openpilot.cereal import log, messaging
+from openpilot.common.params import UnknownKeyName
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import BackendId, get_backend
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import (
-  DEFAULT_VALUES, TuningController, adjusted_obstacle, backend_values, save_backend_values,
+  DEFAULT_VALUES, LongitudinalTuning, TuningController, adjusted_obstacle, backend_values,
+  follow_distance_for_personality, save_backend_values,
 )
-from openpilot.common.params import UnknownKeyName
 
 
 class FakeParams:
@@ -85,3 +87,11 @@ def test_old_prebuilt_without_new_param_key_falls_back_to_upstream_defaults():
 
   controller = TuningController(OldPrebuiltParams(), get_backend(BackendId.OFFICIAL), poll_interval=0.0)
   assert controller.update(0.05).as_dict() == DEFAULT_VALUES
+
+
+def test_capnp_personality_enum_selects_runtime_follow_distance():
+  msg = messaging.new_message("selfdriveState")
+  msg.selfdriveState.personality = log.LongitudinalPersonality.aggressive
+  personality = msg.as_reader().selfdriveState.personality
+
+  assert follow_distance_for_personality(personality, LongitudinalTuning()) == 1.25

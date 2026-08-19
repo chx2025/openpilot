@@ -10,7 +10,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import (
-  LongitudinalTuning, TuningController, adjusted_obstacle,
+  LongitudinalTuning, TuningController, adjusted_obstacle, follow_distance_for_personality,
 )
 
 if __name__ == '__main__':  # generating code
@@ -80,6 +80,7 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
     return 1.25
   else:
     raise NotImplementedError("Longitudinal personality not supported")
+
 
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
@@ -334,11 +335,7 @@ class LongitudinalMpc:
     return lead_xv
 
   def update(self, radarstate, personality=log.LongitudinalPersonality.standard):
-    t_follow = {
-      log.LongitudinalPersonality.relaxed: self.runtime_tuning.t_follow_relaxed,
-      log.LongitudinalPersonality.standard: self.runtime_tuning.t_follow_standard,
-      log.LongitudinalPersonality.aggressive: self.runtime_tuning.t_follow_aggressive,
-    }[personality]
+    t_follow = follow_distance_for_personality(personality, self.runtime_tuning)
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)

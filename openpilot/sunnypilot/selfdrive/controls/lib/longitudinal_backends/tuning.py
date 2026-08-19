@@ -2,6 +2,7 @@ import math
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
+from openpilot.cereal import log
 from openpilot.common.params import UnknownKeyName
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import BackendSpec
 
@@ -59,6 +60,20 @@ VALUE_SPECS = {
   "stop_distance": (1.0, 12.0, 0.01, 0.50),
   "jerk_factor_relaxed": (0.01, 3.0, 0.01, 1.0),
 }
+
+
+def follow_distance_for_personality(personality, tuning: LongitudinalTuning) -> float:
+  # Cap'n Proto message fields are DynamicEnum objects. They compare equal to
+  # these integer constants but have different hashes, so a dict keyed by the
+  # constants raises KeyError for the real message value.
+  if personality == log.LongitudinalPersonality.relaxed:
+    return tuning.t_follow_relaxed
+  elif personality == log.LongitudinalPersonality.standard:
+    return tuning.t_follow_standard
+  elif personality == log.LongitudinalPersonality.aggressive:
+    return tuning.t_follow_aggressive
+  else:
+    raise NotImplementedError("Longitudinal personality not supported")
 
 
 def _validated_values(raw: object) -> LongitudinalTuning:
