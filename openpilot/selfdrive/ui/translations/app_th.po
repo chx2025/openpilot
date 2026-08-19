@@ -76,6 +76,18 @@ msgstr "<br><br>การปรับเทียบความล่าช้�
 msgid "<br><br>Steering lag calibration is {}% complete."
 msgstr "<br><br>การปรับเทียบความล่าช้าของพวงมาลัย {}% เสร็จสมบูรณ์"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "ACC"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "ACC ignores model acceleration. Dynamic follows DEC. E2E allows model acceleration in Experimental Mode. Applies next drive."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "ACC uses TN MPC without model acceleration. E2E allows model acceleration in Experimental Mode. Applies next drive."
+msgstr ""
+
 #: openpilot/selfdrive/ui/widgets/ssh_key.py
 msgid "ADD"
 msgstr "เพิ่ม"
@@ -664,6 +676,7 @@ msgid "Driving Personality"
 msgstr "บุคลิกภาพในการขับขี่"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/hyundai.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
 msgid "Dynamic"
 msgstr ""
 
@@ -673,6 +686,10 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Dynamic Auto Stock ACC"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "E2E"
 msgstr ""
 
 #: openpilot/system/ui/widgets/network.py
@@ -859,6 +876,10 @@ msgstr ""
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Experimental Mode"
 msgstr "โหมดทดลอง"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "Experimental Model Longitudinal"
+msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/subaru.py
 msgid "Experimental feature to enable auto-resume during stop-and-go for certain supported Subaru platforms."
@@ -1941,6 +1962,10 @@ msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
 msgid "TN Accel Profile"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "TN Model Longitudinal"
 msgstr ""
 
 #: openpilot/selfdrive/ui/layouts/settings/software.py

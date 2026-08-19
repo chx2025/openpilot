@@ -125,7 +125,9 @@ EXTRA_SETTINGS: tuple[dict[str, Any], ...] = (
   {"key": "TeslaTouchLongitudinalSwitch", "widget": "toggle", "title": "4指触摸切换原车ACC", "group": "Tesla", "offroad_only": True},
   {"key": "WebTerminalEnabled", "widget": "toggle", "title": "启用网页终端（高风险）", "category": "Developer", "group": "本地网页控制台", "offroad_only": True},
   {"key": "RecordRoadVideo", "widget": "toggle", "title": "录制前向道路视频", "category": "Developer", "group": "路线记录", "offroad_only": True},
-  {"key": "LongitudinalPlannerMode", "widget": "multiple_button", "title": "纵向规划器", "group": "纵向 MPC", "options": [{"value": 0, "label": "官方（默认）"}, {"value": 2, "label": "TN-NoDEC"}], "offroad_only": True},
+  {"key": "LongitudinalPlannerMode", "widget": "multiple_button", "title": "纵向规划器", "group": "纵向 MPC", "options": [{"value": 0, "label": "官方（默认）"}, {"value": 1, "label": "实验"}, {"value": 2, "label": "TN-NoDEC"}], "offroad_only": True},
+  {"key": "ExperimentalLongitudinalModelPolicy", "widget": "multiple_button", "title": "实验规划器模型纵向", "group": "纵向 MPC", "options": [{"value": 0, "label": "ACC"}, {"value": 1, "label": "动态"}, {"value": 2, "label": "E2E"}], "offroad_only": True},
+  {"key": "TNLongitudinalModelPolicy", "widget": "multiple_button", "title": "TN 模型纵向", "group": "纵向 MPC", "options": [{"value": 0, "label": "ACC"}, {"value": 2, "label": "E2E"}], "offroad_only": True},
   {"key": "AccelPersonalityEnabled", "widget": "toggle", "title": "TN 加速个性控制", "group": "纵向 MPC", "offroad_only": False},
   {"key": "AccelPersonality", "widget": "multiple_button", "title": "TN 加速个性", "group": "纵向 MPC", "options": [{"value": 0, "label": "Eco"}, {"value": 1, "label": "Normal"}, {"value": 2, "label": "Sport"}], "offroad_only": False},
 )

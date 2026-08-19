@@ -76,6 +76,18 @@ msgstr "<br><br>转向延迟校准完成。"
 msgid "<br><br>Steering lag calibration is {}% complete."
 msgstr "<br><br>转向延迟校准已完成 {}%。"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "ACC"
+msgstr "ACC"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "ACC ignores model acceleration. Dynamic follows DEC. E2E allows model acceleration in Experimental Mode. Applies next drive."
+msgstr "ACC 忽略模型加速度；动态模式跟随 DEC；实验模式下 E2E 允许模型加速度参与。下次行驶生效。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "ACC uses TN MPC without model acceleration. E2E allows model acceleration in Experimental Mode. Applies next drive."
+msgstr "ACC 使用 TN MPC 且不采用模型加速度；实验模式下 E2E 允许模型加速度参与。下次行驶生效。"
+
 #: openpilot/selfdrive/ui/widgets/ssh_key.py
 msgid "ADD"
 msgstr "添加"
@@ -666,6 +678,7 @@ msgid "Driving Personality"
 msgstr "驾驶风格"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/hyundai.py
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
 msgid "Dynamic"
 msgstr "动态"
 
@@ -676,6 +689,10 @@ msgstr "动态 AP 控制（实验）"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Dynamic Auto Stock ACC"
 msgstr "动态切换原车 ACC"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "E2E"
+msgstr "E2E"
 
 #: openpilot/system/ui/widgets/network.py
 msgid "EDIT"
@@ -861,6 +878,10 @@ msgstr "点击进入  行驶模式 "
 #: openpilot/selfdrive/ui/layouts/settings/toggles.py
 msgid "Experimental Mode"
 msgstr "实验模式"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "Experimental Model Longitudinal"
+msgstr "实验规划器模型纵向"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/subaru.py
 msgid "Experimental feature to enable auto-resume during stop-and-go for certain supported Subaru platforms."
@@ -1944,6 +1965,10 @@ msgstr "TN 加速风格"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
 msgid "TN Accel Profile"
 msgstr "TN 加速方案"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_planner.py
+msgid "TN Model Longitudinal"
+msgstr "TN 模型纵向"
 
 #: openpilot/selfdrive/ui/layouts/settings/software.py
 msgid "Target Branch"

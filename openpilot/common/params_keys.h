@@ -250,6 +250,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     // Desired provider is persistent; Active is latched for one onroad session.
     {"LongitudinalPlannerMode", {PERSISTENT | BACKUP, INT, "0"}},
     {"ActiveLongitudinalBackend", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT}},
+    {"ExperimentalLongitudinalModelPolicy", {PERSISTENT | BACKUP, INT, "0"}},
+    {"TNLongitudinalModelPolicy", {PERSISTENT | BACKUP, INT, "0"}},
     {"LongitudinalTuningConfig", {PERSISTENT | BACKUP, JSON}},
     {"MpcTuningProfile", {PERSISTENT | BACKUP, INT, "0"}},
     {"MpcXObstacleCost", {PERSISTENT | BACKUP, INT, "300"}},
