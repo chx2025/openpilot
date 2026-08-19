@@ -2,6 +2,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import (
   DEFAULT_VALUES, TuningController, adjusted_obstacle, backend_values, save_backend_values,
 )
+from openpilot.common.params import UnknownKeyName
 
 
 class FakeParams:
@@ -72,3 +73,15 @@ def test_invalid_revision_keeps_last_known_good_values():
   params.values["LongitudinalTuningConfig"] = {"schemaVersion": 1, "revision": 99, "backends": {"official": {"values": {"j_ego_cost": -1}}}}
 
   assert controller.update(1.0) == good
+
+
+def test_old_prebuilt_without_new_param_key_falls_back_to_upstream_defaults():
+  class OldPrebuiltParams(FakeParams):
+    def get(self, key, return_default=False):
+      del return_default
+      if key == "LongitudinalTuningConfig":
+        raise UnknownKeyName(key.encode())
+      return self.values.get(key)
+
+  controller = TuningController(OldPrebuiltParams(), get_backend(BackendId.OFFICIAL), poll_interval=0.0)
+  assert controller.update(0.05).as_dict() == DEFAULT_VALUES

@@ -2,6 +2,7 @@ import math
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any
 
+from openpilot.common.params import UnknownKeyName
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import BackendSpec
 
 
@@ -185,7 +186,7 @@ class TuningController:
       self.poll_elapsed = 0.0
       try:
         target = backend_values(self.params, self.backend)
-      except ValueError:
+      except (ValueError, UnknownKeyName):
         target = None
       if target is not None:
         self.target = target
