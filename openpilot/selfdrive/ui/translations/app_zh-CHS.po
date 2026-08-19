@@ -357,6 +357,10 @@ msgstr "选择 TN-NoDEC 的经济、标准或运动加速度限制。"
 msgid "Choose how Automatic Lane Centering (ALC) behaves after the brake pedal is manually pressed in sunnypilot."
 msgstr "选择在sunnypilot中踩下制动踏板后自动车道居中 ALC 的行为。"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Choose the direct stop profile or the independent radar-like traffic obstacle channel."
+msgstr "选择直接停车曲线或独立的类雷达交通障碍物通道。"
+
 #: openpilot/system/ui/sunnypilot/widgets/sunnylink_pairing_dialog.py
 msgid "Choose your sponsorship tier and confirm your support"
 msgstr "选择您的赞助级别并确认您的支持"
@@ -1382,6 +1386,14 @@ msgstr "将设备与 comma connect（connect.comma.ai）配对，领取您的 co
 msgid "Paired"
 msgstr "已绑定"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Passive"
+msgstr "被动释放"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Passive only removes the obstacle. Planner Start also requests a bounded longitudinal departure."
+msgstr "被动释放仅移除障碍物；规划器起步还会请求受限的纵向起步。"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/mads_settings.py
 msgid "Pause"
 msgstr "暂停"
@@ -1401,6 +1413,10 @@ msgstr "暂停保持：当踩下制动踏板时，ALC将暂停。"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/cruise_sub_layouts/speed_limit_settings.py
 msgid "Percent: Adds a percent offset [Speed Limit + (Offset % Speed Limit)]"
 msgstr "Percent 百分比：添加百分比偏移量 [限速值 + (限速值 × 偏移量 %)]"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Planner Start"
+msgstr "规划器起步"
 
 #: openpilot/selfdrive/ui/widgets/setup.py
 msgid "Please connect to Wi-Fi to complete initial pairing"
@@ -1865,6 +1881,10 @@ msgstr "停车"
 msgid "Stop Distance"
 msgstr "停车距离"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Stop Profile"
+msgstr "停车曲线"
+
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/subaru.py
 msgid "Stop and Go (Beta)"
 msgstr "停止与行驶辅助系统 (Beta)"
@@ -2057,8 +2077,20 @@ msgid "Total Delay:"
 msgstr "总延迟："
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Traffic Obstacle"
+msgstr "交通障碍物"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Traffic Obstacle GO"
+msgstr "交通障碍物绿灯起步"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Traffic Stop Reference"
 msgstr "交通停车参考"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Traffic Stop Strategy"
+msgstr "交通灯停车策略"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/device.py
 msgid "Training Guide"

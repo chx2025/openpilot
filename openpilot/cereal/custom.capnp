@@ -540,7 +540,26 @@ struct ModelDataV2SP @0xa1680744031fdb2d {
   }
 }
 
-struct CustomReserved10 @0xcb9fd56c7057593a {
+struct TrafficObstacleState @0xcb9fd56c7057593a {
+  # A traffic-control target published independently from radarState. It is
+  # never a physical vehicle and must not be forwarded to FCW or vehicle CAN.
+  present @0 :Bool;
+  dRel @1 :Float32;
+  vRel @2 :Float32;
+  aRel @3 :Float32;
+  desiredStopDistance @4 :Float32;
+  phase @5 :UInt8;
+  lightState @6 :UInt8;
+  sourceBus @7 :UInt8;
+  quality @8 :UInt8;
+  confidence @9 :Float32;
+  eventId @10 :UInt32;
+  frameMonoTime @11 :UInt64;
+  validForControl @12 :Bool;
+  suppressedByLead @13 :Bool;
+  shouldStop @14 :Bool;
+  startRequested @15 :Bool;
+  mode @16 :UInt8;
 }
 
 struct CustomReserved11 @0xc2243c65e0340384 {

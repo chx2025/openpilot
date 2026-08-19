@@ -48,6 +48,7 @@ class TrafficControlConfig:
   model_alignment_min_m: float = 8.0
   model_alignment_max_m: float = 25.0
   model_alignment_ratio: float = 0.20
+  retain_event_with_lead: bool = False
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,8 @@ class TeslaTrafficControlController:
     self.config = config or TrafficControlConfig()
     self.transition_seq = 0
     self.transition_reason = ""
+    self.event_seq = 0
+    self.event_id = 0
     self.last_distance_innovation = 0.0
     self.phase = TrafficControlPhase.off
     self.red_since_ns: int | None = None
@@ -113,6 +116,7 @@ class TeslaTrafficControlController:
 
   def reset(self) -> None:
     self.phase = TrafficControlPhase.off
+    self.event_id = 0
     self.red_since_ns = None
     self.green_since_ns = None
     self.release_since_ns = None
@@ -185,6 +189,8 @@ class TeslaTrafficControlController:
     # unstable and lack lane identity. Never let them constrain the planner.
     if observation.distance > self.config.max_control_distance:
       return
+    self.event_seq += 1
+    self.event_id = self.event_seq
     self.event_source_bus = observation.source_bus
     self.event_control_source = observation.control_source
     self.last_event_observation_ns = self.last_update_ns
@@ -256,12 +262,20 @@ class TeslaTrafficControlController:
     # allowed to constrain longitudinal planning. If a lead appears, release
     # this independent constraint and leave following entirely to the base
     # planner. Invalid radar is treated conservatively as unknown, not no lead.
-    if self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and (not radar_valid or lead_present):
+    if self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and not radar_valid:
       was_tracking = self.phase != TrafficControlPhase.off
       self.reset()
       self.last_update_ns = now_ns
       if was_tracking:
-        self._mark_transition("lead_present" if lead_present else "radar_invalid")
+        self._mark_transition("radar_invalid")
+      return self._decision()
+    if (self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and lead_present and
+        not self.config.retain_event_with_lead):
+      was_tracking = self.phase != TrafficControlPhase.off
+      self.reset()
+      self.last_update_ns = now_ns
+      if was_tracking:
+        self._mark_transition("lead_present")
       return self._decision()
 
     valid_red = observation.valid_for_control and observation.light_state == 1

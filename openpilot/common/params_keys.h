@@ -268,6 +268,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     // Test-only local device console starts by default and has no authentication.
     {"WebTerminalEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaTrafficControlMode", {PERSISTENT | BACKUP, INT, "1"}},
+    {"TeslaTrafficControlStrategy", {PERSISTENT | BACKUP, INT, "0"}},
+    {"TeslaTrafficObstacleGoPolicy", {PERSISTENT | BACKUP, INT, "0"}},
     {"TeslaTrafficStopReference", {PERSISTENT | BACKUP, INT, "60"}},  // decimeters
     {"TeslaTrafficAdaptiveReference", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"ToyotaEnforceStockLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
