@@ -21,6 +21,7 @@ ENABLED_STATES = (VisionState.enabled, VisionState.overriding, *ACTIVE_STATES)
 
 _ENTERING_PRED_LAT_ACC_TH = 1.3  # Predicted Lat Acc threshold to trigger entering turn state.
 _ABORT_ENTERING_PRED_LAT_ACC_TH = 1.1  # Predicted Lat Acc threshold to abort entering state if speed drops.
+_ENTERING_CONFIRMATION_FRAMES = 5  # 0.20 s of continuity at the 20 Hz model rate.
 
 _TURNING_LAT_ACC_TH = 1.6  # Lat Acc threshold to trigger turning state.
 
@@ -65,6 +66,7 @@ class SmartCruiseControlVision:
     self.state = VisionState.disabled
     self.current_lat_acc = 0.
     self.max_pred_lat_acc = 0.
+    self.entering_prediction_frames = 0
 
   def get_a_target_from_control(self) -> float:
     return self.a_target
@@ -105,18 +107,25 @@ class SmartCruiseControlVision:
       # longitudinal and feature disable always have priority in a non-disabled state
       if not self.long_enabled or not self.enabled:
         self.state = VisionState.disabled
+        self.entering_prediction_frames = 0
       elif self.long_override:
         self.state = VisionState.overriding
+        self.entering_prediction_frames = 0
 
       else:
         # ENABLED
         if self.state == VisionState.enabled:
           # Do not enter a turn control cycle if the speed is low.
           if self.v_ego <= MIN_V:
-            pass
+            self.entering_prediction_frames = 0
           # If significant lateral acceleration is predicted ahead, then move to Entering turn state.
           elif self.max_pred_lat_acc >= _ENTERING_PRED_LAT_ACC_TH:
-            self.state = VisionState.entering
+            self.entering_prediction_frames += 1
+            if self.entering_prediction_frames >= _ENTERING_CONFIRMATION_FRAMES:
+              self.state = VisionState.entering
+              self.entering_prediction_frames = 0
+          else:
+            self.entering_prediction_frames = 0
 
         # OVERRIDING
         elif self.state == VisionState.overriding:

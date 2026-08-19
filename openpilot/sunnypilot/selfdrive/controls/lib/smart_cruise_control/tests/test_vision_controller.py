@@ -4,6 +4,8 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,7 +18,9 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control import MIN_V
-from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import SmartCruiseControlVision, _ENTERING_PRED_LAT_ACC_TH
+from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.vision_controller import (
+  SmartCruiseControlVision, _ENTERING_CONFIRMATION_FRAMES, _ENTERING_PRED_LAT_ACC_TH,
+)
 from openpilot.common.test import OpenpilotTestCase
 
 VisionState = custom.LongitudinalPlanSP.SmartCruiseControl.VisionState
@@ -153,6 +157,22 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
     self.scc_v.update(self.sm, True, False, 10.0, 0.0, 0.0)
     assert np.isclose(self.scc_v.current_lat_acc, 1.0)
 
+  def test_route_verified_straight_transient_never_activates_turn_control(self):
+    fixture_path = Path(__file__).parent / "fixtures/sccv_straight_transient.json"
+    fixture = json.loads(fixture_path.read_text())
+    states = []
+    for frame in fixture["frames"]:
+      mdl = generate_modelV2()
+      mdl.modelV2.velocity.x = [1.0] * len(frame["predicted_lateral_accel"])
+      mdl.modelV2.orientationRate.z = frame["predicted_lateral_accel"]
+      self.sm["modelV2"] = mdl.modelV2
+      self.sm["controlsState"].desiredCurvature = frame["desired_curvature"]
+      self.sm["controlsState"].curvature = frame["actual_curvature"]
+      self.scc_v.update(self.sm, True, False, frame["v_ego"], 0.0, 0.0)
+      states.append(self.scc_v.state)
+
+    assert states == [VisionState.enabled] * len(states)
+
   @parameterized.expand([
       ("p97_just_above_threshold", True),
       ("single_spike_filtered", False),
@@ -191,8 +211,10 @@ class TestSmartCruiseControlVision(OpenpilotTestCase):
 
     # 1st update: disabled -> enabled
     self.scc_v.update(self.sm, True, False, v_ego, 0.0, 0.0)
-    # 2nd update: evaluate entering condition from enabled state
-    self.scc_v.update(self.sm, True, False, v_ego, 0.0, 0.0)
+    # A real curve must remain above the existing p97 threshold across the
+    # route-derived confirmation window before turn control becomes active.
+    for _ in range(_ENTERING_CONFIRMATION_FRAMES):
+      self.scc_v.update(self.sm, True, False, v_ego, 0.0, 0.0)
 
     # Controller does percentile on numpy float64 arrays (values already quantized by capnp),
     # so compute expected in float64 to match behavior and avoid interpolation/rounding deltas.
