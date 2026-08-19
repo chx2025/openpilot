@@ -5,7 +5,7 @@ import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import BackendId, ordered_backends
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import (
-  DEFAULT_VALUES, VALUE_SPECS, apply_backend_profile, backend_profile, backend_values, save_backend_values,
+  DEFAULT_VALUES, VALUE_SPECS, LongitudinalTuning, apply_backend_profile, backend_profile, backend_values, save_backend_values,
 )
 from openpilot.sunnypilot.selfdrive.traffic_control import planner_session_is_active
 from openpilot.system.ui.lib.multilang import tr, tr_noop
@@ -105,7 +105,8 @@ class TeslaPlannerSettingsLayout(Widget):
     try:
       values = backend_values(ui_state.params, backend)
     except ValueError:
-      values = apply_backend_profile(ui_state.params, backend, 0)
+      # An unknown or mixed legacy config must remain untouched for recovery.
+      values = LongitudinalTuning()
     self._show_values(values)
     self._update_visibility()
 
@@ -115,7 +116,11 @@ class TeslaPlannerSettingsLayout(Widget):
       self._load_selected_backend()
 
   def _on_profile_changed(self, profile: int):
-    self._show_values(apply_backend_profile(ui_state.params, self._backend(), profile))
+    try:
+      values = apply_backend_profile(ui_state.params, self._backend(), profile)
+    except ValueError:
+      return
+    self._show_values(values)
     self._update_visibility()
 
   def _on_tuning_changed(self, _value):
@@ -125,7 +130,10 @@ class TeslaPlannerSettingsLayout(Widget):
     by_param = {option.action_item.param_key: option.action_item.get_value() / 100.0 for option in self.options}
     for field, param, _, _ in TUNING_ITEMS:
       values[field] = by_param[param]
-    save_backend_values(ui_state.params, self._backend(), values, profile=2)
+    try:
+      save_backend_values(ui_state.params, self._backend(), values, profile=2)
+    except ValueError:
+      return
 
   def _update_visibility(self):
     tn = self._backend().id == BackendId.TN_NO_DEC
