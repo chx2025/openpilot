@@ -106,6 +106,36 @@ def test_mode_off_is_output_identical_to_unwrapped_backend():
   assert before[3:] == after[3:]
 
 
+@pytest.mark.parametrize("mode", [TrafficControlMode.observe, TrafficControlMode.shadow])
+def test_non_actuating_modes_leave_complete_backend_output_unchanged(mode):
+  planner = FakePlanner()
+  adapter = TrafficControlPlannerAdapter(
+    planner, ns(longitudinalActuatorDelay=0.2), FakeParams(mode=mode),
+  )
+  decision = TrafficControlDecision(
+    mode=mode, phase=TrafficControlPhase.braking, active=True,
+    apply_constraint=False, shadow=mode == TrafficControlMode.shadow,
+    should_stop=True, remaining_distance=24.0, stop_reference=6.0,
+    light_state=1, source_bus=2, quality=2,
+  )
+  adapter._controller.update = lambda *args, **kwargs: decision
+  before = deepcopy((planner.v_desired_trajectory, planner.a_desired_trajectory,
+                     planner.j_desired_trajectory, planner.output_a_target,
+                     planner.output_should_stop, planner.allow_throttle,
+                     planner.a_desired, planner.v_desired_filter.x))
+
+  adapter.update(fake_sm())
+  adapter.publish(fake_sm(), None)
+
+  after = (planner.v_desired_trajectory, planner.a_desired_trajectory,
+           planner.j_desired_trajectory, planner.output_a_target,
+           planner.output_should_stop, planner.allow_throttle,
+           planner.a_desired, planner.v_desired_filter.x)
+  for expected, actual in zip(before[:3], after[:3], strict=True):
+    assert np.array_equal(expected, actual)
+  assert before[3:] == after[3:]
+
+
 def test_more_restrictive_backend_command_is_never_replaced():
   planner = FakePlanner()
   planner.v_desired_trajectory = np.zeros(17)
