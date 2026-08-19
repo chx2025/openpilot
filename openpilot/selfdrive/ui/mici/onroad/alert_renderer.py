@@ -11,8 +11,10 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.common.filter_simple import BounceFilter, FirstOrderFilter
 from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.system.ui.lib.application import gui_app, FontWeight
+from openpilot.system.ui.lib.multilang import multilang
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.label import UnifiedLabel
+from openpilot.selfdrive.ui.onroad.alert_localizer import localize_alert_text
 
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_limit import SpeedLimitAlertRenderer
 
@@ -148,7 +150,8 @@ class AlertRenderer(Widget, SpeedLimitAlertRenderer):
       return None
 
     # Return current alert
-    ret = Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw, status=ss.alertStatus.raw,
+    text1, text2 = localize_alert_text(ss.alertType, ss.alertText1, ss.alertText2, multilang.language)
+    ret = Alert(text1=text1, text2=text2, size=ss.alertSize.raw, status=ss.alertStatus.raw,
                 visual_alert=ss.alertHudVisual, alert_type=ss.alertType)
     self._prev_alert = ret
     return ret

@@ -2160,15 +2160,15 @@ msgid "Traffic Stop Strategy"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "Choose the direct stop profile or the independent radar-like traffic obstacle channel."
+msgid "Choose the direct stop profile or the independent Traffic Radar target."
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "Traffic Obstacle GO"
+msgid "Traffic Radar GO"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "Passive only removes the obstacle. Planner Start also requests a bounded longitudinal departure."
+msgid "Passive only removes the Traffic Radar target. Planner Start also requests a bounded longitudinal departure."
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
@@ -2192,7 +2192,7 @@ msgid "Stop Profile"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "Traffic Obstacle"
+msgid "Traffic Radar"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py

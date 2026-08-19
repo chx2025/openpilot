@@ -103,14 +103,14 @@ class TeslaControlSettingsLayout(Widget):
     )
     self.traffic_control_strategy = multiple_button_item_sp(
       title=lambda: tr("Traffic Stop Strategy"),
-      description=lambda: tr("Choose the direct stop profile or the independent radar-like traffic obstacle channel."),
-      buttons=[lambda: tr("Stop Profile"), lambda: tr("Traffic Obstacle")],
+      description=lambda: tr("Choose the direct stop profile or the independent Traffic Radar target."),
+      buttons=[lambda: tr("Stop Profile"), lambda: tr("Traffic Radar")],
       param="TeslaTrafficControlStrategy",
       inline=False,
     )
-    self.traffic_obstacle_go_policy = multiple_button_item_sp(
-      title=lambda: tr("Traffic Obstacle GO"),
-      description=lambda: tr("Passive only removes the obstacle. Planner Start also requests a bounded longitudinal departure."),
+    self.traffic_radar_go_policy = multiple_button_item_sp(
+      title=lambda: tr("Traffic Radar GO"),
+      description=lambda: tr("Passive only removes the Traffic Radar target. Planner Start also requests a bounded longitudinal departure."),
       buttons=[lambda: tr("Passive"), lambda: tr("Planner Start")],
       param="TeslaTrafficObstacleGoPolicy",
       inline=False,
@@ -128,7 +128,7 @@ class TeslaControlSettingsLayout(Widget):
       self.traffic_stop_reference,
       self.traffic_adaptive_reference,
       self.traffic_control_strategy,
-      self.traffic_obstacle_go_policy,
+      self.traffic_radar_go_policy,
     ]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
@@ -145,10 +145,10 @@ class TeslaControlSettingsLayout(Widget):
     self.traffic_stop_reference.set_visible(traffic_mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo))
     self.traffic_adaptive_reference.set_visible(traffic_mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo))
     traffic_actuation = traffic_mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo)
-    obstacle_strategy = int(ui_state.params.get("TeslaTrafficControlStrategy", return_default=True) or 0) == 1
+    radar_strategy = int(ui_state.params.get("TeslaTrafficControlStrategy", return_default=True) or 0) == 1
     self.traffic_control_strategy.set_visible(traffic_actuation)
-    self.traffic_obstacle_go_policy.set_visible(
-      traffic_mode == TrafficControlMode.stopGo and obstacle_strategy,
+    self.traffic_radar_go_policy.set_visible(
+      traffic_mode == TrafficControlMode.stopGo and radar_strategy,
     )
 
   def _update_state(self):
@@ -167,7 +167,7 @@ class TeslaControlSettingsLayout(Widget):
     self.traffic_stop_reference.action_item.set_enabled(planner_stopped)
     self.traffic_adaptive_reference.action_item.set_enabled(planner_stopped)
     self.traffic_control_strategy.action_item.set_enabled(planner_stopped)
-    self.traffic_obstacle_go_policy.action_item.set_enabled(planner_stopped)
+    self.traffic_radar_go_policy.action_item.set_enabled(planner_stopped)
     self._update_visibility()
 
   def _render(self, rect):

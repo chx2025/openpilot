@@ -358,8 +358,8 @@ msgid "Choose how Automatic Lane Centering (ALC) behaves after the brake pedal i
 msgstr "选择在sunnypilot中踩下制动踏板后自动车道居中 ALC 的行为。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "Choose the direct stop profile or the independent radar-like traffic obstacle channel."
-msgstr "选择直接停车曲线或独立的类雷达交通障碍物通道。"
+msgid "Choose the direct stop profile or the independent Traffic Radar target."
+msgstr "选择直接停车曲线或独立的交通雷达目标。"
 
 #: openpilot/system/ui/sunnypilot/widgets/sunnylink_pairing_dialog.py
 msgid "Choose your sponsorship tier and confirm your support"
@@ -1391,8 +1391,8 @@ msgid "Passive"
 msgstr "被动释放"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "Passive only removes the obstacle. Planner Start also requests a bounded longitudinal departure."
-msgstr "被动释放仅移除障碍物；规划器起步还会请求受限的纵向起步。"
+msgid "Passive only removes the Traffic Radar target. Planner Start also requests a bounded longitudinal departure."
+msgstr "被动模式仅移除交通雷达目标；规划器起步还会向纵向规划器发出受限的起步请求。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/steering_sub_layouts/mads_settings.py
 msgid "Pause"
@@ -2077,12 +2077,12 @@ msgid "Total Delay:"
 msgstr "总延迟："
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "Traffic Obstacle"
-msgstr "交通障碍物"
+msgid "Traffic Radar"
+msgstr "交通雷达"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "Traffic Obstacle GO"
-msgstr "交通障碍物绿灯起步"
+msgid "Traffic Radar GO"
+msgstr "交通雷达起步"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Traffic Stop Reference"
