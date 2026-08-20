@@ -28,6 +28,26 @@ def observation(distance=80.0, light=1, quality=2, valid=True, now_ns=0, source_
   )
 
 
+def raw_ineligible_event_observation(distance, *, light=1, state_machine=3, now_ns=0,
+                                     source_bus=2, control_source=3):
+  return TeslaTrafficControlObservation(
+    available=True,
+    valid_for_control=False,
+    source_bus=source_bus,
+    dlc=6,
+    feature_state=0,
+    state_machine=state_machine,
+    control_source=control_source,
+    control_type=3,
+    distance=distance,
+    light_state=light,
+    unavailable_reason=1,
+    vision_light=True,
+    frame_mono_time=now_ns,
+    quality=1,
+  )
+
+
 def update(controller, now_s, obs, *, v_ego=15.0, a_ego=0.0, model_stop_distance=None,
            model_stop_candidate=False, lead_present=False, radar_valid=True, gas=False,
            brake=False, blinker=False, enabled=True, long_active=True):
@@ -129,6 +149,26 @@ def test_dropout_cancels_far_stop_after_grace_but_not_immediately():
   assert decision.phase == TrafficControlPhase.off
 
 
+def test_active_event_survives_compatible_raw_oem_states_that_are_not_new_event_eligible():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  decision = confirmed_red(controller, distance=80.0, v_ego=15.0)
+  event_id = controller.event_id
+  assert decision.active
+
+  for now_s, distance, state_machine in ((0.9, 67.5, 3), (1.2, 63.0, 4), (1.5, 58.5, 5)):
+    decision = update(
+      controller,
+      now_s,
+      raw_ineligible_event_observation(
+        distance, state_machine=state_machine, now_ns=int(now_s * 1e9),
+      ),
+      v_ego=15.0,
+    )
+
+  assert decision.active
+  assert controller.event_id == event_id
+
+
 def test_event_reference_uses_bounded_model_offset_instead_of_fixed_six():
   controller = TeslaTrafficControlController(TrafficControlConfig(
     mode=TrafficControlMode.stopGo, adaptive_reference=True,
@@ -182,6 +222,52 @@ def test_stable_green_releases_only_same_stopped_event_without_turn_signal_or_le
     decision = update(braking, now_s, observation(6.0, light=2, now_ns=int(now_s * 1e9)),
                       v_ego=0.0, brake=True)
   assert decision.phase == TrafficControlPhase.hold
+
+
+def test_feature_zero_green_can_release_only_the_same_held_event():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  confirmed_red(controller, distance=20.0, v_ego=5.0)
+  decision = update(controller, 0.8, observation(6.0, light=1, now_ns=int(0.8e9)), v_ego=0.0)
+  event_id = controller.event_id
+  assert decision.phase == TrafficControlPhase.hold
+
+  for now_s in (1.0, 1.3, 1.7):
+    decision = update(
+      controller,
+      now_s,
+      raw_ineligible_event_observation(
+        6.0, light=2, state_machine=6, now_ns=int(now_s * 1e9),
+      ),
+      v_ego=0.0,
+    )
+
+  assert decision.phase == TrafficControlPhase.release
+  assert controller.event_id == event_id
+
+
+def test_release_window_stays_active_long_enough_for_bounded_start_handoff():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  confirmed_red(controller, distance=20.0, v_ego=5.0)
+  update(controller, 0.8, observation(6.0, light=1, now_ns=int(0.8e9)), v_ego=0.0)
+  for now_s in (1.0, 1.3, 1.7):
+    decision = update(
+      controller,
+      now_s,
+      raw_ineligible_event_observation(
+        6.0, light=2, state_machine=6, now_ns=int(now_s * 1e9),
+      ),
+      v_ego=0.0,
+    )
+  assert decision.phase == TrafficControlPhase.release
+
+  decision = update(
+    controller,
+    3.7,
+    raw_ineligible_event_observation(6.0, light=2, state_machine=6, now_ns=int(3.7e9)),
+    v_ego=1.0,
+  )
+
+  assert decision.phase == TrafficControlPhase.release
 
 
 def test_green_from_different_target_does_not_release_latched_stop():

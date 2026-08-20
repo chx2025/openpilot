@@ -38,7 +38,7 @@ class TrafficControlConfig:
   replacement_confirm_s: float = 1.0
   model_confirm_s: float = 0.4
   green_confirm_s: float = 0.6
-  release_s: float = 1.0
+  release_s: float = 3.0
   bypass_s: float = 10.0
   observation_dropout_s: float = 0.75
   event_distance_tolerance: float = 12.0
@@ -104,6 +104,7 @@ class TeslaTrafficControlController:
     self.model_confirm_since_ns: int | None = None
     self.last_event_observation_ns: int | None = None
     self.quality = 0
+    self.event_continuous = False
 
   def _mark_transition(self, reason: str) -> None:
     self.transition_seq += 1
@@ -141,6 +142,7 @@ class TeslaTrafficControlController:
     self.last_distance_innovation = 0.0
     self.last_event_observation_ns = None
     self.quality = 0
+    self.event_continuous = False
     self.last_update_ns = None
 
   def _decision(self) -> TrafficControlDecision:
@@ -218,7 +220,21 @@ class TeslaTrafficControlController:
                   observation.control_source == self.event_control_source)
     expected_distance = self.remaining_distance + self.stop_reference
     distance_consistent = abs(observation.distance - expected_distance) <= self.config.event_distance_tolerance
-    if observation.valid_for_control and observation.light_state in (1, 3) and same_event and distance_consistent:
+    raw_event_continuous = bool(
+      observation.available
+      and observation.feature_state == 0
+      and observation.source_bus == 2
+      and observation.control_type == 3
+      and observation.control_source in (2, 3)
+      and observation.light_state in (1, 3)
+      and observation.state_machine in (2, 3, 4, 5)
+      and observation.unavailable_reason in (0, 1)
+      and 2.0 <= observation.distance < 255.0
+      and observation.vision_light
+    )
+    event_continuous = observation.valid_for_control or raw_event_continuous
+    self.event_continuous = bool(event_continuous and same_event and distance_consistent)
+    if self.event_continuous:
       self.last_event_observation_ns = self.last_update_ns
       oem_remaining = max(0.0, observation.distance - self.stop_reference)
       # OEM remains primary, but never allow a noisy target switch to move the
@@ -233,6 +249,7 @@ class TeslaTrafficControlController:
     del a_ego
     dt = 0.0 if self.last_update_ns is None else max(0.0, min((now_ns - self.last_update_ns) / 1e9, 0.5))
     self.last_update_ns = now_ns
+    self.event_continuous = False
 
     if self.config.mode == TrafficControlMode.off:
       self.reset()
@@ -279,7 +296,23 @@ class TeslaTrafficControlController:
       return self._decision()
 
     valid_red = observation.valid_for_control and observation.light_state == 1
-    valid_green = observation.valid_for_control and observation.light_state == 2
+    feature_zero_held_green = bool(
+      self.phase == TrafficControlPhase.hold
+      and observation.available
+      and observation.feature_state == 0
+      and observation.source_bus == 2
+      and observation.control_type == 3
+      and observation.control_source in (2, 3)
+      and observation.light_state == 2
+      and observation.state_machine in (5, 6)
+      and observation.unavailable_reason in (0, 1)
+      and 2.0 <= observation.distance < 255.0
+      and observation.vision_light
+    )
+    valid_green = bool(
+      observation.light_state == 2
+      and (observation.valid_for_control or feature_zero_held_green)
+    )
     valid_yellow = observation.valid_for_control and observation.light_state == 3
     if observation.available:
       self.light_state = observation.light_state
