@@ -38,7 +38,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 PARAM_REFRESH_SEC = 2.0
 
 # --- Debug log 設定 ---
-ENABLE_CSV_LOG = true
+ENABLE_CSV_LOG = True
 LOG_PATH = "/data/media/0/realdata/lcc_debug.csv"
 LOG_INTERVAL_SEC = 0.1  
 LOG_COLUMNS = [
