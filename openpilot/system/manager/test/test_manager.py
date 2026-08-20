@@ -45,10 +45,22 @@ class TestManager(OpenpilotTestCase):
     manager.main()
     for k in params.all_keys():
       default_value = params.get_default_value(k)
-      if default_value is not None:
+      if k == b"RecordRoadVideo":
+        assert params.get_bool(k)
+      elif default_value is not None:
         assert params.get(k) == default_value
     assert params.get("OpenpilotEnabledToggle")
     assert params.get("RouteCount") == 0
+
+  def test_road_video_is_reenabled_for_existing_installs(self):
+    params = Params()
+    params.put_bool("RecordRoadVideo", False, block=True)
+
+    manager.enable_automatic_road_video(params)
+
+    assert params.get_bool("RecordRoadVideo")
+    assert managed_processes["encoderd"].should_run(True, params, car.CarParams.new_message())
+    assert not managed_processes["encoderd"].should_run(False, params, car.CarParams.new_message())
 
   @unittest.skip("this test is flaky the way it's currently written, should be moved to test_onroad")
   def test_clean_exit(self, subtests):

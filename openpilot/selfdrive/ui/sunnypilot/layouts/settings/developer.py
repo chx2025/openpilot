@@ -59,7 +59,7 @@ class DeveloperLayoutSP(DeveloperLayout):
     )
     self.route_video_toggle = toggle_item_sp(
       tr("Record Road Video"),
-      tr("Store forward road-camera video with each route. Disabled by default to save storage; qlog/rlog diagnostics remain available."),
+      tr("Store forward road-camera video with each route. Enabled automatically at every system startup; older routes are deleted when storage is low."),
       param="RecordRoadVideo",
     )
 

@@ -24,6 +24,11 @@ from openpilot.common.hardware.hw import Paths
 from openpilot.sunnypilot.system.params_migration import run_migration
 
 
+def enable_automatic_road_video(params: Params) -> None:
+  """Start every boot with route video enabled, including existing installs."""
+  params.put_bool("RecordRoadVideo", True, block=True)
+
+
 def manager_init() -> None:
   save_bootlog()
 
@@ -34,6 +39,7 @@ def manager_init() -> None:
   params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
   params.clear_all(ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION)
   params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
+  enable_automatic_road_video(params)
   # if build_metadata.release_channel:
   #   params.clear_all(ParamKeyFlag.DEVELOPMENT_ONLY)
 
