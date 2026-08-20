@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from unittest.mock import Mock
 
 import pytest
@@ -58,6 +60,19 @@ def test_console_page_exposes_tesla_turn_signal_validation(monkeypatch):
   assert "左转" in page
   assert "右转" in page
   assert "立即取消" in page
+
+
+def test_console_embedded_javascript_parses(monkeypatch):
+  node = shutil.which("node")
+  if node is None:
+    pytest.skip("node is required to parse the embedded browser script")
+  monkeypatch.setattr("openpilot.selfdrive.debug.device_console.driving_status_enabled", lambda: True)
+  page = render_page().decode()
+  script = page.split("<script>", 1)[1].split("</script>", 1)[0]
+
+  result = subprocess.run([node, "--check", "-"], input=script, text=True, capture_output=True, check=False)
+
+  assert result.returncode == 0, result.stderr
 
 
 def test_terminal_requires_its_own_password():
