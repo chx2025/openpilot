@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 """
-Lane Centering Corrector (LCC) v2.5 - 台灣道路在地化終極特調版 
-(混合信心度 + Soft Decay + 動態遲滯 + 漸進式曲率權重)
+Lane Centering Corrector (LCC) v2.6 - 台灣道路在地化終極特調版 
+(混合信心度 + Soft Decay + 動態遲滯 + 漸進式曲率權重 + 控制路徑濾波)
 
 將 10~50m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
 y = ax^2 + bx + c 的二次曲線。
 v2.5 Pro 優化重點：
 - 捨棄急彎硬切斷 (Hard Cutoff)，改為「漸進式曲率權重 (Progressive Curvature Weight)」。
 - 彎道越急，LCC 修正權重越低，實現與 E2E 模型的無縫融合，徹底消滅門檻抖動，出彎秒接管！
+
+v2.6 修正重點 (解決方向盤左右晃動)：
+- 【核心 Bug】原本 lane_target_curvature / center_y_l 是用「每幀原始」的 polyfit
+  係數 a,b,c 計算，UI_SMOOTH_TAU 平滑只套用在 self.poly_a/b/c 這組僅供繪圖用的
+  屬性上，完全沒有真正進入控制路徑，導致車道線偵測雜訊直接放大成方向盤修正量。
+  現在新增獨立的「控制路徑」平滑係數 self._ctrl_a/b/c，曲率與中心點計算改用這組。
+- weight (車道線信心度) 與 curvature_weight (漸進式曲率權重) 原本逐幀重算、
+  沒有時間濾波，機率/曲率在門檻附近抖動會直接反映到修正量大小，現在都各自加上
+  低通濾波，行為更平滑，UI 繪圖用的平滑邏輯 (self.poly_a/b/c, UI_SMOOTH_TAU)
+  維持不變。
 """
 
 import os
@@ -72,6 +82,12 @@ DEFAULT_E2E_AUTHORITY = 1.0
 UI_SMOOTH_TAU = 0.2
 UI_MIN_DRAW_WEIGHT = 0.4
 
+# --- v2.6 控制路徑濾波參數 (實際餵進修正量計算，防止晃動) ---
+CTRL_SMOOTH_TAU = 0.15          # 曲線係數 a,b,c 的控制路徑平滑
+WEIGHT_SMOOTH_TAU = 0.15        # 車道線信心度 weight 的平滑
+CURVATURE_WEIGHT_SMOOTH_TAU = 0.15  # 漸進式曲率權重的平滑
+WEIGHT_ACTIVE_EPS = 1e-4        # 平滑後判斷 weight 是否視為 0 的容差
+
 
 def _clip_interp(x, xp, fp):
   if len(xp) < 2:
@@ -95,7 +111,12 @@ class LaneCenteringCorrector:
     self.poly_a = 0.0
     self.poly_b = 0.0
     self.poly_c = 0.0
-    
+
+    # v2.6: 控制路徑專用的平滑係數 (與 self.poly_a/b/c 的 UI 平滑分開)
+    self._ctrl_a = 0.0
+    self._ctrl_b = 0.0
+    self._ctrl_c = 0.0
+
     self.weight = 0.0
     self._active = False
     self._speed_gate = False  
@@ -122,6 +143,9 @@ class LaneCenteringCorrector:
     self.poly_a = 0.0
     self.poly_b = 0.0
     self.poly_c = 0.0
+    self._ctrl_a = 0.0
+    self._ctrl_b = 0.0
+    self._ctrl_c = 0.0
     self.weight = 0.0
     self._active = False
     self._speed_gate = False
@@ -255,7 +279,9 @@ class LaneCenteringCorrector:
       self._speed_gate = False
 
     model_curvature = getattr(model_v2.action, "desiredCurvature", 0.0) if lat_active else 0.0
-    self.curvature_weight = self._calc_curvature_weight(model_curvature)
+    raw_curvature_weight = self._calc_curvature_weight(model_curvature)
+    # v2.6: 對曲率權重做低通濾波，避免在 FULL/ZERO 門檻附近抖動時修正量忽大忽小
+    self.curvature_weight = self._smooth(raw_curvature_weight, self.curvature_weight, CURVATURE_WEIGHT_SMOOTH_TAU, dt)
 
     # --- 硬性停用 ---
     hard_invalid = (not self._enabled or not lat_active)
@@ -323,9 +349,11 @@ class LaneCenteringCorrector:
     single_side_factor = float(np.clip(min_prob / PROB_MIN, 0.0, 1.0))
     
     confidence = confidence_mean * (0.65 + 0.35 * single_side_factor)
-    self.weight = confidence * LANE_WEIGHT_MAX
+    raw_weight = confidence * LANE_WEIGHT_MAX
+    # v2.6: 對信心度做低通濾波，避免車道線機率在門檻附近抖動時修正量忽大忽小
+    self.weight = self._smooth(raw_weight, self.weight, WEIGHT_SMOOTH_TAU, dt)
 
-    if self.weight <= 0.0:
+    if self.weight <= WEIGHT_ACTIVE_EPS:
       self._active = False
       self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
@@ -364,7 +392,7 @@ class LaneCenteringCorrector:
       self._log_fallback("POLYFIT_FAIL", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
       return self.correction
     
-    # --- UI 平滑過濾 ---
+    # --- UI 平滑過濾 (僅供畫面顯示用，不影響實際修正量計算) ---
     if self.weight >= UI_MIN_DRAW_WEIGHT:
       if abs(self.poly_c) < 1e-7:  
         self.poly_a = float(a)
@@ -379,9 +407,19 @@ class LaneCenteringCorrector:
       self.poly_b = 0.0
       self.poly_c = 0.0
 
+    # --- v2.6 控制路徑平滑：這組才是真正拿去算修正量的係數 ---
+    # 每次有效擬合都會更新，不受 UI_MIN_DRAW_WEIGHT 門檻影響，避免車道線雜訊
+    # 直接放大成方向盤修正量。冷啟動 (係數全為 0) 時直接採用當幀值，之後才平滑。
+    if self._ctrl_a == 0.0 and self._ctrl_b == 0.0 and abs(self._ctrl_c) < 1e-7:
+      self._ctrl_a, self._ctrl_b, self._ctrl_c = float(a), float(b), float(c)
+    else:
+      self._ctrl_a = self._smooth(float(a), self._ctrl_a, CTRL_SMOOTH_TAU, dt)
+      self._ctrl_b = self._smooth(float(b), self._ctrl_b, CTRL_SMOOTH_TAU, dt)
+      self._ctrl_c = self._smooth(float(c), self._ctrl_c, CTRL_SMOOTH_TAU, dt)
+
     L = max(MIN_LOOKAHEAD_M, v_ego * LOOKAHEAD_TIME_SEC)
-    lane_target_curvature = (2.0 * a) + (2.0 * b / L) + (2.0 * c / (L ** 2))
-    center_y_l = a * (L ** 2) + b * L + c
+    lane_target_curvature = (2.0 * self._ctrl_a) + (2.0 * self._ctrl_b / L) + (2.0 * self._ctrl_c / (L ** 2))
+    center_y_l = self._ctrl_a * (L ** 2) + self._ctrl_b * L + self._ctrl_c
 
     if not (np.isfinite(L) and np.isfinite(lane_target_curvature) and np.isfinite(center_y_l)):
       self._active = False
