@@ -12,7 +12,9 @@ import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.car.tesla.control_profile import normalize_mads_screen_button
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.vehicle.brands.tesla_planner import TeslaPlannerSettingsLayout
-from openpilot.sunnypilot.selfdrive.traffic_control import TrafficControlMode, configured_mode, planner_session_is_active
+from openpilot.sunnypilot.selfdrive.traffic_control import (
+  OBSERVATION_ONLY, TrafficControlMode, configured_mode, planner_session_is_active,
+)
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets.list_view import button_item_sp, multiple_button_item_sp, option_item_sp, toggle_item_sp
@@ -141,7 +143,7 @@ class TeslaControlSettingsLayout(Widget):
     self.curve_to_sp.set_visible(dynamic_stock)
     self.speed_high.set_visible(dynamic_stock or dynamic_ap)
     self.speed_low.set_visible(dynamic_stock or dynamic_ap)
-    traffic_mode = configured_mode(ui_state.params)
+    traffic_mode = TrafficControlMode.shadow if OBSERVATION_ONLY else configured_mode(ui_state.params)
     self.traffic_stop_reference.set_visible(traffic_mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo))
     self.traffic_adaptive_reference.set_visible(traffic_mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo))
     traffic_actuation = traffic_mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo)
@@ -204,7 +206,11 @@ class TeslaControlSettingsAdapter:
     )
     self.traffic_control_mode = multiple_button_item_sp(
       title=lambda: tr("Tesla Traffic Control"),
-      description=lambda: tr("Observe and Shadow never alter control. Stop and Stop/Go are experimental closed-course constraints."),
+      description=lambda: tr(
+        "Temporarily locked to background Shadow recording. Stored settings are retained, but traffic signals cannot alter control."
+        if OBSERVATION_ONLY else
+        "Observe and Shadow never alter control. Stop and Stop/Go are experimental closed-course constraints."
+      ),
       buttons=[lambda: tr("Off"), lambda: tr("Observe"), lambda: tr("Shadow"), lambda: tr("Stop"), lambda: tr("Stop/Go")],
       param="TeslaTrafficControlMode",
       inline=False,
@@ -220,5 +226,5 @@ class TeslaControlSettingsAdapter:
   def update_settings(self) -> None:
     self.radar_backend.action_item.set_enabled(ui_state.is_offroad())
     planner_stopped = not planner_session_is_active(ui_state.sm)
-    self.traffic_control_mode.action_item.set_enabled(planner_stopped)
+    self.traffic_control_mode.action_item.set_enabled(planner_stopped and not OBSERVATION_ONLY)
     self.traffic_control_mode.action_item.set_enabled_buttons(None if ui_state.has_longitudinal_control else {0, 1, 2})
