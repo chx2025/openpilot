@@ -22,6 +22,8 @@ def test_initialization_snapshot_is_complete_and_ordered():
   assert [next(iter(item)) for item in snapshot] == list(INITIALIZATION_KEYS)
   assert params.requested == [(key, True) for key in INITIALIZATION_KEYS]
   assert len(INITIALIZATION_KEYS) == len(set(INITIALIZATION_KEYS))
+  assert "TeslaTurnSignalValidation" in INITIALIZATION_KEYS
+  assert "TeslaSpeedButtonValidation" in INITIALIZATION_KEYS
 
 
 def test_radar_backend_values_match_opendbc_initialization_contract():

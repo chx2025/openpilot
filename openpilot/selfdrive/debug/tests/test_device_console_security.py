@@ -8,18 +8,17 @@ from openpilot.selfdrive.debug.device_terminal import run_command
 
 
 class FakeParams:
-  def __init__(self, *, enabled=True, terminal=True, offroad=True, token="device-token-123456"):
+  def __init__(self, *, terminal=True, offroad=True, password="terminal-password"):
     self.values = {
-      "DeviceConsoleEnabled": enabled,
       "WebTerminalEnabled": terminal,
+      "WebTerminalPassword": password,
       "IsOffroad": offroad,
-      "DeviceConsoleToken": token,
     }
 
   def get_bool(self, key):
     return bool(self.values.get(key, False))
 
-  def get(self, key):
+  def get(self, key, return_default=False):
     return self.values.get(key)
 
   def put(self, key, value, block=False):
@@ -37,29 +36,38 @@ def test_public_or_invalid_addresses_are_rejected(address):
 
 
 def test_console_is_completely_unauthenticated_in_this_test_version():
-  authorize(None, FakeParams(enabled=False))
+  authorize(None, FakeParams())
   authorize("wrong", FakeParams())
 
 
-def test_console_page_does_not_expose_driving_information():
+def test_console_page_exposes_driving_information(monkeypatch):
+  monkeypatch.setattr("openpilot.selfdrive.debug.device_console.driving_status_enabled", lambda: True)
   page = render_page().decode()
 
-  assert "driving-tab" not in page
-  assert "driving-panel" not in page
-  assert "/api/driving-status" not in page
+  assert "driving-tab" in page
+  assert "driving-panel" in page
+  assert "/api/driving-status" in page
 
 
-def test_console_page_does_not_expose_retired_tesla_can_experiments():
+def test_console_page_exposes_tesla_turn_signal_validation(monkeypatch):
+  monkeypatch.setattr("openpilot.selfdrive.debug.device_console.driving_status_enabled", lambda: True)
   page = render_page().decode()
 
-  assert "turn-tab" not in page
-  assert "/api/turn/" not in page
-  assert "/api/speed/" not in page
+  assert "turn-tab" in page
+  assert "/api/turn/" in page
+  assert "左转" in page
+  assert "右转" in page
+  assert "立即取消" in page
+
+
+def test_terminal_requires_its_own_password():
+  with pytest.raises(PermissionError, match="密码"):
+    run_command("true", "wrong", FakeParams())
 
 
 def test_terminal_is_offroad_only():
   with pytest.raises(PermissionError, match="行驶中"):
-    run_command("true", None, FakeParams(offroad=False))
+    run_command("true", "terminal-password", FakeParams(offroad=False))
 
 
 def test_terminal_passes_command_as_bash_argument_without_python_shell(monkeypatch):
@@ -72,7 +80,7 @@ def test_terminal_passes_command_as_bash_argument_without_python_shell(monkeypat
   monkeypatch.setattr("openpilot.selfdrive.debug.device_terminal.subprocess.Popen", popen)
   monkeypatch.setattr("openpilot.selfdrive.debug.device_terminal.time.sleep", lambda _: None)
 
-  result = run_command("printf ok", None, FakeParams())
+  result = run_command("printf ok", "terminal-password", FakeParams())
 
   assert result["output"] == "ok\n"
   args, kwargs = popen.call_args

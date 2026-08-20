@@ -29,6 +29,8 @@ INITIALIZATION_KEYS = (
   "DynamicAutoStockCurveToSP",
   "TeslaApHybrid",
   "TeslaDynamicApLongitudinal",
+  "TeslaSpeedButtonValidation",
+  "TeslaTurnSignalValidation",
 )
 
 

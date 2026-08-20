@@ -1,18 +1,43 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  # The embedded HTML/CSS/JavaScript is intentionally compact.
 import json
+import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from openpilot.sunnypilot.selfdrive.car.tesla.validation_controller import VALIDATION_LOG_PATH
+from openpilot.selfdrive.debug.tesla_turn_signal_test import (
+  cancel_validation_session,
+  get_validation_status,
+  start_validation_session,
+)
 from openpilot.selfdrive.debug.device_settings import settings_snapshot, validate_and_write
 from openpilot.selfdrive.debug.device_hotspot import hotspot_status, set_hotspot_enabled
 from openpilot.selfdrive.debug.device_console_auth import client_is_local, require_offroad
-from openpilot.selfdrive.debug.device_terminal import run_command, terminal_status
+from openpilot.selfdrive.debug.device_terminal import change_password, run_command, terminal_status
+from openpilot.selfdrive.debug.driving_status import driving_status_enabled, driving_status_snapshot
+from openpilot.selfdrive.debug.tesla_speed_button_test import SpeedButtonAction, run_validation
 
 
 HOST = "0.0.0.0"
 PORT = 8088
+_SESSION_LOCK = threading.Lock()
+_ACTIVE_WEB_TEST_ID: str | None = None
+_ACTIVE_WEB_SESSION_STARTED = 0.0
+WEB_SESSION_TIMEOUT_S = 20.0
+
+
+def _clear_active_session(test_id: str) -> None:
+  global _ACTIVE_WEB_SESSION_STARTED, _ACTIVE_WEB_TEST_ID
+  with _SESSION_LOCK:
+    if _ACTIVE_WEB_TEST_ID == test_id:
+      _ACTIVE_WEB_TEST_ID = None
+      _ACTIVE_WEB_SESSION_STARTED = 0.0
+
+
 def render_page() -> bytes:
+  driving_tab_state = "" if driving_status_enabled() else 'disabled title="请先在设备设置中开启浏览器行驶信息"'
   return """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -32,6 +57,9 @@ def render_page() -> bytes:
     .card h2 { font-size:16px; margin:0 0 5px; } .card p { font-size:13px; margin:0; } .lock { color:#fbbf24; font-size:12px; }
     input[type=number], select { width:120px; padding:9px; border:1px solid #475569; border-radius:9px; background:#0f172a; color:white; font-size:16px; }
     input[type=checkbox] { width:28px; height:28px; accent-color:#2563eb; } input:disabled, select:disabled, button:disabled { opacity:.45; }
+    #turn-panel { text-align:center; } .buttons { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:28px; }
+    .turn { min-height:120px; font-size:26px; } #left { background:#2563eb; } #right { background:#ea580c; } #cancel { display:none; width:100%; min-height:64px; margin-top:16px; background:#dc2626; }
+    #status { min-height:52px; margin-top:18px; color:#fde68a; white-space:pre-wrap; }
     textarea { width:100%; min-height:130px; box-sizing:border-box; padding:11px; border:1px solid #475569; border-radius:10px; background:#020617; color:#e2e8f0; font:14px ui-monospace,monospace; }
     #terminal-output { min-height:100px; max-height:420px; overflow:auto; text-align:left; white-space:pre-wrap; background:#020617; border-radius:10px; padding:12px; color:#cbd5e1; }
     .terminal-row { display:flex; gap:8px; margin:10px 0; } .terminal-row input { min-width:0; flex:1; padding:9px; border:1px solid #475569; border-radius:9px; background:#0f172a; color:white; }
@@ -41,21 +69,32 @@ def render_page() -> bytes:
     .can-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:9px; margin-top:10px; } .can-detail { background:#1e293b; border-radius:11px; padding:11px; color:#cbd5e1; font-size:12px; line-height:1.55; } .can-detail strong { display:block; color:#93c5fd; font-size:14px; margin-bottom:3px; } .can-detail .ok { color:#86efac; } .can-detail.warn { color:#fbbf24; }
   </style>
 </head><body><main>
-  <h1>车载设置</h1><p>测试版本：连接设备局域网后可直接访问，无账号、口令或令牌。</p>
-  <div class="tabs"><button class="tab active" id="settings-tab" onclick="showPanel('settings')">设置</button><button class="tab" id="terminal-tab" onclick="showPanel('terminal')">终端</button></div>
+  <h1>车载设置</h1><p>连接设备局域网后可直接访问普通设置；任意 Bash 终端单独使用密码。</p>
+  <div class="tabs"><button class="tab active" id="settings-tab" onclick="showPanel('settings')">设置</button><button class="tab" id="driving-tab" __DRIVING_TAB_STATE__ onclick="showPanel('driving')">行驶信息</button><button class="tab" id="turn-tab" onclick="showPanel('turn')">Tesla 验证</button><button class="tab" id="terminal-tab" onclick="showPanel('terminal')">终端</button></div>
   <section id="settings-panel"><div id="mode" class="notice">正在读取设置…</div><div id="category-nav" class="category-nav"></div><div id="settings"></div></section>
+  <section id="driving-panel" hidden><h1>行驶道路视图</h1><p>只读实时视图；融合 SP 模型与 HW4 Model Y 原车 CAN，不启动视频或屏幕采集。</p><div id="driving-state" class="notice">正在连接车辆数据…</div><div class="ped-coordinate-lab"><strong>行人坐标</strong><select id="pedestrian-coordinate-mode" onchange="setPedestrianCoordinateMode(this.value)"><option value="off">关闭（默认）</option><option value="dx_forward_dy_left">dX 前后 / dY 左右</option><option value="dx_forward_dy_right">dX 前后 / -dY 左右</option><option value="dy_forward_dx_left">dY 前后 / dX 左右</option><option value="dy_forward_dx_right">dY 前后 / -dX 左右</option></select><span>黄色/蓝色/粉色对应行人 #1/#2/#3；坐标单位为米。</span></div><canvas id="driving-canvas" aria-label="预测道路轨迹与原车感知"></canvas><details id="can-diagnostics" class="can-diagnostics"><summary>CAN 诊断详情（可选）</summary><div id="can-details" class="can-grid"></div></details><div id="driving-alert" class="notice drive-alert" hidden></div></section>
+  <section id="turn-panel" hidden>
+    <h1>Tesla CAN 验证</h1><p>转向请求由 card 实时线程跟随原车 0x3E9 模板发送；速度按钮使用新鲜的原车 0x3C2 模板。所有发送仍受 Panda safety 限制。</p>
+    <div class="buttons"><button class="turn" id="left" onclick="runTurn('left')">← 左转</button><button class="turn" id="right" onclick="runTurn('right')">右转 →</button></div>
+    <div class="buttons"><button onclick="runSpeed('decrease')">− 速度按钮</button><button onclick="runSpeed('increase')">+ 速度按钮</button></div>
+    <button id="cancel" onclick="cancelSession()">立即取消</button><div id="status"></div>
+  </section>
   <section id="terminal-panel" hidden>
-    <h1>设备终端</h1><p>仅在设置模式（非行驶状态）且设备端显式启用后可用。无需认证；命令最长 20 秒，输出上限 64 KiB。</p>
-    <div id="terminal-state" class="notice">正在检查终端状态…</div><button onclick="runTerminal()">运行命令</button>
+    <h1>设备终端</h1><p>仅在设置模式（非行驶状态）且设备端显式启用后可用。终端单独使用密码；命令最长 20 秒，输出上限 64 KiB。</p>
+    <div id="terminal-state" class="notice">正在检查终端状态…</div><div class="terminal-row"><input id="terminal-password" type="password" autocomplete="off" placeholder="终端密码"><button onclick="runTerminal()">运行</button></div><div class="terminal-row"><input id="terminal-new-password" type="password" autocomplete="new-password" placeholder="新密码（4-64个字符）"><button onclick="changeTerminalPassword()">修改密码</button></div>
     <textarea id="terminal-command" spellcheck="false" placeholder="git status --short"></textarea><pre id="terminal-output"></pre>
   </section>
 <script>
-let settingsState = null, hotspotState = null, selectedCategory = null, currentPanel = 'settings';
+let settingsState = null, hotspotState = null, selectedCategory = null, currentPanel = 'settings', drivingLoading = false;
 function apiFetch(url, options = {}) { return fetch(url, options); }
+let pedestrianCoordinateMode = localStorage.getItem('pedestrianCoordinateMode') || 'off';
+function setPedestrianCoordinateMode(value) { pedestrianCoordinateMode = value; localStorage.setItem('pedestrianCoordinateMode', value); loadDrivingStatus(); }
+document.getElementById('pedestrian-coordinate-mode').value = pedestrianCoordinateMode;
 function showPanel(name) {
   currentPanel = name;
-  document.getElementById('settings-panel').hidden = name !== 'settings'; document.getElementById('terminal-panel').hidden = name !== 'terminal';
-  document.getElementById('settings-tab').classList.toggle('active', name === 'settings'); document.getElementById('terminal-tab').classList.toggle('active', name === 'terminal');
+  document.getElementById('settings-panel').hidden = name !== 'settings'; document.getElementById('driving-panel').hidden = name !== 'driving'; document.getElementById('turn-panel').hidden = name !== 'turn'; document.getElementById('terminal-panel').hidden = name !== 'terminal';
+  document.getElementById('settings-tab').classList.toggle('active', name === 'settings'); document.getElementById('driving-tab').classList.toggle('active', name === 'driving'); document.getElementById('turn-tab').classList.toggle('active', name === 'turn'); document.getElementById('terminal-tab').classList.toggle('active', name === 'terminal');
+  if (name === 'driving') loadDrivingStatus();
 }
 function element(tag, attrs = {}, text = '') { const e = document.createElement(tag); Object.assign(e, attrs); if (text) e.textContent = text; return e; }
 function renderSettings(data) {
@@ -221,10 +260,21 @@ function drawDrivingGeometry(geometry, data) {
   const nav=can.navigation||{}; if(nav.available){const panelW=Math.min(172,width*.42);fillRoundedRect(ctx,width-panelW-10,10,panelW,50,'#020617b8',12);ctx.textAlign='right';ctx.fillStyle='#dbeafe';ctx.font='bold 14px sans-serif';const branch=nav.next_branch_distance_m!=null?nav.next_branch_distance_m+'m '+(nav.next_branch_left_off_ramp?'↖ 左出口':nav.next_branch_right_off_ramp?'右出口 ↗':'下一分支'):nav.route_active?'导航路线已激活':'导航可用';ctx.fillText(branch,width-20,31);ctx.font='12px sans-serif';const limit=nav.speed_limit_unlimited?'不限速':nav.speed_limit!=null?'限速 '+nav.speed_limit+' '+nav.speed_limit_unit.toUpperCase():ct(nav.road_class);ctx.fillText(limit,width-20,50);ctx.textAlign='left';}
   if(geometry.lane_change!=='off'){ctx.fillStyle='#fbbf24';ctx.font='bold 15px sans-serif';ctx.fillText('变道 '+(geometry.lane_change_direction==='left'?'←':geometry.lane_change_direction==='right'?'→':'进行中'),width-92,70);} drawCanvasSummary(ctx,can,width); renderOptionalCanDetails(can);
 }
-async function loadTerminalStatus() { const el = document.getElementById('terminal-state'); try { const r = await apiFetch('/api/terminal/status', {cache:'no-store'}); const s = await r.json(); el.textContent = !s.terminal_enabled ? '终端未启用：请在设备上显式启用。' : s.onroad ? '行驶中：请先进入设置模式。' : '终端已启用且无需认证。'; el.className = 'notice' + ((!s.terminal_enabled || s.onroad) ? ' onroad' : ''); } catch (e) { el.textContent = '终端状态读取失败：' + e; } }
-async function runTerminal() { const command = document.getElementById('terminal-command').value, output = document.getElementById('terminal-output'); output.textContent = '正在运行…'; try { const r = await apiFetch('/api/terminal/exec', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command})}); const result = await r.json(); if (!r.ok) throw new Error(result.message || 'HTTP ' + r.status); output.textContent = `[exit ${result.exit_code}${result.timed_out ? ', timeout' : ''}${result.blocked_onroad ? ', onroad blocked' : ''}]\n` + result.output; } catch (e) { output.textContent = '运行失败：' + e; } }
+async function loadDrivingStatus() { if (drivingLoading) return; drivingLoading = true; const state = document.getElementById('driving-state'), alert = document.getElementById('driving-alert'); try { const r = await apiFetch('/api/driving-status', {cache:'no-store'}); const data = await r.json(); if (!r.ok) throw new Error(data.message || 'HTTP ' + r.status); const connected = Object.values(data.connected).every(Boolean); state.textContent = !data.onroad ? '设置模式：等待车辆启动。' : connected ? '行驶中：车辆数据正常。' : '行驶中：部分车辆数据暂未收到。'; state.className = 'notice' + ((!data.onroad || !connected) ? ' onroad' : ''); drawDrivingGeometry(data.geometry, data); alert.hidden = !data.alert; alert.textContent = data.alert || ''; } catch (e) { state.textContent = '行驶数据读取失败：' + e; state.className = 'notice onroad'; } finally { drivingLoading = false; } }
+setInterval(() => { if (currentPanel === 'driving') loadDrivingStatus(); }, 500);
+async function loadTerminalStatus() { const el = document.getElementById('terminal-state'); try { const r = await apiFetch('/api/terminal/status', {cache:'no-store'}); const s = await r.json(); el.textContent = !s.terminal_enabled ? '终端未启用：请先在设置中开启。' : s.onroad ? '行驶中：请先进入设置模式。' : '终端已启用：请输入密码后运行。'; el.className = 'notice' + ((!s.terminal_enabled || s.onroad) ? ' onroad' : ''); } catch (e) { el.textContent = '终端状态读取失败：' + e; } }
+const terminalPasswordInput = document.getElementById('terminal-password'); terminalPasswordInput.value = localStorage.getItem('openpilotTerminalPassword') || '';
+async function runTerminal() { const password = terminalPasswordInput.value, command = document.getElementById('terminal-command').value, output = document.getElementById('terminal-output'); output.textContent = '正在运行…'; try { const r = await apiFetch('/api/terminal/exec', {method:'POST', headers:{'Content-Type':'application/json', 'X-Terminal-Password':password}, body:JSON.stringify({command})}); const result = await r.json(); if (!r.ok) throw new Error(result.message || 'HTTP ' + r.status); localStorage.setItem('openpilotTerminalPassword', password); output.textContent = `[exit ${result.exit_code}${result.timed_out ? ', timeout' : ''}${result.blocked_onroad ? ', onroad blocked' : ''}]\n` + result.output; } catch (e) { output.textContent = '运行失败：' + e; } }
+async function changeTerminalPassword() { const password = terminalPasswordInput.value, newPassword = document.getElementById('terminal-new-password').value; try { const r = await apiFetch('/api/terminal/password', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({current_password:password, new_password:newPassword})}); const result = await r.json(); if (!r.ok) throw new Error(result.message || 'HTTP ' + r.status); terminalPasswordInput.value = newPassword; localStorage.setItem('openpilotTerminalPassword', newPassword); document.getElementById('terminal-new-password').value = ''; alert('密码已修改'); } catch (e) { alert('修改失败：' + e); } }
 loadTerminalStatus();
-</script></main></body></html>""".encode()
+let activeTestId = null;
+const phaseText = {queued:'请求已提交',waiting_vehicle_feedback:'等待车辆转向灯响应',waiting_sp_start:'等待 SP 开始变道',lane_changing:'SP 正在执行变道',cancelling:'正在关闭转向灯',confirming_cancel:'正在确认转向灯关闭'};
+async function runTurn(direction) { document.querySelectorAll('#left,#right').forEach(button => button.disabled = true); const status = document.getElementById('status'); status.textContent = '正在提交…'; try { const response = await apiFetch('/api/turn/' + direction, {method:'POST'}); const result = await response.json(); if (!response.ok) throw new Error(result.message || '提交失败'); activeTestId = result.test_id; document.getElementById('cancel').style.display = 'block'; await pollStatus(); } catch (error) { finishTurnUi('请求失败：' + error); } }
+async function pollStatus() { if (!activeTestId) return; try { const response = await apiFetch('/api/status/' + activeTestId, {cache:'no-store'}); const result = await response.json(); const detail = '已发送 ' + (result.action_frames_sent || 0) + ' 帧'; if (result.done) { const ok = result.result === 'PASS'; finishTurnUi((ok ? '完成：转向灯已自动关闭' : '结束：' + result.result) + '\n' + detail); return; } document.getElementById('status').textContent = (phaseText[result.phase] || result.phase) + '\n' + detail; setTimeout(pollStatus, 200); } catch (error) { finishTurnUi('状态读取失败：' + error); } }
+async function cancelSession() { if (!activeTestId) return; document.getElementById('status').textContent = '正在请求关闭转向灯…'; try { await apiFetch('/api/cancel/' + activeTestId, {method:'POST'}); } catch (error) { finishTurnUi('取消请求失败：' + error); } }
+function finishTurnUi(message) { document.getElementById('status').textContent = message; document.querySelectorAll('#left,#right').forEach(button => button.disabled = false); document.getElementById('cancel').style.display = 'none'; activeTestId = null; }
+async function runSpeed(action) { const status = document.getElementById('status'); status.textContent = '正在发送速度按钮模板…'; try { const response = await apiFetch('/api/speed/' + action, {method:'POST'}); const result = await response.json(); if (!response.ok) throw new Error(result.message || '测试失败'); status.textContent = result.message; } catch (error) { status.textContent = '速度按钮测试失败：' + error; } }
+</script></main></body></html>""".replace("__DRIVING_TAB_STATE__", driving_tab_state).encode()
 
 
 class DeviceConsoleHandler(BaseHTTPRequestHandler):
@@ -256,11 +306,34 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
     if self.path == "/api/hotspot":
       self._json(HTTPStatus.OK, hotspot_status())
       return
+    if self.path == "/api/driving-status":
+      try:
+        self._json(HTTPStatus.OK, driving_status_snapshot())
+      except PermissionError as error:
+        self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": str(error)})
+      except Exception as error:
+        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "message": f"行驶数据暂不可用：{error}"})
+      return
     if self.path == "/api/terminal/status":
       self._json(HTTPStatus.OK, terminal_status())
       return
     if self.path == "/api/settings":
       self._json(HTTPStatus.OK, settings_snapshot())
+      return
+    if self.path.startswith("/api/status/"):
+      test_id = self.path.removeprefix("/api/status/")
+      with _SESSION_LOCK:
+        session_expired = (_ACTIVE_WEB_TEST_ID == test_id and
+                           time.monotonic() - _ACTIVE_WEB_SESSION_STARTED >= WEB_SESSION_TIMEOUT_S)
+      if session_expired:
+        cancel_validation_session(test_id)
+        _clear_active_session(test_id)
+        self._json(HTTPStatus.OK, {"test_id": test_id, "done": True, "result": "WEB_SESSION_TIMEOUT"})
+        return
+      status = get_validation_status(test_id)
+      if status.get("done"):
+        _clear_active_session(test_id)
+      self._json(HTTPStatus.OK, status)
       return
     if self.path not in ("/", "/index.html"):
       self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found")
@@ -295,7 +368,22 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(content_length))
         if not isinstance(payload, dict) or "command" not in payload:
           raise ValueError("请求必须包含 command")
-        self._json(HTTPStatus.OK, run_command(payload["command"], None))
+        self._json(HTTPStatus.OK, run_command(payload["command"], self.headers.get("X-Terminal-Password")))
+      except PermissionError as error:
+        self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": str(error)})
+      except (TypeError, ValueError, json.JSONDecodeError) as error:
+        self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(error)})
+      return
+    if self.path == "/api/terminal/password":
+      try:
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length <= 0 or content_length > 8192:
+          raise ValueError("请求内容无效")
+        payload = json.loads(self.rfile.read(content_length))
+        if not isinstance(payload, dict):
+          raise ValueError("请求必须为 JSON 对象")
+        change_password(payload.get("current_password"), payload.get("new_password"))
+        self._json(HTTPStatus.OK, {"ok": True})
       except PermissionError as error:
         self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": str(error)})
       except (TypeError, ValueError, json.JSONDecodeError) as error:
@@ -320,6 +408,50 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
         self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": str(error)})
       except (TypeError, ValueError, json.JSONDecodeError) as error:
         self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(error)})
+      return
+    if self.path.startswith("/api/cancel/"):
+      test_id = self.path.removeprefix("/api/cancel/")
+      cancel_validation_session(test_id)
+      self._json(HTTPStatus.ACCEPTED, {"ok": True, "test_id": test_id})
+      return
+    if self.path.startswith("/api/speed/"):
+      action_value = self.path.removeprefix("/api/speed/")
+      if action_value not in (SpeedButtonAction.increase.value, SpeedButtonAction.decrease.value):
+        self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "未知速度按钮测试"})
+        return
+      try:
+        result = run_validation(SpeedButtonAction(action_value))
+      except RuntimeError as error:
+        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "message": f"测试被阻止：{error}"})
+        return
+      messages = {
+        0: "验证通过：设定速度已按预期改变",
+        1: "验证被阻止：检查车辆状态、参数和新鲜原车模板",
+        2: "验证失败：Panda 拒绝或未观察到发送回显",
+        3: "模板已发送；请观察车辆设定速度显示",
+      }
+      self._json(HTTPStatus.OK if result in (0, 3) else HTTPStatus.CONFLICT,
+                 {"ok": result in (0, 3), "result": result, "message": messages[result]})
+      return
+    direction = self.path.removeprefix("/api/turn/")
+    if direction in ("left", "right") and self.path == f"/api/turn/{direction}":
+      try:
+        global _ACTIVE_WEB_SESSION_STARTED, _ACTIVE_WEB_TEST_ID
+        with _SESSION_LOCK:
+          if _ACTIVE_WEB_TEST_ID is not None:
+            existing = get_validation_status(_ACTIVE_WEB_TEST_ID)
+            session_expired = time.monotonic() - _ACTIVE_WEB_SESSION_STARTED >= WEB_SESSION_TIMEOUT_S
+            if not existing.get("done") and not session_expired:
+              self._json(HTTPStatus.CONFLICT, {"ok": False, "message": "已有变道请求正在运行"})
+              return
+            if not existing.get("done"):
+              cancel_validation_session(_ACTIVE_WEB_TEST_ID)
+          test_id = start_validation_session(direction)
+          _ACTIVE_WEB_TEST_ID = test_id
+          _ACTIVE_WEB_SESSION_STARTED = time.monotonic()
+        self._json(HTTPStatus.ACCEPTED, {"ok": True, "test_id": test_id, "log": VALIDATION_LOG_PATH})
+      except RuntimeError as error:
+        self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "message": f"测试被阻止：{error}"})
       return
     self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "未知请求"})
 

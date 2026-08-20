@@ -115,6 +115,10 @@ def _translate_option(text: str, key: str) -> str:
 # These controls intentionally have no SunnyLink schema entry. Keep the local
 # console whitelist narrow: it is not a generic Params editor.
 EXTRA_SETTINGS: tuple[dict[str, Any], ...] = (
+  {"key": "Brightness", "widget": "option", "title": "停车界面亮度", "category": "Display", "group": "显示", "min": 10, "max": 100, "step": 10, "unit": "%", "offroad_only": True},
+  {"key": "TeslaWebDrivingVisualization", "widget": "toggle", "title": "浏览器行驶信息", "category": "Tesla", "group": "Tesla", "offroad_only": True},
+  {"key": "TeslaARS408Radar", "widget": "multiple_button", "title": "Tesla 雷达后端", "category": "Tesla", "group": "Tesla", "options": [{"value": 0, "label": "原车"}, {"value": 1, "label": "ARS408"}, {"value": 2, "label": "关闭"}], "offroad_only": True},
+  {"key": "DynamicAutoStock", "widget": "toggle", "title": "动态原车 ACC", "category": "Tesla", "group": "Tesla", "offroad_only": True},
   {"key": "TeslaApHybrid", "widget": "toggle", "title": "Tesla AP 混合控制", "category": "Tesla", "group": "Tesla", "offroad_only": True},
   {"key": "TeslaDynamicApLongitudinal", "widget": "toggle", "title": "Tesla 动态 AP 纵向", "group": "Tesla", "offroad_only": True},
   {"key": "DynamicAutoStockBlinkerToSP", "widget": "toggle", "title": "动态原车：转向灯切换 SP", "group": "Tesla", "offroad_only": True},
@@ -123,6 +127,8 @@ EXTRA_SETTINGS: tuple[dict[str, Any], ...] = (
   {"key": "DynamicAutoStockSpeedLowKph", "widget": "option", "title": "动态原车回切速度", "group": "Tesla", "min": 0, "max": 200, "step": 1, "unit": "km/h", "offroad_only": True},
   {"key": "TeslaMadsScreenButton", "widget": "multiple_button", "title": "Tesla MADS 屏幕手势", "group": "Tesla", "options": [{"value": 0, "label": "关闭"}, {"value": 1, "label": "三指"}, {"value": 2, "label": "五指"}], "offroad_only": True},
   {"key": "TeslaTouchLongitudinalSwitch", "widget": "toggle", "title": "4指触摸切换原车ACC", "group": "Tesla", "offroad_only": True},
+  {"key": "TeslaTurnSignalValidation", "widget": "toggle", "title": "启用 Tesla 转向 CAN 测试", "category": "Developer", "group": "Tesla 测试", "offroad_only": True},
+  {"key": "TeslaSpeedButtonValidation", "widget": "toggle", "title": "启用 Tesla 速度按钮测试", "category": "Developer", "group": "Tesla 测试", "offroad_only": True},
   {"key": "WebTerminalEnabled", "widget": "toggle", "title": "启用网页终端（高风险）", "category": "Developer", "group": "本地网页控制台", "offroad_only": True},
   {"key": "RecordRoadVideo", "widget": "toggle", "title": "录制前向道路视频", "category": "Developer", "group": "路线记录", "offroad_only": True},
   {"key": "LongitudinalPlannerMode", "widget": "multiple_button", "title": "纵向规划器", "group": "纵向 MPC", "options": [{"value": 0, "label": "官方（默认）"}, {"value": 1, "label": "实验"}, {"value": 2, "label": "TN-NoDEC"}], "offroad_only": True},

@@ -121,11 +121,16 @@ _STATUS_LOCK = threading.Lock()
 
 
 def driving_status_enabled() -> bool:
-  return True
+  return Params().get_bool("TeslaWebDrivingVisualization")
 
 
 def driving_status_snapshot() -> dict[str, object]:
   global _STATUS
+  if not driving_status_enabled():
+    with _STATUS_LOCK:
+      _STATUS = None
+    raise PermissionError("请先在设备的 Tesla 设置中开启“浏览器行驶信息”")
+
   with _STATUS_LOCK:
     if _STATUS is None:
       _STATUS = DrivingStatus()

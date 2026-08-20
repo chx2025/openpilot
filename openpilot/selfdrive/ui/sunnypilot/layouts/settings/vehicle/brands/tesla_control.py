@@ -87,6 +87,18 @@ class TeslaControlSettingsLayout(Widget):
       label_callback=lambda value: f"{value} km/h",
       description=tr("Return a configured dynamic mode to sunnypilot below this speed."),
     )
+    self.turn_signal_validation = toggle_item_sp(
+      title=tr("Tesla Turn Signal CAN Test"),
+      param="TeslaTurnSignalValidation",
+      description=tr("Allow the local browser to send bounded turn-signal validation frames using fresh OEM templates. Restart after changing."),
+      enabled=ui_state.is_offroad,
+    )
+    self.speed_button_validation = toggle_item_sp(
+      title=tr("Tesla Speed Button CAN Test"),
+      param="TeslaSpeedButtonValidation",
+      description=tr("Allow the local browser to send one bounded speed-button validation tick using a fresh OEM template. Restart after changing."),
+      enabled=ui_state.is_offroad,
+    )
     self.items = [
       self.planner_settings,
       self.touch_longitudinal_switch,
@@ -97,6 +109,8 @@ class TeslaControlSettingsLayout(Widget):
       self.curve_to_sp,
       self.speed_high,
       self.speed_low,
+      self.turn_signal_validation,
+      self.speed_button_validation,
     ]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
@@ -122,6 +136,8 @@ class TeslaControlSettingsLayout(Widget):
     self.dynamic_ap_longitudinal.action_item.set_enabled(offroad and has_longitudinal)
     self.speed_high.action_item.set_enabled(offroad)
     self.speed_low.action_item.set_enabled(offroad)
+    self.turn_signal_validation.action_item.set_enabled(offroad)
+    self.speed_button_validation.action_item.set_enabled(offroad)
     self._update_visibility()
 
   def _render(self, rect):
@@ -156,6 +172,12 @@ class TeslaControlSettingsAdapter:
       param="TeslaARS408Radar",
       inline=False,
     )
+    self.browser_driving_information = toggle_item_sp(
+      title=tr("Browser Driving Information"),
+      description=tr("Allow the local browser on port 8088 to read and display live SP model and Tesla CAN information."),
+      param="TeslaWebDrivingVisualization",
+      enabled=ui_state.is_offroad,
+    )
     self.traffic_control_mode = toggle_item_sp(
       title=tr("Traffic Light Control (Experimental)"),
       description=tr("When off, traffic-light data is recorded in the background without changing control. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."),  # noqa: E501
@@ -170,6 +192,7 @@ class TeslaControlSettingsAdapter:
     )
 
   def update_settings(self) -> None:
+    self.browser_driving_information.action_item.set_enabled(ui_state.is_offroad())
     self.radar_backend.action_item.set_enabled(ui_state.is_offroad())
     planner_stopped = not planner_session_is_active(ui_state.sm)
     self.traffic_control_mode.action_item.set_enabled(planner_stopped and ui_state.has_longitudinal_control)

@@ -238,6 +238,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TeslaTouchLongitudinalSwitch", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaApHybrid", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaDynamicApLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TeslaSpeedButtonValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TeslaTurnSignalValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TeslaWebDrivingVisualization", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaTurnSignalTestRequest", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
     {"TeslaTurnSignalTestResult", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
     {"TeslaTurnSignalTestStatus", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, JSON}},
@@ -265,8 +268,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"MpcTFollowAggressive", {PERSISTENT | BACKUP, INT, "125"}},
     {"AccelPersonalityEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"AccelPersonality", {PERSISTENT | BACKUP, INT, "1"}},
-    // Test-only local device console starts by default and has no authentication.
+    // The private-LAN console is directly accessible; its opt-in Bash terminal has separate authentication.
     {"WebTerminalEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"WebTerminalPassword", {PERSISTENT | DONT_LOG | BACKUP, STRING, "123456"}},
     {"TeslaTrafficControlMode", {PERSISTENT | BACKUP, INT, "1"}},
     {"TeslaTrafficSignalControlEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaTrafficControlStrategy", {PERSISTENT | BACKUP, INT, "0"}},

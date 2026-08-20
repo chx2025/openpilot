@@ -1,6 +1,7 @@
-"""Unauthenticated, opt-in and offroad-only arbitrary command terminal."""
+"""Password-protected, opt-in and offroad-only arbitrary command terminal."""
 from __future__ import annotations
 
+import hmac
 import os
 import signal
 import subprocess
@@ -23,6 +24,15 @@ def terminal_status(params: Params | None = None) -> dict[str, bool]:
   return console_status(params)
 
 
+def _authorize(password: str | None, params: Params) -> None:
+  if not params.get_bool("WebTerminalEnabled"):
+    raise PermissionError("网页终端未启用")
+  expected = params.get("WebTerminalPassword", return_default=True)
+  if not isinstance(expected, str) or not password or not hmac.compare_digest(password, expected):
+    raise PermissionError("终端密码错误")
+  require_offroad(params)
+
+
 def _terminate(proc: subprocess.Popen) -> None:
   try:
     os.killpg(proc.pid, signal.SIGTERM)
@@ -34,12 +44,9 @@ def _terminate(proc: subprocess.Popen) -> None:
       pass
 
 
-def run_command(command: str, token: str | None, params: Params | None = None) -> dict[str, object]:
+def run_command(command: str, password: str | None, params: Params | None = None) -> dict[str, object]:
   params = params or Params()
-  del token
-  require_offroad(params)
-  if not params.get_bool("WebTerminalEnabled"):
-    raise PermissionError("网页终端未启用")
+  _authorize(password, params)
   if not isinstance(command, str) or not command.strip() or len(command) > MAX_COMMAND_LENGTH:
     raise ValueError("命令必须为 1 到 4096 个字符")
 
@@ -89,3 +96,11 @@ def run_command(command: str, token: str | None, params: Params | None = None) -
     "blocked_onroad": blocked_onroad,
     "output": output,
   }
+
+
+def change_password(current_password: str | None, new_password: str, params: Params | None = None) -> None:
+  params = params or Params()
+  _authorize(current_password, params)
+  if not isinstance(new_password, str) or not 4 <= len(new_password) <= 64:
+    raise ValueError("新密码必须为 4 到 64 个字符")
+  params.put("WebTerminalPassword", new_password, block=True)
