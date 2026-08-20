@@ -18,6 +18,14 @@ v2.6 修正重點 (解決方向盤左右晃動)：
   沒有時間濾波，機率/曲率在門檻附近抖動會直接反映到修正量大小，現在都各自加上
   低通濾波，行為更平滑，UI 繪圖用的平滑邏輯 (self.poly_a/b/c, UI_SMOOTH_TAU)
   維持不變。
+
+v2.7 修正重點 (異常值限幅，補強低通濾波擋不住的單幀爆量雜訊)：
+- 低通濾波 (CTRL_SMOOTH_TAU) 只能拖慢單幀離群值進入修正量的速度，沒辦法真正
+  擋掉它；實測 log 曾出現單幀 poly_c 跳動超過 1m 的離群值，被濾波器拖慢後
+  變成長達數秒的緩慢橫向拉扯，反而更明顯。
+- 新增 _slew_limit()：在把當幀 a/b/c 餵進低通濾波器之前，先依照
+  CTRL_MAX_STEP_*_PER_SEC 限制單幀最大允許變化量，離群值會被直接削掉，
+  只有「持續存在」的真實變化才能在接下來幾幀逐步累積進來。
 """
 
 import os
@@ -87,6 +95,13 @@ CTRL_SMOOTH_TAU = 0.15          # 曲線係數 a,b,c 的控制路徑平滑
 WEIGHT_SMOOTH_TAU = 0.15        # 車道線信心度 weight 的平滑
 CURVATURE_WEIGHT_SMOOTH_TAU = 0.15  # 漸進式曲率權重的平滑
 WEIGHT_ACTIVE_EPS = 1e-4        # 平滑後判斷 weight 是否視為 0 的容差
+
+# --- v2.7 異常值限幅參數 (擋掉單幀離群值，避免低通濾波器把離群值拖成長晃動) ---
+# 數值代表「每秒」最大允許變化量，實際限幅量 = 值 * dt (通常 dt=0.01s)
+# 抓得比正常道路幾何變化率寬鬆一些，只用來擋真正的離群值，不影響正常追線反應
+CTRL_MAX_STEP_A_PER_SEC = 0.01    # 曲率項 a 的最大變化率
+CTRL_MAX_STEP_B_PER_SEC = 0.5     # 斜率項 b 的最大變化率
+CTRL_MAX_STEP_C_PER_SEC = 3.0     # 偏移項 c 的最大變化率 (公尺/秒)
 
 
 def _clip_interp(x, xp, fp):
@@ -162,6 +177,12 @@ class LaneCenteringCorrector:
   def _smooth(self, target: float, current: float, tau: float, dt: float) -> float:
     alpha = dt / max(tau + dt, 1e-5)
     return (1.0 - alpha) * current + alpha * target
+
+  @staticmethod
+  def _slew_limit(target: float, current: float, max_rate_per_sec: float, dt: float) -> float:
+    """限制單幀最大變化量，把離群值削到合理範圍內，再交給低通濾波器處理。"""
+    max_delta = max_rate_per_sec * dt
+    return float(np.clip(target, current - max_delta, current + max_delta))
 
   @staticmethod
   def _calc_curvature_weight(model_curvature: float) -> float:
@@ -407,15 +428,20 @@ class LaneCenteringCorrector:
       self.poly_b = 0.0
       self.poly_c = 0.0
 
-    # --- v2.6 控制路徑平滑：這組才是真正拿去算修正量的係數 ---
+    # --- v2.6/v2.7 控制路徑平滑：這組才是真正拿去算修正量的係數 ---
     # 每次有效擬合都會更新，不受 UI_MIN_DRAW_WEIGHT 門檻影響，避免車道線雜訊
     # 直接放大成方向盤修正量。冷啟動 (係數全為 0) 時直接採用當幀值，之後才平滑。
     if self._ctrl_a == 0.0 and self._ctrl_b == 0.0 and abs(self._ctrl_c) < 1e-7:
       self._ctrl_a, self._ctrl_b, self._ctrl_c = float(a), float(b), float(c)
     else:
-      self._ctrl_a = self._smooth(float(a), self._ctrl_a, CTRL_SMOOTH_TAU, dt)
-      self._ctrl_b = self._smooth(float(b), self._ctrl_b, CTRL_SMOOTH_TAU, dt)
-      self._ctrl_c = self._smooth(float(c), self._ctrl_c, CTRL_SMOOTH_TAU, dt)
+      # v2.7: 先限幅擋掉單幀離群值 (例如車道線暫時鎖錯造成的瞬間 1m+ 跳動)，
+      # 再交給低通濾波器處理正常雜訊，兩層濾波各司其職。
+      a_limited = self._slew_limit(float(a), self._ctrl_a, CTRL_MAX_STEP_A_PER_SEC, dt)
+      b_limited = self._slew_limit(float(b), self._ctrl_b, CTRL_MAX_STEP_B_PER_SEC, dt)
+      c_limited = self._slew_limit(float(c), self._ctrl_c, CTRL_MAX_STEP_C_PER_SEC, dt)
+      self._ctrl_a = self._smooth(a_limited, self._ctrl_a, CTRL_SMOOTH_TAU, dt)
+      self._ctrl_b = self._smooth(b_limited, self._ctrl_b, CTRL_SMOOTH_TAU, dt)
+      self._ctrl_c = self._smooth(c_limited, self._ctrl_c, CTRL_SMOOTH_TAU, dt)
 
     L = max(MIN_LOOKAHEAD_M, v_ego * LOOKAHEAD_TIME_SEC)
     lane_target_curvature = (2.0 * self._ctrl_a) + (2.0 * self._ctrl_b / L) + (2.0 * self._ctrl_c / (L ** 2))
