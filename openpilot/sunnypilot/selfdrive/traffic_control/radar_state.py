@@ -28,6 +28,21 @@ class TrafficControlStrategy(IntEnum):
   trafficRadar = 1
 
 
+TRANSITION_REASON_CODES = {
+  "": 0,
+  "stop_confirmed": 1,
+  "driver_bypass": 2,
+  "radar_invalid": 3,
+  "lead_present": 4,
+  "observation_dropout": 5,
+  "stationary_hold": 6,
+  "green_release": 7,
+  "candidate_started": 8,
+  "candidate_replaced": 9,
+  "candidate_cancelled": 10,
+}
+
+
 class TrafficRadarSource:
   """Publish a traffic-control target independently from physical radarState."""
 
@@ -62,8 +77,11 @@ class TrafficRadarSource:
 
   def update(self, sm, now_ns: int):
     car_state_sp_valid = bool(sm.seen['carStateSP'] and sm.alive['carStateSP'] and sm.valid['carStateSP'])
-    observation = (self._observation(sm['carStateSP'].teslaTrafficControl, now_ns)
-                   if car_state_sp_valid else TeslaTrafficControlObservation())
+    raw_traffic = sm['carStateSP'].teslaTrafficControl if car_state_sp_valid else None
+    raw_frame_mono_time = int(raw_traffic.frameMonoTime) if raw_traffic is not None else 0
+    raw_distance = float(raw_traffic.distance) if raw_traffic is not None else 255.0
+    observation = (self._observation(raw_traffic, now_ns)
+                   if raw_traffic is not None else TeslaTrafficControlObservation())
     car_state = sm['carState']
     car_control = sm['carControl']
     radar_valid = bool(sm.seen['radarState'] and sm.alive['radarState'] and sm.valid['radarState'])
@@ -131,5 +149,16 @@ class TrafficRadarSource:
       valid_for_control
     )
     target.mode = int(decision.mode)
+    target.rawGreenSeen = bool(raw_traffic is not None and raw_traffic.available and raw_traffic.lightState == 2)
+    target.releaseEligible = bool(
+      target.rawGreenSeen and decision.phase == TrafficControlPhase.release and valid_for_control
+    )
+    target.eventContinuous = self.controller.event_continuous
+    target.eventTransitionReason = TRANSITION_REASON_CODES.get(self.controller.transition_reason, 255)
+    target.eventTransitionSeq = self.controller.transition_seq
+    target.rawDistance = raw_distance
+    target.observationAgeMs = float(
+      max(0, now_ns - raw_frame_mono_time) / 1e6 if raw_frame_mono_time > 0 else 0.0
+    )
     msg.valid = bool(model_valid and car_state_sp_valid and radar_valid)
     return msg
