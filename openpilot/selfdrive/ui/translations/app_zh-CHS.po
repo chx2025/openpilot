@@ -1961,6 +1961,14 @@ msgstr "Tesla 雷达后端"
 msgid "Tesla Traffic Control"
 msgstr "Tesla 交通控制"
 
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Traffic Light Control (Experimental)"
+msgstr "交通灯控制（实验）"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "When off, traffic-light data is recorded in the background without changing control. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."
+msgstr "关闭时仅在后台记录交通灯数据，不改变车辆控制。开启后，确认红灯时可自动停车；确认绿灯且前方安全时可自动起步。"
+
 #: openpilot/system/ui/widgets/network.py
 msgid "Tethering Password"
 msgstr "网络共享密码"

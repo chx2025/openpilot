@@ -517,6 +517,13 @@ struct TeslaTrafficControlPlan {
   sourceBus @9 :UInt8;
   quality @10 :UInt8;
   constraintAccel @11 :Float32;
+  action @12 :UInt8;
+  baseATarget @13 :Float32;
+  finalATarget @14 :Float32;
+  startRequested @15 :Bool;
+  startApplied @16 :Bool;
+  startBlockReason @17 :UInt8;
+  eventId @18 :UInt32;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

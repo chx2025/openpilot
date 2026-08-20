@@ -19,6 +19,20 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import LongitudinalTuning
 from openpilot.sunnypilot.selfdrive.traffic_control.target import TrafficMpcTarget
 from openpilot.sunnypilot.selfdrive.traffic_control import trafficcontrold
+from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlMode
+from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import TrafficRadarGoPolicy
+
+
+class FakeParams:
+  def __init__(self, enabled):
+    self.enabled = enabled
+
+  def get(self, key, return_default=False):
+    del return_default
+    return "60" if key == "TeslaTrafficStopReference" else None
+
+  def get_bool(self, key):
+    return self.enabled if key == "TeslaTrafficSignalControlEnabled" else False
 
 
 def test_independent_traffic_radar_service_uses_the_existing_twenty_hz_slot():
@@ -34,6 +48,17 @@ def test_independent_traffic_radar_service_uses_the_existing_twenty_hz_slot():
   assert SERVICE_LIST["trafficRadarState"].should_log
   assert SERVICE_LIST["trafficRadarState"].frequency == 20.0
   assert SERVICE_LIST["trafficRadarState"].decimation == 5
+
+
+def test_user_switch_maps_off_to_observation_and_on_to_stop_go():
+  observed = trafficcontrold.build_source(FakeParams(False))
+  active = trafficcontrold.build_source(FakeParams(True))
+
+  assert observed.controller.config.mode == TrafficControlMode.observe
+  assert observed.go_policy == TrafficRadarGoPolicy.passive
+  assert active.controller.config.mode == TrafficControlMode.stopGo
+  assert active.controller.config.retain_event_with_lead
+  assert active.go_policy == TrafficRadarGoPolicy.active
 
 
 def test_trafficcontrold_publishes_only_the_independent_traffic_radar_service(monkeypatch):

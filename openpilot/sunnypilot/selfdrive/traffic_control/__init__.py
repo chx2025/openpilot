@@ -3,6 +3,7 @@ from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficCon
 
 
 MODE_PARAM = "TeslaTrafficControlMode"
+TRAFFIC_SIGNAL_CONTROL_PARAM = "TeslaTrafficSignalControlEnabled"
 
 
 def configured_mode(params) -> TrafficControlMode:
@@ -27,4 +28,7 @@ def decorate_planner(planner, CP, params):
   return TrafficControlPlannerAdapter(planner, CP, params)
 
 
-__all__ = ("TrafficControlMode", "configured_mode", "decorate_planner", "planner_session_is_active")
+__all__ = (
+  "TRAFFIC_SIGNAL_CONTROL_PARAM", "TrafficControlMode", "configured_mode", "decorate_planner",
+  "planner_session_is_active",
+)
