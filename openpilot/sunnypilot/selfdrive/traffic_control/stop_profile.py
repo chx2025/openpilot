@@ -33,14 +33,14 @@ class StopProfileGenerator:
       return speeds, accels, jerks
 
     speeds[0] = max(0.0, v_ego)
-    if hold or v_ego <= 0.01:
+    if v_ego <= 0.01:
       self.previous_accel = 0.0
       return speeds, accels, jerks
 
     current_a = float(np.clip(a_ego if self.previous_accel is None else self.previous_accel,
                               -self.comfort_brake, 0.0))
     accels[0] = current_a
-    remaining = max(remaining_distance, 0.0)
+    remaining = 0.0 if hold else max(remaining_distance, 0.0)
     for i in range(1, len(times)):
       dt = self._dt(times, i)
       effective_distance = max(remaining - speeds[i - 1] * self.actuator_delay, 0.5)

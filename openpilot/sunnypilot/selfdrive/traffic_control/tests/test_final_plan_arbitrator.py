@@ -120,6 +120,41 @@ def test_zero_remaining_distance_while_moving_keeps_braking_until_stopped():
   assert not plan.allowThrottle
 
 
+def test_hold_phase_while_vehicle_is_still_moving_keeps_braking():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  plan = base_plan()
+  sm = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=True, event_id=8, distance=0.0, v_ego=0.7,
+  )
+
+  arbitrator.apply(plan, sm, NOW_NS)
+
+  assert arbitrator.diagnostics.action == TrafficPlanAction.hold
+  assert arbitrator.diagnostics.applied
+  assert plan.aTarget < 0.0
+  assert plan.shouldStop
+  assert not plan.allowThrottle
+
+
+def test_terminal_stop_does_not_sample_zero_after_the_predicted_stop():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.5))
+  plan = base_plan(a_target=0.1)
+  sm = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=8, distance=0.0, v_ego=0.8,
+  )
+  sm["carState"].aEgo = -2.4
+
+  arbitrator.apply(plan, sm, NOW_NS)
+
+  assert arbitrator.diagnostics.terminal_catch_active
+  assert arbitrator.diagnostics.traffic_a_target < 0.0
+  assert plan.aTarget < 0.0
+  assert plan.shouldStop
+  assert not plan.allowThrottle
+
+
 def test_low_speed_stop_enters_terminal_catch_before_distance_is_exhausted():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   plan = base_plan()
@@ -152,7 +187,43 @@ def test_terminal_catch_survives_a_short_traffic_publisher_gap():
   assert arbitrator.diagnostics.action == TrafficPlanAction.hold
   assert latched.shouldStop
   assert not latched.allowThrottle
-  assert latched.aTarget <= 0.0
+  assert latched.aTarget < 0.0
+
+
+def test_terminal_to_hold_sequence_brakes_until_actual_standstill():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.5))
+  sm = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=10, distance=0.8, v_ego=1.5,
+  )
+
+  terminal = base_plan(a_target=0.3)
+  arbitrator.apply(terminal, sm, NOW_NS)
+
+  sm["trafficRadarState"].phase = int(TrafficControlPhase.hold)
+  sm["trafficRadarState"].shouldStop = True
+  sm["trafficRadarState"].distanceToStopPoint = 0.0
+  sm["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
+  sm["carState"].vEgo = 0.7
+  moving_hold = base_plan(a_target=0.3)
+  arbitrator.apply(moving_hold, sm, NOW_NS + 50_000_000)
+
+  sm.alive["trafficRadarState"] = False
+  sm["carState"].vEgo = 0.4
+  publisher_gap = base_plan(a_target=0.3)
+  arbitrator.apply(publisher_gap, sm, NOW_NS + 100_000_000)
+
+  sm["carState"].vEgo = 0.0
+  standstill = base_plan(a_target=0.3)
+  arbitrator.apply(standstill, sm, NOW_NS + 150_000_000)
+
+  for moving_plan in (terminal, moving_hold, publisher_gap):
+    assert moving_plan.aTarget < 0.0
+    assert moving_plan.shouldStop
+    assert not moving_plan.allowThrottle
+  assert standstill.aTarget == 0.0
+  assert standstill.shouldStop
+  assert not standstill.allowThrottle
 
 
 def test_green_start_requires_same_event_hold_and_base_permission():

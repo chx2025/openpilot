@@ -153,10 +153,42 @@ class FinalPlanArbitrator:
     self.diagnostics.source_bus = int(traffic.sourceBus)
     self.diagnostics.quality = int(traffic.quality)
 
-  def _apply_stop(self, plan, sm, traffic) -> None:
+  def _stop_target_accel(self, stop_accels: np.ndarray, times: np.ndarray, *, terminal: bool) -> float:
+    actuator_time = self._actuator_delay + TERMINAL_LOOKAHEAD_S
+    target = float(np.interp(actuator_time, times, stop_accels))
+    if terminal:
+      actuator_window = stop_accels[times <= actuator_time]
+      if len(actuator_window):
+        target = min(target, float(np.min(actuator_window)))
+    return target
+
+  def _apply_stop_constraint(self, plan, sm, *, remaining_distance: float,
+                             hold: bool, terminal: bool) -> float:
     base_speeds = np.asarray(plan.speeds, dtype=float)
     base_accels = np.asarray(plan.accels, dtype=float)
     times = self._times(len(base_speeds))
+    v_ego = float(sm["carState"].vEgo)
+    stop_speeds, stop_accels, _ = self._profile.build_stop(
+      v_ego=v_ego,
+      a_ego=float(sm["carState"].aEgo),
+      remaining_distance=remaining_distance,
+      times=times,
+      hold=hold,
+    )
+    final_speeds = np.minimum(base_speeds, stop_speeds)
+    final_accels = np.minimum(base_accels, stop_accels)
+    traffic_a_target = self._stop_target_accel(stop_accels, times, terminal=terminal)
+    final_a_target = min(float(plan.aTarget), traffic_a_target)
+
+    plan.speeds = final_speeds.tolist()
+    plan.accels = final_accels.tolist()
+    plan.jerks = self._padded_jerks(final_accels, times, len(plan.jerks)).tolist()
+    plan.aTarget = final_a_target
+    plan.shouldStop = bool(plan.shouldStop or hold or terminal)
+    plan.allowThrottle = bool(plan.allowThrottle and not (hold or terminal))
+    return traffic_a_target
+
+  def _apply_stop(self, plan, sm, traffic) -> None:
     phase = TrafficControlPhase(int(traffic.phase))
     hold = bool(phase == TrafficControlPhase.hold or traffic.shouldStop)
     v_ego = float(sm["carState"].vEgo)
@@ -172,24 +204,12 @@ class FinalPlanArbitrator:
         or (v_ego <= TERMINAL_MAX_SPEED and remaining_distance <= terminal_distance)
       )
     )
-    stop_speeds, stop_accels, _ = self._profile.build_stop(
-      v_ego=v_ego,
-      a_ego=float(sm["carState"].aEgo),
+    traffic_a_target = self._apply_stop_constraint(
+      plan, sm,
       remaining_distance=remaining_distance,
-      times=times,
       hold=hold,
+      terminal=hold or terminal_stop,
     )
-    final_speeds = np.minimum(base_speeds, stop_speeds)
-    final_accels = np.minimum(base_accels, stop_accels)
-    traffic_a_target = float(np.interp(self._actuator_delay + 0.05, times, stop_accels))
-    final_a_target = min(float(plan.aTarget), traffic_a_target)
-
-    plan.speeds = final_speeds.tolist()
-    plan.accels = final_accels.tolist()
-    plan.jerks = self._padded_jerks(final_accels, times, len(plan.jerks)).tolist()
-    plan.aTarget = final_a_target
-    plan.shouldStop = bool(plan.shouldStop or hold or terminal_stop)
-    plan.allowThrottle = bool(plan.allowThrottle and not (hold or terminal_stop))
 
     if hold or terminal_stop:
       self._held_event_id = int(traffic.eventId)
@@ -201,7 +221,7 @@ class FinalPlanArbitrator:
     self.diagnostics.action = TrafficPlanAction.hold if hold else TrafficPlanAction.stop
     self.diagnostics.applied = True
     self.diagnostics.traffic_a_target = traffic_a_target
-    self.diagnostics.terminal_catch_active = terminal_stop
+    self.diagnostics.terminal_catch_active = bool(terminal_stop or (hold and v_ego > 0.01))
 
   def _start_block_reason(self, plan, sm, traffic) -> TrafficStartBlockReason:
     event_id = int(traffic.eventId)
@@ -280,18 +300,18 @@ class FinalPlanArbitrator:
     self.diagnostics.traffic_a_target = start_a_target
     return True
 
-  def _apply_latched_hold(self, plan) -> None:
-    length = len(plan.speeds)
-    plan.speeds = np.zeros(length, dtype=float).tolist()
-    plan.accels = np.zeros(len(plan.accels), dtype=float).tolist()
-    plan.jerks = np.zeros(len(plan.jerks), dtype=float).tolist()
-    plan.aTarget = min(float(plan.aTarget), 0.0)
-    plan.shouldStop = True
-    plan.allowThrottle = False
+  def _apply_latched_hold(self, plan, sm) -> None:
+    traffic_a_target = self._apply_stop_constraint(
+      plan, sm,
+      remaining_distance=0.0,
+      hold=True,
+      terminal=True,
+    )
     self.diagnostics.action = TrafficPlanAction.hold
     self.diagnostics.applied = True
     self.diagnostics.event_id = self._held_event_id
-    self.diagnostics.traffic_a_target = 0.0
+    self.diagnostics.traffic_a_target = traffic_a_target
+    self.diagnostics.terminal_catch_active = float(sm["carState"].vEgo) > 0.01
 
   def _apply_release(self, plan, sm) -> None:
     if not self._was_stopping:
@@ -362,7 +382,7 @@ class FinalPlanArbitrator:
       if not self._apply_start(plan, sm, traffic, now_ns):
         self._apply_release(plan, sm)
     elif self._hold_latched and float(sm["carState"].vEgo) <= TERMINAL_MAX_SPEED and physical_clear and driver_allows:
-      self._apply_latched_hold(plan)
+      self._apply_latched_hold(plan, sm)
     else:
       if self._active_start_event_id != 0:
         self._finish_start(self._active_start_event_id)
