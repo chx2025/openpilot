@@ -254,7 +254,11 @@ class TeslaTrafficControlController:
       self.reset()
       self.last_update_ns = now_ns
 
-    if not enabled or (self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and not long_active):
+    # Observation and shadow are counterfactual data-collection modes: keep
+    # evaluating them for the full onroad route, including disengaged periods.
+    # Actuating modes remain gated by both engagement and longitudinal control.
+    if (self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo)
+        and (not enabled or not long_active)):
       self.reset()
       return self._decision()
 

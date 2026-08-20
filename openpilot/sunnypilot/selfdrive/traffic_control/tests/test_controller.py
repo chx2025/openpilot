@@ -241,6 +241,35 @@ def test_route_candidate_jitter_preserves_one_candidate_until_a_real_dropout():
   assert transitions == ["candidate_started"]
 
 
+def test_shadow_collects_counterfactual_decisions_while_disengaged():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.shadow))
+
+  decision = None
+  for now_s, distance in ((0.0, 80.0), (0.3, 76.0), (0.6, 72.0)):
+    decision = update(
+      controller, now_s, observation(distance, now_ns=int(now_s * 1e9)),
+      model_stop_distance=distance - 6.0, model_stop_candidate=True,
+      enabled=False, long_active=False,
+    )
+
+  assert decision is not None and decision.active
+  assert decision.shadow
+  assert not decision.apply_constraint
+
+
+def test_actuating_mode_still_resets_while_disengaged():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+
+  decision = update(
+    controller, 0.0, observation(), model_stop_distance=74.0, model_stop_candidate=True,
+    enabled=False, long_active=False,
+  )
+
+  assert decision.phase == TrafficControlPhase.off
+  assert not decision.active
+  assert not decision.apply_constraint
+
+
 def test_large_downward_distance_jump_is_a_new_target_and_restarts_confirmation():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   update(controller, 0.0, observation(150.0, now_ns=0), v_ego=10.0)
