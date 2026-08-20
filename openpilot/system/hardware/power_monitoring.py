@@ -39,8 +39,8 @@ class PowerMonitoring:
     try:
       now = time.monotonic()
 
-      # If peripheralState is None, we're probably not in a car, so we don't care
-      if voltage is None:
+      # Missing or non-positive voltage is not a valid vehicle-battery sample.
+      if voltage is None or voltage <= 0:
         with self.integration_lock:
           self.last_measurement_time = None
           self.next_pulsed_measurement_time = None

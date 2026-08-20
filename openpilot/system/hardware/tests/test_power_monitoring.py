@@ -39,6 +39,22 @@ class TestPowerMonitoring(OpenpilotTestCase):
     assert pm.get_power_used() == 0
     assert pm.get_car_battery_capacity() == (CAR_BATTERY_CAPACITY_uWh / 10)
 
+  def test_zero_voltage_is_treated_as_missing_data(self, mocker):
+    current_power_draw = mocker.patch(
+      "openpilot.system.hardware.power_monitoring.HARDWARE.get_current_power_draw", return_value=135.0,
+    )
+    pm = PowerMonitoring()
+    initial_capacity = pm.get_car_battery_capacity()
+    offroad_timestamp = ssb
+
+    for _ in range(DELAY_SHUTDOWN_TIME_S + 10):
+      pm.calculate(0, False)
+
+    assert pm.get_power_used() == 0
+    assert pm.get_car_battery_capacity() == initial_capacity
+    assert not pm.should_shutdown(False, True, offroad_timestamp, True)
+    current_power_draw.assert_not_called()
+
   # Test to see that it doesn't integrate offroad when ignition is True
   def test_offroad_ignition(self):
     pm = PowerMonitoring()
