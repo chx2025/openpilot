@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import (
   BACKENDS, BackendId, get_backend, ordered_backends, validate_registry,
 )
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends import factory
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.session import (
   ACTIVE_BACKEND_PARAM, latch_active_backend,
 )
@@ -75,6 +76,25 @@ def test_custom_backend_selection_is_latched():
   params = FakeParams({"LongitudinalPlannerMode": int(BackendId.TN_NO_DEC)})
   assert latch_active_backend(params).id == BackendId.TN_NO_DEC
   assert params.values[ACTIVE_BACKEND_PARAM] == int(BackendId.TN_NO_DEC)
+
+
+def test_factory_leaves_traffic_control_adapter_disconnected(monkeypatch):
+  configured = []
+  planner = SimpleNamespace(
+    mpc=SimpleNamespace(configure_runtime_tuning=lambda params, spec: configured.append((params, spec))),
+  )
+  spec = SimpleNamespace(id=BackendId.OFFICIAL)
+  params = FakeParams({"TeslaTrafficControlMode": 4})
+  monkeypatch.setattr(factory, "latch_active_backend", lambda _: spec)
+  monkeypatch.setattr(factory, "_load_provider", lambda _: lambda CP, CP_SP: planner)
+
+  result = factory.create_longitudinal_planner(
+    SimpleNamespace(brand="tesla"), SimpleNamespace(), params=params,
+  )
+
+  assert result is planner
+  assert planner.active_backend_id == BackendId.OFFICIAL
+  assert configured == [(params, spec)]
 
 
 def test_default_backend_hooks_preserve_upstream_dec_behavior():

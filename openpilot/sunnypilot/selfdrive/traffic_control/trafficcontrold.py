@@ -5,8 +5,7 @@ import numpy as np
 import openpilot.cereal.messaging as messaging
 from openpilot.common.params import Params
 from openpilot.common.realtime import Priority, config_realtime_process
-from openpilot.sunnypilot.selfdrive.traffic_control import runtime_mode
-from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlConfig
+from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlConfig, TrafficControlMode
 from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import (
   TrafficControlStrategy,
   TrafficRadarGoPolicy,
@@ -31,10 +30,7 @@ def build_source(params: Params) -> TrafficRadarSource:
     params, "TeslaTrafficControlStrategy", TrafficControlStrategy, TrafficControlStrategy.stopProfile,
   )
   config = TrafficControlConfig(
-    # During observation-only testing this is forced to shadow without
-    # overwriting the user's stored mode. Shadow retains the full decision
-    # pipeline for route analysis while never setting apply_constraint.
-    mode=runtime_mode(params),
+    mode=_enum_param(params, "TeslaTrafficControlMode", TrafficControlMode, TrafficControlMode.off),
     default_stop_reference=reference,
     adaptive_reference=params.get_bool("TeslaTrafficAdaptiveReference"),
     retain_event_with_lead=strategy == TrafficControlStrategy.trafficRadar,

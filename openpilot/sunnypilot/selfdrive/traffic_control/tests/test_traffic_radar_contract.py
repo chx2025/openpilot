@@ -19,34 +19,6 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import LongitudinalTuning
 from openpilot.sunnypilot.selfdrive.traffic_control.target import TrafficMpcTarget
 from openpilot.sunnypilot.selfdrive.traffic_control import trafficcontrold
-from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlMode
-
-
-class FakeParams:
-  values = {
-    "TeslaTrafficStopReference": "60",
-    "TeslaTrafficControlStrategy": "1",
-    "TeslaTrafficObstacleGoPolicy": "1",
-  }
-
-  def get(self, key, *, return_default=False):
-    assert return_default
-    return self.values[key]
-
-  def get_bool(self, key):
-    assert key == "TeslaTrafficAdaptiveReference"
-    return True
-
-
-@pytest.mark.parametrize("stored_mode", list(TrafficControlMode))
-def test_trafficcontrold_is_forced_to_shadow_without_overwriting_stored_mode(stored_mode):
-  params = FakeParams()
-  params.values = {**params.values, "TeslaTrafficControlMode": str(int(stored_mode))}
-
-  source = trafficcontrold.build_source(params)
-
-  assert source.controller.config.mode == TrafficControlMode.shadow
-  assert params.values["TeslaTrafficControlMode"] == str(int(stored_mode))
 
 
 def test_independent_traffic_radar_service_uses_the_existing_twenty_hz_slot():

@@ -4,7 +4,10 @@ from typing import Any, Protocol
 from openpilot.common.params import Params
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.registry import BackendSpec
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.session import latch_active_backend
-from openpilot.sunnypilot.selfdrive.traffic_control import decorate_planner
+# Traffic-control observation, state estimation, and route logging remain
+# active in trafficcontrold. Temporarily leave its longitudinal planner adapter
+# disconnected while the recorded data is evaluated.
+# from openpilot.sunnypilot.selfdrive.traffic_control import decorate_planner
 
 
 class PlannerBackend(Protocol):
@@ -26,4 +29,5 @@ def create_longitudinal_planner(CP, CP_SP, *, params=None) -> PlannerBackend:
   planner = _load_provider(spec)(CP, CP_SP)
   planner.active_backend_id = spec.id
   planner.mpc.configure_runtime_tuning(params, spec)
-  return decorate_planner(planner, CP, params)
+  # return decorate_planner(planner, CP, params)
+  return planner

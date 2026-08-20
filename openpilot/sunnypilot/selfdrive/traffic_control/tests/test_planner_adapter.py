@@ -322,11 +322,11 @@ def test_stop_profile_never_raises_a_backend_trajectory():
 
 
 @pytest.mark.parametrize("mode", list(TrafficControlMode))
-def test_observation_only_gate_never_installs_planner_adapter(mode):
+def test_adapter_is_installed_for_tesla_only_when_traffic_is_not_off(mode):
   params = FakeParams(mode=mode)
   base = FakePlanner()
   planner = decorate_planner(base, ns(brand="tesla", longitudinalActuatorDelay=0.2), params)
-  assert planner is base
+  assert (planner is base) if mode == TrafficControlMode.off else isinstance(planner, TrafficControlPlannerAdapter)
 
   non_tesla = FakePlanner()
   assert decorate_planner(
