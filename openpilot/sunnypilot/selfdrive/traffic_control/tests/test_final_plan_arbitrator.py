@@ -88,6 +88,73 @@ def test_confirmed_red_builds_a_bounded_complete_stop_plan():
   assert len(plan.speeds) == len(plan.accels) == len(plan.jerks) == 17
 
 
+def test_fresh_raw_can_target_survives_a_300ms_interprocess_planner_gap():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  plan = base_plan()
+  sm = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=7, distance=24.0,
+  )
+
+  arbitrator.apply(plan, sm, NOW_NS + 300_000_000)
+
+  assert arbitrator.diagnostics.action == TrafficPlanAction.stop
+  assert arbitrator.diagnostics.applied
+  assert plan.aTarget < 0.4
+
+
+def test_zero_remaining_distance_while_moving_keeps_braking_until_stopped():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  plan = base_plan()
+  sm = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=8, distance=0.0, v_ego=1.1,
+  )
+
+  arbitrator.apply(plan, sm, NOW_NS)
+
+  assert arbitrator.diagnostics.action == TrafficPlanAction.stop
+  assert arbitrator.diagnostics.applied
+  assert plan.aTarget < 0.0
+  assert plan.shouldStop
+  assert not plan.allowThrottle
+
+
+def test_low_speed_stop_enters_terminal_catch_before_distance_is_exhausted():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  plan = base_plan()
+  sm = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=9, distance=0.5, v_ego=1.1,
+  )
+
+  arbitrator.apply(plan, sm, NOW_NS)
+
+  assert arbitrator.diagnostics.terminal_catch_active
+  assert plan.aTarget < 0.0
+  assert plan.shouldStop
+  assert not plan.allowThrottle
+
+
+def test_terminal_catch_survives_a_short_traffic_publisher_gap():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  sm = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=9, distance=0.8, v_ego=1.5,
+  )
+  arbitrator.apply(base_plan(), sm, NOW_NS)
+  sm.alive["trafficRadarState"] = False
+  sm["carState"].vEgo = 1.4
+  latched = base_plan(a_target=0.3)
+
+  arbitrator.apply(latched, sm, NOW_NS + 100_000_000)
+
+  assert arbitrator.diagnostics.action == TrafficPlanAction.hold
+  assert latched.shouldStop
+  assert not latched.allowThrottle
+  assert latched.aTarget <= 0.0
+
+
 def test_green_start_requires_same_event_hold_and_base_permission():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   hold = fake_sm(
@@ -107,13 +174,36 @@ def test_green_start_requires_same_event_hold_and_base_permission():
 
   assert arbitrator.diagnostics.action == TrafficPlanAction.start
   assert arbitrator.diagnostics.start_applied
-  assert 0.0 < start_plan.aTarget <= 0.35
+  assert 0.0 < start_plan.aTarget <= 0.60
   assert not start_plan.shouldStop
 
   continuing = base_plan(a_target=0.1, should_stop=False)
   arbitrator.apply(continuing, green, NOW_NS + 100_000_000)
   assert arbitrator.diagnostics.start_applied
-  assert 0.0 < continuing.aTarget <= 0.35
+  assert 0.0 < continuing.aTarget <= 0.60
+
+
+def test_stable_green_start_reaches_a_responsive_but_bounded_acceleration():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  hold = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=True, event_id=10, distance=0.0, v_ego=0.0,
+  )
+  arbitrator.apply(base_plan(a_target=0.0), hold, NOW_NS)
+  green = fake_sm(
+    phase=TrafficControlPhase.release, light_state=2, allowed=True,
+    start=True, event_id=10, distance=0.0, v_ego=0.0,
+  )
+
+  plan = base_plan(a_target=0.1, should_stop=False)
+  for cycle in range(1, 21):
+    plan = base_plan(a_target=0.1, should_stop=False)
+    now_ns = NOW_NS + cycle * 50_000_000
+    green["trafficRadarState"].publishMonoTime = now_ns
+    arbitrator.apply(plan, green, now_ns)
+
+  assert arbitrator.diagnostics.start_applied
+  assert 0.45 <= plan.aTarget <= 0.60
 
 
 def test_green_start_never_overrides_base_stop_or_negative_acceleration():
@@ -222,4 +312,5 @@ def test_plan_sp_schema_records_base_final_and_start_diagnostics():
   assert diagnostics.eventId == 21
   assert diagnostics.baseATarget == pytest.approx(0.4)
   assert diagnostics.finalATarget == pytest.approx(plan.aTarget)
+  assert not diagnostics.terminalCatchActive
   assert message.longitudinalPlanSP.aTarget == pytest.approx(plan.aTarget)

@@ -524,6 +524,7 @@ struct TeslaTrafficControlPlan {
   startApplied @16 :Bool;
   startBlockReason @17 :UInt8;
   eventId @18 :UInt32;
+  terminalCatchActive @19 :Bool;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {
@@ -567,6 +568,13 @@ struct TrafficRadarState @0xcb9fd56c7057593a {
   shouldStop @14 :Bool;
   plannerStartRequested @15 :Bool;
   mode @16 :UInt8;
+  rawGreenSeen @17 :Bool;
+  releaseEligible @18 :Bool;
+  eventContinuous @19 :Bool;
+  eventTransitionReason @20 :UInt8;
+  eventTransitionSeq @21 :UInt32;
+  rawDistance @22 :Float32;
+  observationAgeMs @23 :Float32;
 }
 
 struct CustomReserved11 @0xc2243c65e0340384 {

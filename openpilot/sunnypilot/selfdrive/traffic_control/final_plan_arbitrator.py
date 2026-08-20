@@ -11,13 +11,16 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.traffic_control import TRAFFIC_SIGNAL_CONTROL_PARAM
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
 from openpilot.sunnypilot.selfdrive.traffic_control.stop_profile import StopProfileGenerator
-from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import TRAFFIC_CONTROL_STALE_NS
 
 
-START_MAX_ACCEL = 0.35
-START_MAX_SPEED = 1.5
+START_MAX_ACCEL = 0.55
+START_MAX_SPEED = 2.5
 START_MIN_BASE_ACCEL = -0.05
-START_MAX_DURATION_NS = 2_000_000_000
+START_MAX_DURATION_NS = 3_000_000_000
+START_JERK_LIMIT = 0.75
+TERMINAL_MAX_SPEED = 1.5
+TERMINAL_LOOKAHEAD_S = 0.05
+PLANNER_TRAFFIC_STALE_NS = 350_000_000
 
 
 class TrafficPlanAction(IntEnum):
@@ -58,6 +61,7 @@ class TrafficPlanDiagnostics:
   traffic_a_target: float = 0.0
   final_a_target: float = 0.0
   should_stop: bool = False
+  terminal_catch_active: bool = False
 
 
 class _TrafficPlanPublishSink:
@@ -83,7 +87,10 @@ class FinalPlanArbitrator:
 
   def __init__(self, CP) -> None:
     self._actuator_delay = float(CP.longitudinalActuatorDelay)
-    self._profile = StopProfileGenerator(actuator_delay=self._actuator_delay)
+    self._profile = StopProfileGenerator(
+      actuator_delay=self._actuator_delay,
+      release_jerk_limit=START_JERK_LIMIT,
+    )
     self._held_event_id = 0
     self._active_start_event_id = 0
     self._completed_start_event_id = 0
@@ -104,7 +111,7 @@ class FinalPlanArbitrator:
       return None
     traffic = sm["trafficRadarState"]
     age_ns = now_ns - int(traffic.publishMonoTime)
-    return traffic if 0 <= age_ns <= TRAFFIC_CONTROL_STALE_NS else None
+    return traffic if 0 <= age_ns <= PLANNER_TRAFFIC_STALE_NS else None
 
   def _physical_radar_clear(self, sm) -> bool:
     if not self._healthy(sm, "radarState"):
@@ -152,10 +159,23 @@ class FinalPlanArbitrator:
     times = self._times(len(base_speeds))
     phase = TrafficControlPhase(int(traffic.phase))
     hold = bool(phase == TrafficControlPhase.hold or traffic.shouldStop)
+    v_ego = float(sm["carState"].vEgo)
+    remaining_distance = max(0.0, float(traffic.distanceToStopPoint))
+    terminal_distance = (
+      v_ego * (self._actuator_delay + TERMINAL_LOOKAHEAD_S)
+      + v_ego ** 2 / (2.0 * self._profile.comfort_brake)
+    )
+    terminal_stop = bool(
+      v_ego > 0.01
+      and (
+        remaining_distance <= 0.01
+        or (v_ego <= TERMINAL_MAX_SPEED and remaining_distance <= terminal_distance)
+      )
+    )
     stop_speeds, stop_accels, _ = self._profile.build_stop(
-      v_ego=float(sm["carState"].vEgo),
+      v_ego=v_ego,
       a_ego=float(sm["carState"].aEgo),
-      remaining_distance=max(0.0, float(traffic.distanceToStopPoint)),
+      remaining_distance=remaining_distance,
       times=times,
       hold=hold,
     )
@@ -168,10 +188,10 @@ class FinalPlanArbitrator:
     plan.accels = final_accels.tolist()
     plan.jerks = self._padded_jerks(final_accels, times, len(plan.jerks)).tolist()
     plan.aTarget = final_a_target
-    plan.shouldStop = bool(plan.shouldStop or hold)
-    plan.allowThrottle = bool(plan.allowThrottle and not hold)
+    plan.shouldStop = bool(plan.shouldStop or hold or terminal_stop)
+    plan.allowThrottle = bool(plan.allowThrottle and not (hold or terminal_stop))
 
-    if hold:
+    if hold or terminal_stop:
       self._held_event_id = int(traffic.eventId)
       self._active_start_event_id = 0
       self._completed_start_event_id = 0
@@ -181,6 +201,7 @@ class FinalPlanArbitrator:
     self.diagnostics.action = TrafficPlanAction.hold if hold else TrafficPlanAction.stop
     self.diagnostics.applied = True
     self.diagnostics.traffic_a_target = traffic_a_target
+    self.diagnostics.terminal_catch_active = terminal_stop
 
   def _start_block_reason(self, plan, sm, traffic) -> TrafficStartBlockReason:
     event_id = int(traffic.eventId)
@@ -240,6 +261,7 @@ class FinalPlanArbitrator:
     times = self._times(len(plan.speeds))
     start_speeds, start_accels, _ = self._profile.build_release(
       v_ego=v_ego, base_accel=requested_accel, times=times,
+      preserve_positive_accel=True,
     )
     start_a_target = float(np.interp(self._actuator_delay + 0.05, times, start_accels))
     final_a_target = float(np.clip(max(base_a_target, start_a_target), 0.0, START_MAX_ACCEL))
@@ -339,7 +361,7 @@ class FinalPlanArbitrator:
     elif traffic is not None and bool(traffic.plannerStartRequested) and int(traffic.lightState) == 2:
       if not self._apply_start(plan, sm, traffic, now_ns):
         self._apply_release(plan, sm)
-    elif self._hold_latched and float(sm["carState"].vEgo) <= 1.0 and physical_clear and driver_allows:
+    elif self._hold_latched and float(sm["carState"].vEgo) <= TERMINAL_MAX_SPEED and physical_clear and driver_allows:
       self._apply_latched_hold(plan)
     else:
       if self._active_start_event_id != 0:
@@ -372,6 +394,7 @@ class FinalPlanArbitrator:
     target.startApplied = diagnostics.start_applied
     target.startBlockReason = int(diagnostics.start_block_reason)
     target.eventId = diagnostics.event_id
+    target.terminalCatchActive = diagnostics.terminal_catch_active
 
 
 def create_final_plan_arbitrator(CP, params) -> FinalPlanArbitrator | None:
