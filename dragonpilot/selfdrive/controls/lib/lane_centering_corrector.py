@@ -13,6 +13,15 @@ v2.10 新增晃動偵測 (Wobble Detection) 欄位：
 
 v2.11 修改 LOG 記錄頻率：
 - 將 LOG_INTERVAL_SEC 從 0.1 秒改為 0.5 秒，減少檔案大小。
+
+v2.12 新增車道寬度合理性檢查 (解決市區持續性單向偏移)：
+- 市區路口的停止線、斑馬線、路邊停車常常讓多點插值抓到不該抓的點，
+  擬合出的中心線會在好幾秒內持續偏向同一邊——這不是雜訊，是真實資料被污染，
+  之前的濾波器/限幅/死區都沒辦法擋（因為它們只擋瞬間離群值，這種是持續性訊號）。
+- 新增 LANE_WIDTH_MIN/MAX：每個插值點都額外檢查左右線距離是否落在合理車道寬度
+  範圍內，不合理的點直接捨棄，不納入 polyfit。捨棄後有效點 < 3 才會判定失敗，
+  並新增 LANE_WIDTH_FAIL 狀態方便從 log 分辨是插值失敗還是寬度不合理被擋。
+- ACTIVE 時額外記錄 avg_lane_width 到 log，方便之後依實際道路寬度分布微調門檻。
 """
 
 import os
@@ -36,7 +45,7 @@ LOG_COLUMNS = [
   "weight", "poly_a", "poly_b", "poly_c", "lane_target_curv",
   "path_std", "pos_error", "yield_persist_timer", "yield_factor", "yield_suppression_pct",
   "curvature_error", "raw_correction", "rate_limited_correction", "correction",
-  "delta_correction", "wobble_rate"
+  "delta_correction", "wobble_rate", "avg_lane_width"
 ]
 
 # --- 系統內建參數 ---
@@ -85,6 +94,12 @@ WEIGHT_ACTIVE_EPS = 1e-4
 CTRL_MAX_STEP_A_PER_SEC = 0.01    
 CTRL_MAX_STEP_B_PER_SEC = 0.5     
 CTRL_MAX_STEP_C_PER_SEC = 3.0     
+
+# --- v2.12 車道寬度合理性檢查 (公尺)：擋掉被斑馬線/停止線/路邊停車污染的插值點 ---
+# 台灣道路實際寬度落差較大，這組數字是保守起點，建議依 log 的 avg_lane_width
+# 實際分布再微調，不要一開始就抓太緊，避免正常窄巷道路被誤判失敗
+LANE_WIDTH_MIN = 2.5
+LANE_WIDTH_MAX = 4.2
 
 
 def _clip_interp(x, xp, fp):
@@ -373,18 +388,30 @@ class LaneCenteringCorrector:
 
     valid_x = []
     center_y = []
+    widths = []
+    width_reject_count = 0
     for x in dynamic_fit_x:
       l_y = _clip_interp(x, lll.x, lll.y)
       r_y = _clip_interp(x, rll.x, rll.y)
-      if l_y is not None and r_y is not None:
-        valid_x.append(x)
-        center_y.append((l_y + r_y) / 2.0)
+      if l_y is None or r_y is None:
+        continue
+      width = abs(l_y - r_y)
+      if width < LANE_WIDTH_MIN or width > LANE_WIDTH_MAX:
+        # 寬度不合理，通常是插到斑馬線/停止線/路邊停車，直接捨棄這個點
+        width_reject_count += 1
+        continue
+      valid_x.append(x)
+      widths.append(width)
+      center_y.append((l_y + r_y) / 2.0)
+
+    avg_lane_width = float(np.mean(widths)) if widths else -1.0
 
     if len(valid_x) < 3:
       self._active = False
       self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
-      self._log_fallback("INTERP_FAIL", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
+      _fail_state = "LANE_WIDTH_FAIL" if width_reject_count > 0 else "INTERP_FAIL"
+      self._log_fallback(_fail_state, dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
       return self.correction
 
     try:
@@ -478,6 +505,7 @@ class LaneCenteringCorrector:
                     curvature_error=raw_curvature_error,  
                     raw_correction=raw_correction, rate_limited_correction=rate_limited_correction,
                     correction=self.correction,
-                    delta_correction=delta_correction, wobble_rate=wobble_rate)
+                    delta_correction=delta_correction, wobble_rate=wobble_rate,
+                    avg_lane_width=avg_lane_width)
     
     return self.correction
