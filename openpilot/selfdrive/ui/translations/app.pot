@@ -2208,6 +2208,14 @@ msgid "Traffic Light Control (Experimental)"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Traffic Light Stop Reference"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Adjust how far before Tesla's reported traffic-control point the vehicle stops. Higher values stop earlier; lower values stop closer. Changes apply to the next traffic-light event without restarting."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "When off, traffic-light data is recorded in the background without changing control. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."
 msgstr ""
 

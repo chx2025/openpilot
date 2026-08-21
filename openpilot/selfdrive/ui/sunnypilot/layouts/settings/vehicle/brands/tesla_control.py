@@ -183,6 +183,15 @@ class TeslaControlSettingsAdapter:
       description=tr("When off, traffic-light data is recorded in the background without changing control. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."),  # noqa: E501
       param=TRAFFIC_SIGNAL_CONTROL_PARAM,
     )
+    self.traffic_stop_reference = option_item_sp(
+      title=tr("Traffic Light Stop Reference"),
+      param="TeslaTrafficStopReference",
+      min_value=20,
+      max_value=120,
+      value_change_step=5,
+      label_callback=lambda value: f"{value / 10.0:.1f} m",
+      description=tr("Adjust how far before Tesla's reported traffic-control point the vehicle stops. Higher values stop earlier; lower values stop closer. Changes apply to the next traffic-light event without restarting."),  # noqa: E501
+    )
     self._settings_layout = TeslaControlSettingsLayout(lambda: gui_app.pop_widget())
     self.settings_button = button_item_sp(
       title=tr("Tesla Control Profile"),
@@ -196,3 +205,4 @@ class TeslaControlSettingsAdapter:
     self.radar_backend.action_item.set_enabled(ui_state.is_offroad())
     planner_stopped = not planner_session_is_active(ui_state.sm)
     self.traffic_control_mode.action_item.set_enabled(planner_stopped and ui_state.has_longitudinal_control)
+    self.traffic_stop_reference.action_item.set_enabled(ui_state.has_longitudinal_control)

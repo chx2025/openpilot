@@ -30,6 +30,7 @@ class TeslaSettings(BrandSettings):
     )
     self.items = [self.control_profile.browser_driving_information, self.control_profile.radar_backend, self.coop_steering_toggle,
                   self.mads_screen_button, self.control_profile.traffic_control_mode,
+                  self.control_profile.traffic_stop_reference,
                   self.control_profile.settings_button]
 
   def update_settings(self):
