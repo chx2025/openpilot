@@ -1,27 +1,9 @@
 #!/usr/bin/env python3
 """
-Lane Centering Corrector (LCC) v2.11 - 台灣道路在地化終極特調版 
-(混合信心度 + Soft Decay + 動態遲滯 + 漸進式曲率權重 + 控制路徑濾波 + 動態前視 + 死區過濾 + 晃動偵測)
-
-將 10~50m 範圍內的左右車道線計算出多個中心點，並利用 np.polyfit 擬合出 
-y = ax^2 + bx + c 的二次曲線。
-
-v2.10 新增晃動偵測 (Wobble Detection) 欄位：
-- 新增 `curvature_error` (原始曲率誤差，未經死區處理)
-- 新增 `delta_correction` (與前一幀的修正量差值)
-- 新增 `wobble_rate` (每秒修正量變化率，數值越高代表方向盤抽動越劇烈)
-
-v2.11 修改 LOG 記錄頻率：
-- 將 LOG_INTERVAL_SEC 從 0.1 秒改為 0.5 秒，減少檔案大小。
-
-v2.12 新增車道寬度合理性檢查 (解決市區持續性單向偏移)：
-- 市區路口的停止線、斑馬線、路邊停車常常讓多點插值抓到不該抓的點，
-  擬合出的中心線會在好幾秒內持續偏向同一邊——這不是雜訊，是真實資料被污染，
-  之前的濾波器/限幅/死區都沒辦法擋（因為它們只擋瞬間離群值，這種是持續性訊號）。
-- 新增 LANE_WIDTH_MIN/MAX：每個插值點都額外檢查左右線距離是否落在合理車道寬度
-  範圍內，不合理的點直接捨棄，不納入 polyfit。捨棄後有效點 < 3 才會判定失敗，
-  並新增 LANE_WIDTH_FAIL 狀態方便從 log 分辨是插值失敗還是寬度不合理被擋。
-- ACTIVE 時額外記錄 avg_lane_width 到 log，方便之後依實際道路寬度分布微調門檻。
+Lane Centering Corrector (LCC) v3.0 (DP x Starpilot 終極混血版)
+- 外殼與控制邏輯：DP v2.12 (漸進式曲率權重、讓車避險、信心度濾波、晃動偵測)
+- 核心演算法：Starpilot 純跟隨 (Pure Pursuit) 幾何算法 (捨棄 polyfit 二次微分)
+- 適用車型：高度推薦豐田車系 (Toyota CC 等)，有效消滅直線碎震，保護 EPS 馬達。
 """
 
 import os
@@ -36,16 +18,15 @@ PARAM_REFRESH_SEC = 2.0
 # --- Debug log 設定 ---
 ENABLE_CSV_LOG = True
 LOG_PATH = "/data/media/0/realdata/lcc_debug.csv"
-# v2.11: 將記錄間隔改為 0.1 秒
 LOG_INTERVAL_SEC = 0.1  
 LOG_COLUMNS = [
   "t", "dt", "v_kph", "state",
   "lat_active", "speed_gate", "model_curvature",
   "yield_hold_timer", "engage_ramp_timer", "ramp_factor", "curvature_weight",
-  "weight", "poly_a", "poly_b", "poly_c", "lane_target_curv",
-  "path_std", "pos_error", "yield_persist_timer", "yield_factor", "yield_suppression_pct",
+  "weight", "lookahead_m", "lane_width", "pos_error", "path_std",
+  "yield_persist_timer", "yield_factor", "yield_suppression_pct",
   "curvature_error", "raw_correction", "rate_limited_correction", "correction",
-  "delta_correction", "wobble_rate", "avg_lane_width"
+  "delta_correction", "wobble_rate"
 ]
 
 # --- 系統內建參數 ---
@@ -67,39 +48,38 @@ LANE_WEIGHT_MAX = 0.90
 MAX_CORRECTION = 0.012  
 MAX_CORRECTION_RATE = 0.011
 
-# --- v2.9 新增：曲率誤差死區參數 ---
-CURVATURE_DEADBAND = 0.0004
+# ==========================================
+# --- 🌟 Starpilot 核心可選參數 (在此設定) ---
+# ==========================================
+# 車道偏移微調 (單位：公尺)。正值偏右，負值偏左。例如 -0.05 代表整車靠左 5 公分。
+SP_LANE_OFFSET = 0.0  
+
+# 車道誤差死區 (單位：公尺)。預設 0.08 (8公分)。這範圍內的微小跳動不會引發方向盤修正，是消滅晃動的關鍵。
+SP_CENTER_DEADBAND = 0.08  
+
+# 允許介入的最小與最大車道寬度 (單位：公尺)
+SP_LANE_WIDTH_MIN = 2.6
+SP_LANE_WIDTH_MAX = 4.8
+
+# 最大允許使用者設定的安全偏移量限制，避免不小心設太大
+SP_MAX_OFFSET = 0.3
+SP_MIN_CENTER_TO_LINE = 1.1
+# ==========================================
 
 YIELD_CONFIRM_SEC = 0.15
 ENGAGE_RAMP_SEC = 0.8  
-
 SOFT_DISABLE_HOLD_SEC = 0.4
 
+# --- 避讓 (Yield) 邏輯參數 ---
 YIELD_MAX_PATH_STD = 0.35
 YIELD_BREAK_IN_START = 0.35
 YIELD_BREAK_IN_FULL = 0.85
 DEFAULT_E2E_AUTHORITY = 1.0
 
-# --- UI 視覺優化參數 ---
-UI_SMOOTH_TAU = 0.2
-UI_MIN_DRAW_WEIGHT = 0.4
-
-# --- v2.6 控制路徑濾波參數 ---
-CTRL_SMOOTH_TAU = 0.15          
+# --- 控制路徑濾波參數 ---
 WEIGHT_SMOOTH_TAU = 0.15        
 CURVATURE_WEIGHT_SMOOTH_TAU = 0.15  
 WEIGHT_ACTIVE_EPS = 1e-4        
-
-# --- v2.7 異常值限幅參數 ---
-CTRL_MAX_STEP_A_PER_SEC = 0.01    
-CTRL_MAX_STEP_B_PER_SEC = 0.5     
-CTRL_MAX_STEP_C_PER_SEC = 3.0     
-
-# --- v2.12 車道寬度合理性檢查 (公尺)：擋掉被斑馬線/停止線/路邊停車污染的插值點 ---
-# 台灣道路實際寬度落差較大，這組數字是保守起點，建議依 log 的 avg_lane_width
-# 實際分布再微調，不要一開始就抓太緊，避免正常窄巷道路被誤判失敗
-LANE_WIDTH_MIN = 2.5
-LANE_WIDTH_MAX = 4.2
 
 
 def _clip_interp(x, xp, fp):
@@ -122,14 +102,6 @@ class LaneCenteringCorrector:
     self.correction = 0.0
     self._last_correction = 0.0  
     
-    self.poly_a = 0.0
-    self.poly_b = 0.0
-    self.poly_c = 0.0
-
-    self._ctrl_a = 0.0
-    self._ctrl_b = 0.0
-    self._ctrl_c = 0.0
-
     self.weight = 0.0
     self._active = False
     self._speed_gate = False  
@@ -154,12 +126,6 @@ class LaneCenteringCorrector:
     self._filter.x = 0.0
     self.correction = 0.0
     self._last_correction = 0.0
-    self.poly_a = 0.0
-    self.poly_b = 0.0
-    self.poly_c = 0.0
-    self._ctrl_a = 0.0
-    self._ctrl_b = 0.0
-    self._ctrl_c = 0.0
     self.weight = 0.0
     self._active = False
     self._speed_gate = False
@@ -178,11 +144,6 @@ class LaneCenteringCorrector:
     return (1.0 - alpha) * current + alpha * target
 
   @staticmethod
-  def _slew_limit(target: float, current: float, max_rate_per_sec: float, dt: float) -> float:
-    max_delta = max_rate_per_sec * dt
-    return float(np.clip(target, current - max_delta, current + max_delta))
-
-  @staticmethod
   def _calc_curvature_weight(model_curvature: float) -> float:
     c = abs(float(model_curvature))
     if c <= CURVATURE_WEIGHT_FULL:
@@ -198,7 +159,7 @@ class LaneCenteringCorrector:
     limited = self._rate_limit(0.0, dt)
     return self._filter.update(limited)
 
-  def _lookup_path_std_and_error(self, model_v2, center_y_l: float, l: float) -> tuple[float, float]:
+  def _lookup_path_std_and_error(self, model_v2, target_y_l: float, l: float) -> tuple[float, float]:
     try:
       pos_x = np.asarray(model_v2.position.x, dtype=float)
       pos_y = np.asarray(model_v2.position.y, dtype=float)
@@ -215,13 +176,13 @@ class LaneCenteringCorrector:
 
       model_y = float(np.interp(l, pos_x, pos_y))
       path_std = float(np.interp(l, pos_x, pos_y_std))
-      pos_error = center_y_l - model_y
+      pos_error = target_y_l - model_y
       return path_std, pos_error
     except (AttributeError, TypeError, ValueError, IndexError):
       return -1.0, 0.0
 
-  def _yield_factor(self, model_v2, center_y_l: float, l: float, e2e_authority: float, dt: float, v_ego: float) -> tuple[float, float, float, float]:
-    path_std, pos_error = self._lookup_path_std_and_error(model_v2, center_y_l, l)
+  def _yield_factor(self, model_v2, target_y_l: float, l: float, e2e_authority: float, dt: float, v_ego: float) -> tuple[float, float, float, float]:
+    path_std, pos_error = self._lookup_path_std_and_error(model_v2, target_y_l, l)
     error_abs = abs(pos_error)
     std_valid = 0.0 <= path_std <= YIELD_MAX_PATH_STD
 
@@ -252,7 +213,6 @@ class LaneCenteringCorrector:
     now = time.monotonic()
     state_changed = state != self._last_logged_state
     
-    # 狀態改變或時間間隔大於 0.5 秒才記錄
     if not state_changed and (now - self._last_log_time) < LOG_INTERVAL_SEC:
       return
       
@@ -287,8 +247,7 @@ class LaneCenteringCorrector:
                   speed_gate=self._speed_gate, model_curvature=model_curvature, 
                   yield_hold_timer=self._yield_hold_timer, engage_ramp_timer=self._engage_ramp_timer, 
                   ramp_factor=ramp_factor, curvature_weight=self.curvature_weight,
-                  weight=0.0, poly_a=0.0, poly_b=0.0, poly_c=0.0, 
-                  lane_target_curv=0.0, path_std=-1.0, pos_error=0.0,
+                  weight=0.0, lookahead_m=0.0, lane_width=0.0, pos_error=0.0, path_std=-1.0, 
                   yield_persist_timer=self._yield_persist_timer, yield_factor=1.0, yield_suppression_pct=0.0,
                   curvature_error=0.0, raw_correction=0.0, rate_limited_correction=0.0, correction=self.correction,
                   delta_correction=delta_correction, wobble_rate=wobble_rate)
@@ -324,7 +283,6 @@ class LaneCenteringCorrector:
       
       self._active = False
       self.weight = 0.0
-      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
       self._log_fallback("SPEED_GATE_OFF", dt, v_ego_kph, lat_active, model_curvature,
                          float(np.clip(self._engage_ramp_timer / ENGAGE_RAMP_SEC, 0.0, 1.0)))
@@ -344,7 +302,6 @@ class LaneCenteringCorrector:
     if is_yielding:
       self._active = False
       self.weight = 0.0
-      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
       self._log_fallback("YIELDING", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
       return self.correction
@@ -355,14 +312,13 @@ class LaneCenteringCorrector:
     if len(lane_lines) < 3 or len(lane_line_probs) < 3:
       self._active = False
       self.weight = 0.0
-      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
       self._log_fallback("NO_LANE_DATA", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
       return self.correction
 
+    # --- 信心度計算 (DP 原版邏輯) ---
     lll_prob = float(np.clip(lane_line_probs[1], 0.0, 1.0))
     rll_prob = float(np.clip(lane_line_probs[2], 0.0, 1.0))
-    
     mean_prob = 0.5 * (lll_prob + rll_prob)
     min_prob = min(lll_prob, rll_prob)
     
@@ -375,111 +331,78 @@ class LaneCenteringCorrector:
 
     if self.weight <= WEIGHT_ACTIVE_EPS:
       self._active = False
-      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
       self._log_fallback("LOW_CONFIDENCE", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
       return self.correction
 
+    # ==============================================================
+    # 🌟 核心替換：改用 Starpilot 純跟隨 (Pure Pursuit) 空間位置演算法 🌟
+    # ==============================================================
     lll = lane_lines[1]
     rll = lane_lines[2]
     
-    max_fit_dist = float(np.clip(v_ego * 2.5, 20.0, 60.0))
-    dynamic_fit_x = np.linspace(10.0, max_fit_dist, 5)
+    # 動態前視距離 (結合 Starpilot 與 DP 的優點，依照車速預測)
+    lookahead = float(np.clip(v_ego * LOOKAHEAD_TIME_SEC, MIN_LOOKAHEAD_M, 40.0))
 
-    valid_x = []
-    center_y = []
-    widths = []
-    width_reject_count = 0
-    for x in dynamic_fit_x:
-      l_y = _clip_interp(x, lll.x, lll.y)
-      r_y = _clip_interp(x, rll.x, rll.y)
-      if l_y is None or r_y is None:
-        continue
-      width = abs(l_y - r_y)
-      if width < LANE_WIDTH_MIN or width > LANE_WIDTH_MAX:
-        # 寬度不合理，通常是插到斑馬線/停止線/路邊停車，直接捨棄這個點
-        width_reject_count += 1
-        continue
-      valid_x.append(x)
-      widths.append(width)
-      center_y.append((l_y + r_y) / 2.0)
+    l_x = np.asarray(lll.x, dtype=float)
+    l_y = np.asarray(lll.y, dtype=float)
+    r_x = np.asarray(rll.x, dtype=float)
+    r_y = np.asarray(rll.y, dtype=float)
+    pos_x = np.asarray(model_v2.position.x, dtype=float)
+    pos_y = np.asarray(model_v2.position.y, dtype=float)
 
-    avg_lane_width = float(np.mean(widths)) if widths else -1.0
+    # 取得前視距離當下的左、右車道線 Y 座標，與模型預測車輛的 Y 座標
+    left_y_l = _clip_interp(lookahead, l_x, l_y)
+    right_y_l = _clip_interp(lookahead, r_x, r_y)
+    model_y_l = _clip_interp(lookahead, pos_x, pos_y)
 
-    if len(valid_x) < 3:
-      self._active = False
-      self.poly_a = self.poly_b = self.poly_c = 0.0
-      self.correction = self._decay(dt)
-      _fail_state = "LANE_WIDTH_FAIL" if width_reject_count > 0 else "INTERP_FAIL"
-      self._log_fallback(_fail_state, dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
-      return self.correction
-
-    try:
-      coeffs = np.polyfit(valid_x, center_y, 2)
-      if len(coeffs) != 3 or not np.isfinite(coeffs).all():
-        raise ValueError("invalid lane polynomial")
-      a, b, c = (float(coeffs[0]), float(coeffs[1]), float(coeffs[2]))
-    except (TypeError, ValueError, np.linalg.LinAlgError):
+    if left_y_l is None or right_y_l is None or model_y_l is None:
       self._active = False
       self.weight = 0.0
-      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
-      self._log_fallback("POLYFIT_FAIL", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
+      self._log_fallback("INTERP_FAIL", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
       return self.correction
+
+    # 車道寬度驗證
+    lane_width = right_y_l - left_y_l
+    if not (SP_LANE_WIDTH_MIN <= lane_width <= SP_LANE_WIDTH_MAX):
+      self._active = False
+      self.weight = 0.0
+      self.correction = self._decay(dt)
+      self._log_fallback("LANE_WIDTH_INVALID", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
+      return self.correction
+
+    # 安全偏移量計算
+    max_safe_offset = min(SP_MAX_OFFSET, max(0.0, lane_width * 0.5 - SP_MIN_CENTER_TO_LINE))
+    applied_offset = float(np.clip(SP_LANE_OFFSET, -max_safe_offset, max_safe_offset))
+
+    # 計算目標中心點與實際位置誤差
+    target_y_l = 0.5 * (left_y_l + right_y_l) + applied_offset
+    pos_error_raw = target_y_l - model_y_l
+
+    # Starpilot 靈魂：位置誤差死區 (Deadband)，過濾直線碎震
+    pos_error_abs = abs(pos_error_raw)
+    if pos_error_abs <= SP_CENTER_DEADBAND:
+      pos_error = 0.0
+    else:
+      pos_error = np.copysign(pos_error_abs - SP_CENTER_DEADBAND, pos_error_raw)
+
+    # 純跟隨幾何公式轉換：將橫向位置誤差轉換為目標曲率誤差
+    curvature_error = float(2.0 * pos_error / (lookahead ** 2))
     
-    if self.weight >= UI_MIN_DRAW_WEIGHT:
-      if abs(self.poly_c) < 1e-7:  
-        self.poly_a = float(a)
-        self.poly_b = float(b)
-        self.poly_c = float(c)
-      else:
-        self.poly_a = self._smooth(float(a), self.poly_a, UI_SMOOTH_TAU, dt)
-        self.poly_b = self._smooth(float(b), self.poly_b, UI_SMOOTH_TAU, dt)
-        self.poly_c = self._smooth(float(c), self.poly_c, UI_SMOOTH_TAU, dt)
-    else:
-      self.poly_a = 0.0
-      self.poly_b = 0.0
-      self.poly_c = 0.0
-
-    if self._ctrl_a == 0.0 and self._ctrl_b == 0.0 and abs(self._ctrl_c) < 1e-7:
-      self._ctrl_a, self._ctrl_b, self._ctrl_c = float(a), float(b), float(c)
-    else:
-      a_limited = self._slew_limit(float(a), self._ctrl_a, CTRL_MAX_STEP_A_PER_SEC, dt)
-      b_limited = self._slew_limit(float(b), self._ctrl_b, CTRL_MAX_STEP_B_PER_SEC, dt)
-      c_limited = self._slew_limit(float(c), self._ctrl_c, CTRL_MAX_STEP_C_PER_SEC, dt)
-      self._ctrl_a = self._smooth(a_limited, self._ctrl_a, CTRL_SMOOTH_TAU, dt)
-      self._ctrl_b = self._smooth(b_limited, self._ctrl_b, CTRL_SMOOTH_TAU, dt)
-      self._ctrl_c = self._smooth(c_limited, self._ctrl_c, CTRL_SMOOTH_TAU, dt)
-
-    L = max(MIN_LOOKAHEAD_M, v_ego * LOOKAHEAD_TIME_SEC)
-    lane_target_curvature = (2.0 * self._ctrl_a) + (2.0 * self._ctrl_b / L) + (2.0 * self._ctrl_c / (L ** 2))
-    center_y_l = self._ctrl_a * (L ** 2) + self._ctrl_b * L + self._ctrl_c
-
-    if not (np.isfinite(L) and np.isfinite(lane_target_curvature) and np.isfinite(center_y_l)):
+    if not np.isfinite(curvature_error):
       self._active = False
       self.weight = 0.0
-      self.poly_a = self.poly_b = self.poly_c = 0.0
       self.correction = self._decay(dt)
-      self._log_fallback("CURVATURE_FAIL", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
+      self._log_fallback("MATH_ERROR_FAIL", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
       return self.correction
 
-    yield_factor, path_std, pos_error, yield_persist_timer = self._yield_factor(model_v2, center_y_l, L, e2e_authority, dt, v_ego)
+    # ==============================================================
 
-    raw_curvature_error = lane_target_curvature - model_curvature
-    if not np.isfinite(raw_curvature_error):
-      self._active = False
-      self.weight = 0.0
-      self.poly_a = self.poly_b = self.poly_c = 0.0
-      self.correction = self._decay(dt)
-      self._log_fallback("CURVATURE_ERROR_FAIL", dt, v_ego_kph, lat_active, model_curvature, ramp_factor)
-      return self.correction
+    # 保留 DP 強大的退讓 (Yield) 避險機制
+    yield_factor, path_std, log_pos_error, yield_persist_timer = self._yield_factor(model_v2, target_y_l, lookahead, e2e_authority, dt, v_ego)
 
-    curvature_error_abs = abs(raw_curvature_error)
-    if curvature_error_abs <= CURVATURE_DEADBAND:
-      curvature_error = 0.0
-    else:
-      curvature_error = np.copysign(curvature_error_abs - CURVATURE_DEADBAND, raw_curvature_error)
-
+    # 最終連乘公式：權重 * 緩起動 * 避險讓車係數 * 彎道漸進權重 * 誤差
     raw_correction = self.weight * ramp_factor * yield_factor * self.curvature_weight * curvature_error
     raw_correction = float(np.clip(raw_correction, -MAX_CORRECTION, MAX_CORRECTION))
 
@@ -497,15 +420,13 @@ class LaneCenteringCorrector:
                     yield_hold_timer=self._yield_hold_timer,
                     engage_ramp_timer=self._engage_ramp_timer, ramp_factor=ramp_factor,
                     curvature_weight=self.curvature_weight,
-                    weight=self.weight, poly_a=a, poly_b=b, poly_c=c,
-                    lane_target_curv=lane_target_curvature,
-                    path_std=path_std, pos_error=pos_error,
+                    weight=self.weight, lookahead_m=lookahead, lane_width=lane_width, pos_error=pos_error_raw,
+                    path_std=path_std,
                     yield_persist_timer=yield_persist_timer, yield_factor=yield_factor,
                     yield_suppression_pct=(1.0 - yield_factor) * 100.0,
-                    curvature_error=raw_curvature_error,  
+                    curvature_error=curvature_error,  
                     raw_correction=raw_correction, rate_limited_correction=rate_limited_correction,
                     correction=self.correction,
-                    delta_correction=delta_correction, wobble_rate=wobble_rate,
-                    avg_lane_width=avg_lane_width)
+                    delta_correction=delta_correction, wobble_rate=wobble_rate)
     
     return self.correction
