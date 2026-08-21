@@ -192,6 +192,15 @@ class TeslaControlSettingsAdapter:
       label_callback=lambda value: f"{value / 10.0:.1f} m",
       description=tr("Adjust how far before Tesla's reported traffic-control point the vehicle stops. Higher values stop earlier; lower values stop closer. Changes apply to the next traffic-light event without restarting."),  # noqa: E501
     )
+    self.traffic_control_max_speed = option_item_sp(
+      title=tr("Traffic Light Control Maximum Speed"),
+      param="TeslaTrafficControlMaxSpeed",
+      min_value=20,
+      max_value=120,
+      value_change_step=5,
+      label_callback=lambda value: f"{value} km/h",
+      description=tr("Do not establish a new traffic-light control event above this speed. Existing braking is never cancelled abruptly, and changes apply without restarting."),  # noqa: E501
+    )
     self._settings_layout = TeslaControlSettingsLayout(lambda: gui_app.pop_widget())
     self.settings_button = button_item_sp(
       title=tr("Tesla Control Profile"),
@@ -206,3 +215,4 @@ class TeslaControlSettingsAdapter:
     planner_stopped = not planner_session_is_active(ui_state.sm)
     self.traffic_control_mode.action_item.set_enabled(planner_stopped and ui_state.has_longitudinal_control)
     self.traffic_stop_reference.action_item.set_enabled(ui_state.has_longitudinal_control)
+    self.traffic_control_max_speed.action_item.set_enabled(ui_state.has_longitudinal_control)

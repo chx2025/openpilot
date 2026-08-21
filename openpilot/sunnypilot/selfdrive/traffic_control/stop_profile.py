@@ -25,7 +25,9 @@ class StopProfileGenerator:
     return float(np.interp(self.planner_dt, times, accels))
 
   def build_stop(self, *, v_ego: float, a_ego: float, remaining_distance: float,
-                 times: np.ndarray, hold: bool = False) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                 times: np.ndarray, hold: bool = False,
+                 comfort_brake: float | None = None, jerk_limit: float | None = None,
+                 decel_margin: float = 1.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     speeds = np.zeros(len(times), dtype=float)
     accels = np.zeros(len(times), dtype=float)
     jerks = np.zeros(max(len(times) - 1, 0), dtype=float)
@@ -37,16 +39,19 @@ class StopProfileGenerator:
       self.previous_accel = 0.0
       return speeds, accels, jerks
 
+    stop_brake = self.comfort_brake if comfort_brake is None else max(float(comfort_brake), 0.1)
+    stop_jerk = self.jerk_limit if jerk_limit is None else max(float(jerk_limit), 0.1)
+    stop_margin = max(float(decel_margin), 1.0)
     current_a = float(np.clip(a_ego if self.previous_accel is None else self.previous_accel,
-                              -self.comfort_brake, 0.0))
+                              -stop_brake, 0.0))
     accels[0] = current_a
     remaining = 0.0 if hold else max(remaining_distance, 0.0)
     for i in range(1, len(times)):
       dt = self._dt(times, i)
       effective_distance = max(remaining - speeds[i - 1] * self.actuator_delay, 0.5)
-      target_a = -speeds[i - 1] ** 2 / (2.0 * effective_distance)
-      target_a = float(np.clip(target_a, -self.comfort_brake, 0.0))
-      delta_a = float(np.clip(target_a - current_a, -self.jerk_limit * dt, self.jerk_limit * dt))
+      target_a = -stop_margin * speeds[i - 1] ** 2 / (2.0 * effective_distance)
+      target_a = float(np.clip(target_a, -stop_brake, 0.0))
+      delta_a = float(np.clip(target_a - current_a, -stop_jerk * dt, stop_jerk * dt))
       current_a += delta_a
       next_v = max(0.0, speeds[i - 1] + current_a * dt)
       travelled = max(0.0, (speeds[i - 1] + next_v) * 0.5 * dt)

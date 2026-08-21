@@ -276,6 +276,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TeslaTrafficControlStrategy", {PERSISTENT | BACKUP, INT, "0"}},
     {"TeslaTrafficObstacleGoPolicy", {PERSISTENT | BACKUP, INT, "0"}},
     {"TeslaTrafficStopReference", {PERSISTENT | BACKUP, INT, "60"}},  // decimeters
+    {"TeslaTrafficControlMaxSpeed", {PERSISTENT | BACKUP, INT, "60"}},  // km/h
     {"TeslaTrafficAdaptiveReference", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"ToyotaEnforceStockLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"ToyotaStopAndGoHack", {PERSISTENT | BACKUP, BOOL, "0"}},

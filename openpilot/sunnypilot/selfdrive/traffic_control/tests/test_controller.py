@@ -89,6 +89,20 @@ def test_red_inside_100m_without_lead_enters_early_approach():
   assert 84.0 <= decision.remaining_distance <= 88.5
 
 
+def test_red_event_is_not_established_above_the_configured_control_speed():
+  controller = TeslaTrafficControlController(TrafficControlConfig(
+    mode=TrafficControlMode.stopGo,
+    max_control_speed=50.0 / 3.6,
+  ))
+
+  decision = confirmed_red(controller, distance=100.0, v_ego=16.7)
+
+  assert decision.phase == TrafficControlPhase.off
+  assert not decision.active
+  assert not decision.apply_constraint
+  assert controller.event_id == 0
+
+
 def test_can_authoritative_red_uses_oem_distance_without_model_stop_confirmation():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   decision = confirmed_red(controller, distance=80.0, v_ego=15.0, model_stop_distance=None)

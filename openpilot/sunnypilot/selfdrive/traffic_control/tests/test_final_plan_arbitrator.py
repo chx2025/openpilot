@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import openpilot.cereal.messaging as messaging
+from openpilot.cereal import log
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
 from openpilot.sunnypilot.selfdrive.traffic_control.final_plan_arbitrator import (
   FinalPlanArbitrator,
@@ -39,7 +40,8 @@ def base_plan(*, a_target=0.4, should_stop=False):
 
 def fake_sm(*, phase=TrafficControlPhase.off, light_state=0, target=False,
             allowed=False, start=False, event_id=0, distance=30.0,
-            v_ego=8.0, base_model_stop=False):
+            v_ego=8.0, base_model_stop=False,
+            personality=log.LongitudinalPersonality.standard):
   traffic = ns(
     phase=int(phase), lightState=light_state, targetPresent=target,
     controlAllowed=allowed, plannerStartRequested=start, eventId=event_id,
@@ -54,6 +56,7 @@ def fake_sm(*, phase=TrafficControlPhase.off, light_state=0, target=False,
     "carState": ns(vEgo=v_ego, aEgo=0.0, gasPressed=False, brakePressed=False, vCruise=50.0),
     "carControl": ns(enabled=True, longActive=True, leftBlinker=False, rightBlinker=False),
     "modelV2": ns(action=ns(shouldStop=base_model_stop)),
+    "selfdriveState": ns(personality=personality),
   })
 
 
@@ -86,6 +89,40 @@ def test_confirmed_red_builds_a_bounded_complete_stop_plan():
   assert np.all(np.asarray(plan.speeds) <= 8.0)
   assert np.all(np.asarray(plan.accels) <= 0.4)
   assert len(plan.speeds) == len(plan.accels) == len(plan.jerks) == 17
+
+
+def test_traffic_stop_initial_deceleration_scales_with_current_speed():
+  def traffic_accel(v_ego):
+    arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+    sm = fake_sm(
+      phase=TrafficControlPhase.braking, light_state=1, target=True,
+      allowed=True, event_id=40, distance=70.0, v_ego=v_ego,
+    )
+    arbitrator.apply(base_plan(), sm, NOW_NS)
+    return arbitrator.diagnostics.traffic_a_target
+
+  low_speed_accel = traffic_accel(8.0)
+  high_speed_accel = traffic_accel(16.0)
+
+  assert high_speed_accel < low_speed_accel - 0.02
+
+
+def test_traffic_stop_uses_the_selected_longitudinal_personality():
+  def traffic_accel(personality):
+    arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+    sm = fake_sm(
+      phase=TrafficControlPhase.braking, light_state=1, target=True,
+      allowed=True, event_id=41, distance=70.0, v_ego=14.0,
+      personality=personality,
+    )
+    arbitrator.apply(base_plan(), sm, NOW_NS)
+    return arbitrator.diagnostics.traffic_a_target
+
+  relaxed = traffic_accel(log.LongitudinalPersonality.relaxed)
+  standard = traffic_accel(log.LongitudinalPersonality.standard)
+  aggressive = traffic_accel(log.LongitudinalPersonality.aggressive)
+
+  assert relaxed > standard > aggressive
 
 
 def test_fresh_raw_can_target_survives_a_300ms_interprocess_planner_gap():
@@ -267,6 +304,37 @@ def test_can_green_start_reaches_the_cp_low_speed_acceleration_envelope():
 
   assert arbitrator.diagnostics.start_applied
   assert 1.20 <= plan.aTarget <= 1.60
+
+
+def test_green_start_resumes_after_a_single_transient_physical_lead_cycle():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  hold = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=True, event_id=30, distance=0.0, v_ego=0.0,
+  )
+  arbitrator.apply(base_plan(a_target=0.0), hold, NOW_NS)
+  green = fake_sm(
+    phase=TrafficControlPhase.release, light_state=2, allowed=True,
+    start=True, event_id=30, distance=0.0, v_ego=0.0,
+  )
+
+  first = base_plan(a_target=0.1)
+  arbitrator.apply(first, green, NOW_NS + 50_000_000)
+  assert arbitrator.diagnostics.start_applied
+
+  green["radarState"].leadOne.present = True
+  blocked = base_plan(a_target=0.1)
+  green["trafficRadarState"].publishMonoTime = NOW_NS + 100_000_000
+  arbitrator.apply(blocked, green, NOW_NS + 100_000_000)
+  assert not arbitrator.diagnostics.start_applied
+
+  green["radarState"].leadOne.present = False
+  resumed = base_plan(a_target=0.1)
+  green["trafficRadarState"].publishMonoTime = NOW_NS + 150_000_000
+  arbitrator.apply(resumed, green, NOW_NS + 150_000_000)
+
+  assert arbitrator.diagnostics.start_applied
+  assert resumed.aTarget > 0.1
 
 
 def test_can_authoritative_green_overrides_model_stop_and_negative_base_plan():

@@ -41,6 +41,7 @@ TRANSITION_REASON_CODES = {
   "candidate_started": 8,
   "candidate_replaced": 9,
   "candidate_cancelled": 10,
+  "speed_above_limit": 11,
 }
 
 
@@ -128,8 +129,16 @@ class TrafficRadarSource:
           self._reconfirm_since_ns = None
       else:
         self._reconfirm_since_ns = None
+    # A lead remains an absolute per-cycle veto. Once the same-event CAN green
+    # releases the hold, however, a lead that has already disappeared must not
+    # keep the entire GO request suppressed. The final planner independently
+    # checks the live radar again before applying every start cycle.
+    sticky_lead_suppresses = bool(
+      self._lead_suppressed and decision.phase != TrafficControlPhase.release
+    )
+    suppressed_by_physical_lead = bool(lead_present or sticky_lead_suppresses)
     valid_for_control = bool(
-      radar_valid and not lead_present and not self._lead_suppressed and decision.apply_constraint
+      radar_valid and not suppressed_by_physical_lead and decision.apply_constraint
     )
     msg = messaging.new_message('trafficRadarState')
     target = msg.trafficRadarState
@@ -146,7 +155,7 @@ class TrafficRadarSource:
     target.eventId = int(self.controller.event_id)
     target.publishMonoTime = int(now_ns)
     target.controlAllowed = valid_for_control
-    target.suppressedByPhysicalLead = bool(lead_present or self._lead_suppressed)
+    target.suppressedByPhysicalLead = suppressed_by_physical_lead
     target.shouldStop = bool(decision.should_stop)
     target.plannerStartRequested = bool(
       self.go_policy == TrafficRadarGoPolicy.active and

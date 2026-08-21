@@ -15,10 +15,15 @@ from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import (
 
 def read_source_config(params: Params) -> tuple[TrafficControlConfig, TrafficRadarGoPolicy]:
   reference_dm = params.get("TeslaTrafficStopReference", return_default=True)
+  max_speed_kph = params.get("TeslaTrafficControlMaxSpeed", return_default=True)
   try:
     reference = float(np.clip(float(reference_dm) / 10.0, 2.0, 12.0))
   except (TypeError, ValueError):
     reference = 6.0
+  try:
+    max_control_speed = float(np.clip(float(max_speed_kph), 20.0, 120.0)) / 3.6
+  except (TypeError, ValueError):
+    max_control_speed = 60.0 / 3.6
   control_enabled = params.get_bool(TRAFFIC_SIGNAL_CONTROL_PARAM)
   config = TrafficControlConfig(
     # The user-facing switch is intentionally binary: disabled still records
@@ -29,6 +34,7 @@ def read_source_config(params: Params) -> tuple[TrafficControlConfig, TrafficRad
     # target filtering replaces per-event adaptive offset drift.
     adaptive_reference=False,
     retain_event_with_lead=control_enabled,
+    max_control_speed=max_control_speed,
   )
   go_policy = TrafficRadarGoPolicy.active if control_enabled else TrafficRadarGoPolicy.passive
   return config, go_policy

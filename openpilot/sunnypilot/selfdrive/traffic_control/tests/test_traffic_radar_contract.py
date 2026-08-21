@@ -24,14 +24,19 @@ from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import TrafficRa
 
 
 class FakeParams:
-  def __init__(self, enabled, reference_dm="60", adaptive=False):
+  def __init__(self, enabled, reference_dm="60", adaptive=False, max_speed_kph="60"):
     self.enabled = enabled
     self.reference_dm = reference_dm
     self.adaptive = adaptive
+    self.max_speed_kph = max_speed_kph
 
   def get(self, key, return_default=False):
     del return_default
-    return self.reference_dm if key == "TeslaTrafficStopReference" else None
+    if key == "TeslaTrafficStopReference":
+      return self.reference_dm
+    if key == "TeslaTrafficControlMaxSpeed":
+      return self.max_speed_kph
+    return None
 
   def get_bool(self, key):
     if key == "TeslaTrafficSignalControlEnabled":
@@ -72,6 +77,16 @@ def test_manual_stop_reference_is_not_overridden_by_event_adaptation():
 
   assert source.controller.config.default_stop_reference == 2.0
   assert not source.controller.config.adaptive_reference
+
+
+def test_control_speed_setting_is_read_as_kph_and_applies_live():
+  params = FakeParams(True, max_speed_kph="60")
+  source = trafficcontrold.build_source(params)
+  assert source.controller.config.max_control_speed == pytest.approx(60.0 / 3.6)
+
+  params.max_speed_kph = "45"
+  trafficcontrold.refresh_source_config(source, params)
+  assert source.controller.config.max_control_speed == pytest.approx(45.0 / 3.6)
 
 
 def test_runtime_stop_reference_refresh_applies_when_idle_without_moving_an_active_event():

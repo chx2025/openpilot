@@ -2212,6 +2212,14 @@ msgid "Traffic Light Stop Reference"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Traffic Light Control Maximum Speed"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Do not establish a new traffic-light control event above this speed. Existing braking is never cancelled abruptly, and changes apply without restarting."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Adjust how far before Tesla's reported traffic-control point the vehicle stops. Higher values stop earlier; lower values stop closer. Changes apply to the next traffic-light event without restarting."
 msgstr ""
 

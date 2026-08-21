@@ -234,6 +234,37 @@ def test_can_green_with_a_lead_releases_hold_without_requesting_traffic_start():
   assert not target.plannerStartRequested
 
 
+def test_cleared_transient_lead_does_not_stick_suppress_same_event_green_start():
+  sm = red_light_sm()
+  sm["carState"].vEgo = 0.0
+  sm["carStateSP"].teslaTrafficControl.distance = 12.0
+  sm["modelV2"].position.x = [6.0] * 33
+  source = TrafficRadarSource(
+    TrafficControlConfig(mode=TrafficControlMode.stopGo, retain_event_with_lead=True),
+    go_policy=TrafficRadarGoPolicy.active,
+  )
+  for now_ns in range(0, 1_000_000_001, 100_000_000):
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    source.update(sm, now_ns)
+
+  sm["radarState"].leadOne.present = True
+  sm["radarState"].leadOne.dRel = 25.0
+  sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_050_000_000
+  suppressed = source.update(sm, 1_050_000_000).trafficRadarState
+  assert suppressed.suppressedByPhysicalLead
+
+  sm["radarState"].leadOne.present = False
+  traffic = sm["carStateSP"].teslaTrafficControl
+  traffic.lightState = 2
+  traffic.frameMonoTime = 1_100_000_000
+  released = source.update(sm, 1_100_000_000).trafficRadarState
+
+  assert released.phase == 6
+  assert not released.suppressedByPhysicalLead
+  assert released.releaseEligible
+  assert released.plannerStartRequested
+
+
 def test_feature_zero_green_requests_start_only_after_the_same_event_holds():
   target = released_green(TrafficRadarGoPolicy.active, feature_zero_green=True)
 

@@ -53,6 +53,9 @@ class TrafficControlConfig:
   model_alignment_ratio: float = 0.20
   model_only_min_speed: float = 1.0
   retain_event_with_lead: bool = False
+  # New red-light events are observation-only above this speed. An already
+  # active stop is never dropped merely because the live setting changes.
+  max_control_speed: float = float("inf")
 
 
 @dataclass(frozen=True)
@@ -318,6 +321,16 @@ class TeslaTrafficControlController:
       self.last_update_ns = now_ns
       if was_tracking:
         self._mark_transition("lead_present")
+      return self._decision()
+
+    if (self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo)
+        and self.phase not in (*self.ACTIVE_PHASES, TrafficControlPhase.release)
+        and v_ego > self.config.max_control_speed):
+      had_candidate = bool(self.phase == TrafficControlPhase.redCandidate or self.model_confirm_since_ns is not None)
+      self.reset()
+      self.last_update_ns = now_ns
+      if had_candidate:
+        self._mark_transition("speed_above_limit")
       return self._decision()
 
     valid_red = observation.valid_for_control and observation.light_state == 1

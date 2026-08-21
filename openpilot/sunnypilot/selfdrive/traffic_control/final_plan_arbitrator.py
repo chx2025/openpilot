@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 
+from openpilot.cereal import log
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.traffic_control import TRAFFIC_SIGNAL_CONTROL_PARAM
@@ -22,6 +23,14 @@ START_JERK_LIMIT = 1.0
 TERMINAL_MAX_SPEED = 1.5
 TERMINAL_LOOKAHEAD_S = 0.05
 PLANNER_TRAFFIC_STALE_NS = 350_000_000
+MAX_TRAFFIC_STOP_BRAKE = 3.0
+
+
+@dataclass(frozen=True)
+class _TrafficStopStyle:
+  comfort_brake: float
+  jerk_limit: float
+  decel_margin: float
 
 
 class TrafficPlanAction(IntEnum):
@@ -164,18 +173,53 @@ class FinalPlanArbitrator:
         target = min(target, float(np.min(actuator_window)))
     return target
 
+  def _traffic_stop_style(self, sm, *, remaining_distance: float, terminal: bool) -> _TrafficStopStyle:
+    personality = sm["selfdriveState"].personality
+    if personality == log.LongitudinalPersonality.relaxed:
+      base_brake, base_jerk, decel_margin = 2.2, 0.55, 1.15
+    elif personality == log.LongitudinalPersonality.aggressive:
+      base_brake, base_jerk, decel_margin = 2.8, 1.10, 1.02
+    else:
+      base_brake, base_jerk, decel_margin = 2.5, 0.80, 1.08
+
+    v_ego = max(0.0, float(sm["carState"].vEgo))
+    effective_distance = max(
+      remaining_distance - v_ego * (self._actuator_delay + TERMINAL_LOOKAHEAD_S),
+      0.5,
+    )
+    required_brake = v_ego ** 2 / (2.0 * effective_distance)
+    comfort_brake = float(np.clip(
+      max(base_brake, required_brake * decel_margin),
+      base_brake,
+      MAX_TRAFFIC_STOP_BRAKE,
+    ))
+    # At higher approach speeds, begin changing acceleration more decisively.
+    # Personality still shapes the ramp: relaxed is gentler, aggressive reacts
+    # faster. Terminal catch keeps a safety floor independent of preference.
+    speed_jerk_scale = float(np.interp(v_ego * 3.6, [0.0, 30.0, 60.0, 90.0], [0.70, 0.85, 1.10, 1.25]))
+    jerk_limit = base_jerk * speed_jerk_scale
+    if terminal:
+      comfort_brake = MAX_TRAFFIC_STOP_BRAKE
+      jerk_limit = max(jerk_limit, 1.0)
+      decel_margin = max(decel_margin, 1.10)
+    return _TrafficStopStyle(comfort_brake, jerk_limit, decel_margin)
+
   def _apply_stop_constraint(self, plan, sm, *, remaining_distance: float,
                              hold: bool, terminal: bool) -> float:
     base_speeds = np.asarray(plan.speeds, dtype=float)
     base_accels = np.asarray(plan.accels, dtype=float)
     times = self._times(len(base_speeds))
     v_ego = float(sm["carState"].vEgo)
+    style = self._traffic_stop_style(sm, remaining_distance=remaining_distance, terminal=terminal)
     stop_speeds, stop_accels, _ = self._profile.build_stop(
       v_ego=v_ego,
       a_ego=float(sm["carState"].aEgo),
       remaining_distance=remaining_distance,
       times=times,
       hold=hold,
+      comfort_brake=style.comfort_brake,
+      jerk_limit=style.jerk_limit,
+      decel_margin=style.decel_margin,
     )
     final_speeds = np.minimum(base_speeds, stop_speeds)
     final_accels = np.minimum(base_accels, stop_accels)
@@ -257,7 +301,12 @@ class FinalPlanArbitrator:
     block_reason = self._start_block_reason(sm, traffic)
     self.diagnostics.start_block_reason = block_reason
     if block_reason != TrafficStartBlockReason.none:
-      if self._active_start_event_id == event_id:
+      # A physical lead is still an absolute veto for this cycle, but a single
+      # 50 ms radar blip must not permanently complete the same-event green
+      # start. Keep the bounded start window alive and resume when radar is
+      # positively clear again.
+      if (block_reason != TrafficStartBlockReason.physicalLead
+          and self._active_start_event_id == event_id):
         self._finish_start(event_id)
       return False
 
