@@ -74,6 +74,32 @@ def test_observer_accepts_logged_red_aware_state_when_feature_flag_is_disabled()
   assert observation.quality == 2
 
 
+def test_observer_accepts_logged_feature_zero_yellow_transition():
+  observer = TeslaTrafficControlObserver()
+  address, data, _ = _frame({
+    "APP_tcFeatureState": 0,
+    "APP_tcStateMachine": 6,
+    "APP_tcControlSource": 3,
+    "APP_tcControlType": 3,
+    "APP_tcControlDistance": 49,
+    "APP_tcControlLightState": 3,
+    "APP_tcContinuationReason": 5,
+    "APP_tcUnavailableReason": 1,
+    "APP_tcVisionLight": 1,
+  })
+
+  observer.update([(3_050_000_000, [(address, data, 2)])], 3_050_000_000)
+  observation = observer.snapshot(3_050_000_000)
+
+  assert observation.valid_for_control
+  assert observation.feature_state == 0
+  assert observation.state_machine == 6
+  assert observation.control_source == 3
+  assert observation.light_state == 3
+  assert observation.continuation_reason == 5
+  assert observation.distance == 49
+
+
 def test_observer_still_rejects_other_disabled_or_unavailable_states():
   observer = TeslaTrafficControlObserver()
   address, data, _ = _frame({

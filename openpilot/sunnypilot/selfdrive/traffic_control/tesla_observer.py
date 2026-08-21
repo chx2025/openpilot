@@ -72,18 +72,36 @@ class TeslaTrafficControlObserver:
     control_source = int(values["APP_tcControlSource"])
     light_state = int(values["APP_tcControlLightState"])
     distance = float(values["APP_tcControlDistance"])
+    logged_red_aware = feature_state == 0 and light_state == 1 and state_machine == 2
+    # Route 00000032--01039b53db records Tesla's green-to-red transition as
+    # feature-disabled yellow, stateMachine=go, continuation=5. Accept only
+    # this exact vision-backed AP-PARTY signature; broader disabled yellow
+    # states remain observation-only.
+    logged_yellow_transition = bool(
+      feature_state == 0
+      and light_state == 3
+      and state_machine == 6
+      and control_source == 3
+      and int(values["APP_tcContinuationReason"]) == 5
+      and int(values["APP_tcUnavailableReason"]) == 1
+      and bool(values["APP_tcVisionLight"])
+    )
     state_matches_light = (
       (light_state == 1 and state_machine in (2, 3, 4, 5)) or
       (light_state == 3 and state_machine in (3, 4, 5)) or
-      (light_state == 2 and state_machine in (5, 6))
+      (light_state == 2 and state_machine in (5, 6)) or
+      logged_yellow_transition
     )
     # Logged AP-PARTY traffic-light sequences keep featureState disabled while
     # stateMachine=aware, then report a coherent vision/map red target. Admit
     # only that narrow combination; all other disabled-feature frames remain
     # ineligible.
-    logged_red_aware = feature_state == 0 and light_state == 1 and state_machine == 2
-    feature_matches = feature_state == 3 or logged_red_aware
-    availability_matches = int(values["APP_tcUnavailableReason"]) == 0 or logged_red_aware
+    feature_matches = feature_state == 3 or logged_red_aware or logged_yellow_transition
+    availability_matches = (
+      int(values["APP_tcUnavailableReason"]) == 0
+      or logged_red_aware
+      or logged_yellow_transition
+    )
     return (feature_matches and state_matches_light and control_source in (2, 3) and
             2.0 <= distance < 255.0 and availability_matches and
             bool(values["APP_tcVisionLight"]))

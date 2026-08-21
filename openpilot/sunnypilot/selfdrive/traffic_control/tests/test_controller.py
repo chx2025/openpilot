@@ -50,6 +50,26 @@ def raw_ineligible_event_observation(distance, *, light=1, state_machine=3, now_
   )
 
 
+def feature_zero_yellow_observation(distance, *, now_ns=0):
+  return TeslaTrafficControlObservation(
+    available=True,
+    valid_for_control=True,
+    source_bus=2,
+    dlc=6,
+    feature_state=0,
+    state_machine=6,
+    control_source=3,
+    control_type=3,
+    distance=distance,
+    light_state=3,
+    continuation_reason=5,
+    unavailable_reason=1,
+    vision_light=True,
+    frame_mono_time=now_ns,
+    quality=2,
+  )
+
+
 def update(controller, now_s, obs, *, v_ego=15.0, a_ego=0.0, model_stop_distance=None,
            model_stop_candidate=False, lead_present=False, radar_valid=True, gas=False,
            brake=False, blinker=False, enabled=True, long_active=True):
@@ -87,6 +107,65 @@ def test_red_inside_100m_without_lead_enters_early_approach():
   # acceleration target. shouldStop is reserved for the final stationary hold.
   assert not decision.should_stop
   assert 84.0 <= decision.remaining_distance <= 88.5
+
+
+def test_yellow_green_flicker_keeps_a_confirmed_yellow_stop_active():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  update(controller, 0.0, feature_zero_yellow_observation(80.0, now_ns=0), v_ego=10.0)
+  update(controller, 0.3, feature_zero_yellow_observation(77.0, now_ns=int(0.3e9)), v_ego=10.0)
+  decision = update(
+    controller, 0.6, feature_zero_yellow_observation(74.0, now_ns=int(0.6e9)), v_ego=10.0,
+  )
+  assert decision.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking)
+  event_id = controller.event_id
+  green_distance = controller.remaining_distance + controller.stop_reference - 1.0
+
+  flicker = update(
+    controller, 0.7,
+    raw_ineligible_event_observation(
+      green_distance, light=2, state_machine=6, now_ns=int(0.7e9),
+    ),
+    v_ego=10.0,
+  )
+
+  assert flicker.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking)
+  assert controller.event_id == event_id
+  assert flicker.apply_constraint
+
+
+def test_yellow_candidate_survives_short_green_flicker_and_confirms():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  sequence = (
+    (0.0, feature_zero_yellow_observation(80.0, now_ns=0)),
+    (0.2, raw_ineligible_event_observation(78.0, light=2, state_machine=6, now_ns=int(0.2e9))),
+    (0.3, feature_zero_yellow_observation(77.0, now_ns=int(0.3e9))),
+    (0.4, raw_ineligible_event_observation(76.0, light=2, state_machine=6, now_ns=int(0.4e9))),
+    (0.5, feature_zero_yellow_observation(75.0, now_ns=int(0.5e9))),
+    (0.7, feature_zero_yellow_observation(73.0, now_ns=int(0.7e9))),
+  )
+
+  for now_s, obs in sequence:
+    decision = update(controller, now_s, obs, v_ego=10.0)
+
+  assert decision.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking)
+  assert decision.apply_constraint
+
+
+def test_late_high_speed_yellow_stays_in_the_dilemma_zone_without_hard_braking():
+  controller = TeslaTrafficControlController(TrafficControlConfig(
+    mode=TrafficControlMode.stopGo,
+    max_control_speed=80.0 / 3.6,
+  ))
+  for now_s, distance in ((0.0, 49.0), (0.3, 43.0), (0.6, 37.0), (0.9, 31.0)):
+    decision = update(
+      controller, now_s,
+      feature_zero_yellow_observation(distance, now_ns=int(now_s * 1e9)),
+      v_ego=69.3 / 3.6,
+    )
+
+  assert decision.phase == TrafficControlPhase.redCandidate
+  assert not decision.apply_constraint
+  assert controller.event_id == 0
 
 
 def test_red_event_is_not_established_above_the_configured_control_speed():

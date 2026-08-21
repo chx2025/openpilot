@@ -40,6 +40,9 @@ class TrafficControlConfig:
   # Tesla CAN already carries the OEM traffic-state result. Match CP's
   # red-to-green transition semantics instead of re-confirming it in planner time.
   green_confirm_s: float = 0.0
+  # Yellow-origin events need a stable green before release so Tesla's
+  # green/yellow transition flicker cannot cancel an already planned stop.
+  yellow_green_confirm_s: float = 0.6
   release_s: float = 3.0
   bypass_s: float = 10.0
   observation_dropout_s: float = 0.75
@@ -112,6 +115,9 @@ class TeslaTrafficControlController:
     self.last_event_observation_ns: int | None = None
     self.quality = 0
     self.event_continuous = False
+    self.event_started_yellow = False
+    self.event_has_red = False
+    self.candidate_started_yellow = False
 
   def _mark_transition(self, reason: str) -> None:
     self.transition_seq += 1
@@ -153,6 +159,9 @@ class TeslaTrafficControlController:
     self.last_event_observation_ns = None
     self.quality = 0
     self.event_continuous = False
+    self.event_started_yellow = False
+    self.event_has_red = False
+    self.candidate_started_yellow = False
     self.last_update_ns = None
 
   def _decision(self) -> TrafficControlDecision:
@@ -205,6 +214,8 @@ class TeslaTrafficControlController:
     self.event_id = self.event_seq
     self.event_source_bus = observation.source_bus
     self.event_control_source = observation.control_source
+    self.event_started_yellow = self.candidate_started_yellow
+    self.event_has_red = observation.light_state == 1
     self.last_event_observation_ns = self.last_update_ns
     # CP's e2e stop state commits the model stop distance, while the traffic
     # light detector decides whether that stop is a traffic-control event. Use
@@ -230,6 +241,8 @@ class TeslaTrafficControlController:
     self.event_id = self.event_seq
     self.event_source_bus = 0
     self.event_control_source = 0
+    self.event_started_yellow = False
+    self.event_has_red = False
     self.last_event_observation_ns = self.last_update_ns
     self.remaining_distance = max(0.0, float(model_stop_distance))
     self.light_state = 1
@@ -378,7 +391,10 @@ class TeslaTrafficControlController:
       if self.event_source_bus == 0 and valid_red:
         self.event_source_bus = observation.source_bus
         self.event_control_source = observation.control_source
+        self.event_has_red = True
         self.last_event_observation_ns = now_ns
+      elif valid_red:
+        self.event_has_red = True
 
       observation_dropout_s = (float("inf") if self.last_event_observation_ns is None else
                                (now_ns - self.last_event_observation_ns) / 1e9)
@@ -404,7 +420,12 @@ class TeslaTrafficControlController:
         self.last_event_observation_ns = now_ns
         if self.green_since_ns is None:
           self.green_since_ns = now_ns
-        green_stable = (now_ns - self.green_since_ns) / 1e9 >= self.config.green_confirm_s
+        green_confirm_s = (
+          self.config.yellow_green_confirm_s
+          if self.event_started_yellow and not self.event_has_red
+          else self.config.green_confirm_s
+        )
+        green_stable = (now_ns - self.green_since_ns) / 1e9 >= green_confirm_s
         moving_release = v_ego >= 0.3 and not brake_pressed
         # CP gives a physical lead priority over the traffic stop. Release our
         # hold on green even with a lead; TrafficRadarSource withholds the
@@ -501,6 +522,7 @@ class TeslaTrafficControlController:
         self.candidate_control_source = observation.control_source
         self.candidate_anchor_distance = observation.distance
         self.candidate_travel_distance = 0.0
+        self.candidate_started_yellow = valid_yellow
         base_confirm_s = self.config.red_confirm_s if observation.quality >= 2 else self.config.weak_red_confirm_s
         self.candidate_confirm_s = max(base_confirm_s, self.config.replacement_confirm_s if replacement else 0.0)
         self.model_confirm_since_ns = None
@@ -550,6 +572,7 @@ class TeslaTrafficControlController:
     self.candidate_last_ns = None
     self.candidate_anchor_distance = 0.0
     self.candidate_travel_distance = 0.0
+    self.candidate_started_yellow = False
     self.candidate_confirm_s = self.config.red_confirm_s
     self.pending_candidate_since_ns = None
     self.pending_candidate_distance = 0.0
