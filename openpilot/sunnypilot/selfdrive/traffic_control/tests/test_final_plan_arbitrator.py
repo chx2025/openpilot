@@ -9,6 +9,7 @@ from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficCon
 from openpilot.sunnypilot.selfdrive.traffic_control.final_plan_arbitrator import (
   FinalPlanArbitrator,
   TrafficPlanAction,
+  TrafficStartBlockReason,
   create_final_plan_arbitrator,
 )
 
@@ -395,6 +396,62 @@ def test_physical_lead_suppresses_both_stop_and_start():
 
   assert not arbitrator.diagnostics.applied
   assert plan.aTarget == 0.4
+
+
+def test_turn_signal_allows_red_stop_but_still_blocks_green_start():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  red = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=31, distance=70.0, v_ego=12.0,
+  )
+  red["carControl"].rightBlinker = True
+  stop_plan = base_plan()
+
+  arbitrator.apply(stop_plan, red, NOW_NS)
+
+  assert arbitrator.diagnostics.action == TrafficPlanAction.stop
+  assert arbitrator.diagnostics.applied
+  assert stop_plan.aTarget < 0.4
+
+  red["carControl"].rightBlinker = False
+  red["carState"].vEgo = 0.0
+  red["trafficRadarState"].phase = int(TrafficControlPhase.hold)
+  red["trafficRadarState"].shouldStop = True
+  red["trafficRadarState"].distanceToStopPoint = 0.0
+  arbitrator.apply(base_plan(a_target=0.0), red, NOW_NS + 50_000_000)
+
+  green = fake_sm(
+    phase=TrafficControlPhase.release, light_state=2, allowed=True,
+    start=True, event_id=31, distance=0.0, v_ego=0.0,
+  )
+  green["carControl"].rightBlinker = True
+  blocked_start = base_plan(a_target=0.1)
+  arbitrator.apply(blocked_start, green, NOW_NS + 100_000_000)
+
+  assert not arbitrator.diagnostics.start_applied
+  assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.driverOverride
+
+
+def test_green_start_remains_blocked_when_longitudinal_control_is_disabled():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  hold = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=True, event_id=32, distance=0.0, v_ego=0.0,
+  )
+  arbitrator.apply(base_plan(a_target=0.0), hold, NOW_NS)
+
+  green = fake_sm(
+    phase=TrafficControlPhase.release, light_state=2, allowed=True,
+    start=True, event_id=32, distance=0.0, v_ego=0.0,
+  )
+  green["carControl"].enabled = False
+  green["carControl"].longActive = False
+  plan = base_plan(a_target=0.1)
+
+  arbitrator.apply(plan, green, NOW_NS + 50_000_000)
+
+  assert not arbitrator.diagnostics.start_applied
+  assert plan.aTarget == 0.1
 
 
 def test_publish_sink_forwards_unrelated_services_unchanged():

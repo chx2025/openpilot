@@ -133,6 +133,55 @@ def test_yellow_green_flicker_keeps_a_confirmed_yellow_stop_active():
   assert flicker.apply_constraint
 
 
+def test_active_red_ignores_interleaved_no_color_frames():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  confirmed_red(controller, distance=80.0, v_ego=10.0)
+  event_id = controller.event_id
+  no_color_distance = controller.remaining_distance + controller.stop_reference - 1.0
+
+  decision = update(
+    controller, 0.7,
+    raw_ineligible_event_observation(
+      no_color_distance, light=0, state_machine=6, now_ns=int(0.7e9),
+    ),
+    v_ego=10.0,
+  )
+
+  assert controller.event_id == event_id
+  assert decision.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking)
+  assert decision.light_state == 1
+  assert decision.apply_constraint
+
+  dropped = update(
+    controller, 1.6,
+    raw_ineligible_event_observation(
+      no_color_distance, light=0, state_machine=6, now_ns=int(1.6e9),
+    ),
+    v_ego=10.0,
+  )
+  assert dropped.phase == TrafficControlPhase.off
+  assert dropped.light_state == 0
+  assert not dropped.apply_constraint
+
+
+def test_unconfirmed_red_candidate_does_not_latch_color_after_dropout():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  decision = update(controller, 0.0, observation(80.0, now_ns=0), v_ego=10.0)
+  assert decision.phase == TrafficControlPhase.redCandidate
+  assert decision.light_state == 1
+
+  no_color = raw_ineligible_event_observation(
+    79.0, light=0, state_machine=6, now_ns=int(0.1e9),
+  )
+  decision = update(controller, 0.1, no_color, v_ego=10.0)
+  assert decision.phase == TrafficControlPhase.redCandidate
+  assert decision.light_state == 0
+
+  decision = update(controller, 3.0, no_color, v_ego=10.0)
+  assert decision.phase == TrafficControlPhase.off
+  assert decision.light_state == 0
+
+
 def test_yellow_candidate_survives_short_green_flicker_and_confirms():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   sequence = (

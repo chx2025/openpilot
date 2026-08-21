@@ -365,8 +365,12 @@ class TeslaTrafficControlController:
       and (observation.valid_for_control or feature_zero_event_green)
     )
     valid_yellow = observation.valid_for_control and observation.light_state == 3
+    # During a committed stop, a decoded frame with no color is a sampling gap,
+    # not a new traffic state. Candidate/off/release phases retain the original
+    # observation semantics.
     if observation.available:
-      self.light_state = observation.light_state
+      if self.phase not in self.ACTIVE_PHASES or observation.light_state in (1, 2, 3):
+        self.light_state = observation.light_state
       self.source_bus = observation.source_bus
       self.quality = observation.quality
 

@@ -131,12 +131,19 @@ class FinalPlanArbitrator:
     return not (radar.leadOne.present or radar.leadTwo.present)
 
   @staticmethod
-  def _driver_allows(sm) -> bool:
+  def _driver_allows_stop(sm) -> bool:
     car_state = sm["carState"]
     car_control = sm["carControl"]
     return bool(
       car_control.enabled and car_control.longActive
       and not car_state.gasPressed and not car_state.brakePressed
+    )
+
+  @classmethod
+  def _driver_allows_start(cls, sm) -> bool:
+    car_control = sm["carControl"]
+    return bool(
+      cls._driver_allows_stop(sm)
       and not car_control.leftBlinker and not car_control.rightBlinker
     )
 
@@ -278,7 +285,7 @@ class FinalPlanArbitrator:
       return TrafficStartBlockReason.eventMismatch
     if self._completed_start_event_id == event_id:
       return TrafficStartBlockReason.alreadyStarted
-    if not self._driver_allows(sm):
+    if not self._driver_allows_start(sm):
       return TrafficStartBlockReason.driverOverride
     if not self._physical_radar_clear(sm):
       return TrafficStartBlockReason.physicalLead
@@ -407,7 +414,7 @@ class FinalPlanArbitrator:
     self._set_diagnostics_from_traffic(traffic)
 
     physical_clear = self._physical_radar_clear(sm)
-    driver_allows = self._driver_allows(sm)
+    driver_allows_stop = self._driver_allows_stop(sm)
     confirmed_release = bool(
       traffic is not None and int(traffic.eventId) == self._held_event_id
       and int(traffic.phase) == int(TrafficControlPhase.release) and int(traffic.lightState) == 2
@@ -415,7 +422,7 @@ class FinalPlanArbitrator:
     if confirmed_release:
       self._hold_latched = False
       self._hold_latched_should_stop = False
-    elif not driver_allows:
+    elif not driver_allows_stop:
       self._hold_latched = False
       self._hold_latched_should_stop = False
       if self._active_start_event_id != 0:
@@ -431,14 +438,15 @@ class FinalPlanArbitrator:
       and int(traffic.phase) in (
         int(TrafficControlPhase.approachRed), int(TrafficControlPhase.braking), int(TrafficControlPhase.hold),
       )
-      and physical_clear and driver_allows
+      and physical_clear and driver_allows_stop
     )
     if active_stop:
       self._apply_stop(plan, sm, traffic)
     elif traffic is not None and bool(traffic.plannerStartRequested) and int(traffic.lightState) == 2:
       if not self._apply_start(plan, sm, traffic, now_ns):
         self._apply_release(plan, sm)
-    elif self._hold_latched and float(sm["carState"].vEgo) <= TERMINAL_MAX_SPEED and physical_clear and driver_allows:
+    elif (self._hold_latched and float(sm["carState"].vEgo) <= TERMINAL_MAX_SPEED
+          and physical_clear and driver_allows_stop):
       self._apply_latched_hold(plan, sm)
     else:
       if self._active_start_event_id != 0:
