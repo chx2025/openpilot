@@ -10,6 +10,8 @@ import os
 os.environ['GMMU'] = '0'
 from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.selfdrive.modeld.helpers import usbgpu_present, load_oob
+from openpilot.sunnypilot.modeld_v2.egpu_loader import configure_default_device, load_with_timeout, wait_for_link
+configure_default_device(COMMA_HARDWARE)
 import time
 import numpy as np
 import openpilot.cereal.messaging as messaging
@@ -23,6 +25,7 @@ from msgq.visionipc import VisionIpcClient, VisionBuf
 from opendbc.car.car_helpers import get_demo_car_params
 
 from tinygrad.tensor import Tensor
+from tinygrad.helpers import Context
 
 from openpilot.common.file_chunker import open_file_chunked
 from openpilot.common.swaglog import cloudlog
@@ -49,6 +52,7 @@ from openpilot.sunnypilot.models.helpers import get_active_bundle
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
+BIG_MODEL_TIMEOUT = 75
 
 
 def _pkl_exists(path):
@@ -107,7 +111,11 @@ class ModelState(ModelStateBase):
 
   def _init_combined(self, pkl_path, cam_w, cam_h, bundle):
     cloudlog.warning(f"loading combined pkl: {pkl_path}")
-    jits = load_oob(open_file_chunked(pkl_path))
+    if self.usbgpu:
+      with Context(DEV="USB+AMD:LLVM"):
+        jits = load_oob(open_file_chunked(pkl_path))
+    else:
+      jits = load_oob(open_file_chunked(pkl_path))
 
     self.WARP_DEV = 'QCOM' if COMMA_HARDWARE else 'CPU'
     self.DEV = 'AMD' if self.usbgpu else self.WARP_DEV
@@ -363,16 +371,18 @@ def main(demo=False):
 
   model = None
   if USBGPU:
-    import threading
-    def load():
-      nonlocal model
-      model = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=True)
-    t = threading.Thread(target=load, daemon=True)
-    t.start()
-    t.join(60)
-    if model is None:
+    from openpilot.system.hardware.chestnut.flash import link_up
+    try:
+      if not wait_for_link(link_up):
+        raise RuntimeError("eGPU USB connected but PCIe link is not ready")
+      model = load_with_timeout(
+        lambda: ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=True),
+        BIG_MODEL_TIMEOUT,
+      )
+    except Exception:
       params.put_bool("UsbGpuActive", False)
-      raise RuntimeError("eGPU model load failed or timed out (60s)")
+      params.put_bool("UsbGpuLoading", False)
+      raise
     params.put_bool("UsbGpuActive", True)
   else:
     model = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=False)
