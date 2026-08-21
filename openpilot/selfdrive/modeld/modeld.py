@@ -43,7 +43,8 @@ SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 LAT_SMOOTH_SECONDS = 0.0
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
-BIG_MODEL_TIMEOUT = 60
+# C3XL USB eGPU needs up to ~63 s to deserialize and warm up the big model.
+BIG_MODEL_TIMEOUT = 75
 
 
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
