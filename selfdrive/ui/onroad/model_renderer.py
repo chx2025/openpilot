@@ -134,7 +134,6 @@ class ModelRenderer(Widget):
     model_updated = sm.updated['modelV2']
     if model_updated or sm.updated['radarState'] or self._transform_dirty:
       if model_updated:
-        # 修改：將 sm 傳入，才能讀取到 ControlsStateExt 的即時係數
         self._update_raw_points(model, sm)
 
       path_x_array = self._path.raw_points[:, 0]
@@ -156,29 +155,29 @@ class ModelRenderer(Widget):
     if render_lead_indicator and radar_state:
       self._draw_lead_indicator()
 
-  # 修改：加入 sm 參數
   def _update_raw_points(self, model, sm):
     """Update raw 3D points from model data"""
     self._path.raw_points = np.array([model.position.x, model.position.y, model.position.z], dtype=np.float32).T
 
-    # dp - LCC: 畫出真實的多點擬合目標曲線
-    ext = sm['controlsStateExt'] if sm.valid.get('controlsStateExt', False) else None
-    
-    # 只要 poly_a, poly_b, poly_c 有任一數值非零，就代表 LCC 有抓到真實車道曲線
-    if ext is not None and (abs(ext.lccPolyA) > 1e-7 or abs(ext.lccPolyB) > 1e-7 or abs(ext.lccPolyC) > 1e-7):
-      if self._path.raw_points.shape[0] > 0:
+    # ----------------------------------------------------
+    # v3.0 UI 畫線邏輯更新：捨棄 Polyfit，改繪製預測偏移軌跡
+    # ----------------------------------------------------
+    if self._path.raw_points.shape[0] > 0 and sm.valid.get('controlsStateExt', False):
+      ext = sm['controlsStateExt']
+      # 讀取 v3.0 算出的最新修正量
+      # 這裡我們用一個簡單的橫向偏移 (Offset) 來將紅色軌跡平行推移
+      # 代表這就是 LCC 正在努力將車子拉過去的方向
+      offset_y = getattr(ext, 'lccCorrection', 0.0) * 100.0 
+      
+      if abs(offset_y) > 0.001:
         corrected = self._path.raw_points.copy()
-        x = corrected[:, 0]
-        
-        # 直接套用最真實的車道中心線幾何參數: y = ax^2 + bx + c
-        # 這條線將精準代表 LCC 認定的「完美置中軌跡」，這就是真正的所見即所得
-        corrected[:, 1] = (ext.lccPolyA * (x ** 2)) + (ext.lccPolyB * x) + ext.lccPolyC
-        
+        corrected[:, 1] += offset_y  # 將整條線平移
         self._path_corrected.raw_points = corrected
       else:
         self._path_corrected.raw_points = np.empty((0, 3), dtype=np.float32)
     else:
       self._path_corrected.raw_points = np.empty((0, 3), dtype=np.float32)
+    # ----------------------------------------------------
 
     for i, lane_line in enumerate(model.laneLines):
       self._lane_lines[i].raw_points = np.array([lane_line.x, lane_line.y, lane_line.z], dtype=np.float32).T
