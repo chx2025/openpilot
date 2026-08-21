@@ -113,9 +113,12 @@ class TeslaTrafficControlController:
     self.transition_reason = reason
 
   def set_config(self, config: TrafficControlConfig) -> None:
-    if config.mode == TrafficControlMode.off and self.config.mode != TrafficControlMode.off:
-      self.reset()
+    previous_mode = self.config.mode
     self.config = config
+    if config.mode == TrafficControlMode.off and previous_mode != TrafficControlMode.off:
+      self.reset()
+    elif self.phase == TrafficControlPhase.off:
+      self.stop_reference = config.default_stop_reference
 
   def reset(self) -> None:
     self.phase = TrafficControlPhase.off
@@ -298,8 +301,8 @@ class TeslaTrafficControlController:
       return self._decision()
 
     valid_red = observation.valid_for_control and observation.light_state == 1
-    feature_zero_held_green = bool(
-      self.phase == TrafficControlPhase.hold
+    feature_zero_event_green = bool(
+      self.phase in self.ACTIVE_PHASES
       and observation.available
       and observation.feature_state == 0
       and observation.source_bus == 2
@@ -313,7 +316,7 @@ class TeslaTrafficControlController:
     )
     valid_green = bool(
       observation.light_state == 2
-      and (observation.valid_for_control or feature_zero_held_green)
+      and (observation.valid_for_control or feature_zero_event_green)
     )
     valid_yellow = observation.valid_for_control and observation.light_state == 3
     if observation.available:

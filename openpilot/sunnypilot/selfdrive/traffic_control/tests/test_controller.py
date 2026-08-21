@@ -263,6 +263,46 @@ def test_can_authoritative_green_releases_the_held_event_on_its_first_fresh_tran
   assert controller.event_id == event_id
 
 
+def test_can_green_releases_immediately_while_the_red_event_is_still_braking():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  decision = confirmed_red(controller, distance=20.0, v_ego=5.0)
+  event_id = controller.event_id
+  assert decision.phase == TrafficControlPhase.braking
+  green_distance = controller.remaining_distance + controller.stop_reference
+
+  decision = update(
+    controller,
+    0.8,
+    raw_ineligible_event_observation(
+      green_distance, light=2, state_machine=6, now_ns=int(0.8e9),
+    ),
+    v_ego=5.0,
+  )
+
+  assert decision.phase == TrafficControlPhase.release
+  assert controller.event_id == event_id
+  assert not decision.should_stop
+
+
+def test_can_green_releases_immediately_during_the_red_approach_phase():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  decision = confirmed_red(controller, distance=80.0, v_ego=5.0)
+  assert decision.phase == TrafficControlPhase.approachRed
+  green_distance = controller.remaining_distance + controller.stop_reference
+
+  decision = update(
+    controller,
+    0.8,
+    raw_ineligible_event_observation(
+      green_distance, light=2, state_machine=6, now_ns=int(0.8e9),
+    ),
+    v_ego=5.0,
+  )
+
+  assert decision.phase == TrafficControlPhase.release
+  assert not decision.should_stop
+
+
 def test_can_green_with_a_physical_lead_releases_traffic_hold_to_the_lead_planner():
   controller = TeslaTrafficControlController(TrafficControlConfig(
     mode=TrafficControlMode.stopGo,

@@ -19,17 +19,18 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tn_no_dec
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import LongitudinalTuning
 from openpilot.sunnypilot.selfdrive.traffic_control.target import TrafficMpcTarget
 from openpilot.sunnypilot.selfdrive.traffic_control import trafficcontrold
-from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlMode
+from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlMode, TrafficControlPhase
 from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import TrafficRadarGoPolicy
 
 
 class FakeParams:
-  def __init__(self, enabled):
+  def __init__(self, enabled, reference_dm="60"):
     self.enabled = enabled
+    self.reference_dm = reference_dm
 
   def get(self, key, return_default=False):
     del return_default
-    return "60" if key == "TeslaTrafficStopReference" else None
+    return self.reference_dm if key == "TeslaTrafficStopReference" else None
 
   def get_bool(self, key):
     return self.enabled if key == "TeslaTrafficSignalControlEnabled" else False
@@ -59,6 +60,27 @@ def test_user_switch_maps_off_to_observation_and_on_to_stop_go():
   assert active.controller.config.mode == TrafficControlMode.stopGo
   assert active.controller.config.retain_event_with_lead
   assert active.go_policy == TrafficRadarGoPolicy.active
+
+
+def test_runtime_stop_reference_refresh_applies_when_idle_without_moving_an_active_event():
+  params = FakeParams(True)
+  source = trafficcontrold.build_source(params)
+  assert source.controller.stop_reference == 6.0
+
+  params.reference_dm = "50"
+  trafficcontrold.refresh_source_config(source, params)
+  assert source.controller.config.default_stop_reference == 5.0
+  assert source.controller.stop_reference == 5.0
+
+  source.controller.phase = TrafficControlPhase.braking
+  source.controller.stop_reference = 5.0
+  params.reference_dm = "40"
+  trafficcontrold.refresh_source_config(source, params)
+  assert source.controller.config.default_stop_reference == 4.0
+  assert source.controller.stop_reference == 5.0
+
+  source.controller.reset()
+  assert source.controller.stop_reference == 4.0
 
 
 def test_trafficcontrold_publishes_only_the_independent_traffic_radar_service(monkeypatch):
@@ -100,6 +122,43 @@ def test_trafficcontrold_publishes_only_the_independent_traffic_radar_service(mo
   assert published["sent"] == ("trafficRadarState", message)
   assert {"radarState", "modelV2"} <= set(published["subscriptions"])
   assert not ({"radarState", "modelV2", "can", "sendcan"} & set(published["services"]))
+
+
+def test_trafficcontrold_refreshes_runtime_settings_without_restarting(monkeypatch):
+  refreshed = []
+
+  class FakeSubMaster:
+    updated = {"modelV2": True}
+    logMonoTime = {"modelV2": 123}
+
+    def __init__(self, _services, **_kwargs):
+      self.update_count = 0
+
+    def update(self):
+      if self.update_count >= 20:
+        raise StopIteration
+      self.update_count += 1
+
+  class FakePubMaster:
+    def __init__(self, _services):
+      pass
+
+    def send(self, _service, _message):
+      pass
+
+  params = FakeParams(True)
+  source = SimpleNamespace(update=lambda _sm, _now_ns: object())
+  monkeypatch.setattr(trafficcontrold, "config_realtime_process", lambda *args: None)
+  monkeypatch.setattr(trafficcontrold, "Params", lambda: params)
+  monkeypatch.setattr(trafficcontrold, "build_source", lambda _params: source)
+  monkeypatch.setattr(trafficcontrold, "refresh_source_config", lambda _source, _params: refreshed.append(True))
+  monkeypatch.setattr(trafficcontrold.messaging, "SubMaster", FakeSubMaster)
+  monkeypatch.setattr(trafficcontrold.messaging, "PubMaster", FakePubMaster)
+
+  with pytest.raises(StopIteration):
+    trafficcontrold.main()
+
+  assert refreshed == [True]
 
 
 @pytest.mark.parametrize(

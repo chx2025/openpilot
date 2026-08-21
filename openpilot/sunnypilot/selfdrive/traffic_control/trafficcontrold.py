@@ -13,7 +13,7 @@ from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import (
 )
 
 
-def build_source(params: Params) -> TrafficRadarSource:
+def read_source_config(params: Params) -> tuple[TrafficControlConfig, TrafficRadarGoPolicy]:
   reference_dm = params.get("TeslaTrafficStopReference", return_default=True)
   try:
     reference = float(np.clip(float(reference_dm) / 10.0, 2.0, 12.0))
@@ -29,12 +29,25 @@ def build_source(params: Params) -> TrafficRadarSource:
     retain_event_with_lead=control_enabled,
   )
   go_policy = TrafficRadarGoPolicy.active if control_enabled else TrafficRadarGoPolicy.passive
+  return config, go_policy
+
+
+def build_source(params: Params) -> TrafficRadarSource:
+  config, go_policy = read_source_config(params)
   return TrafficRadarSource(config, go_policy=go_policy)
+
+
+def refresh_source_config(source: TrafficRadarSource, params: Params) -> None:
+  config, go_policy = read_source_config(params)
+  source.controller.set_config(config)
+  source.go_policy = go_policy
 
 
 def main() -> None:
   config_realtime_process(5, Priority.CTRL_LOW)
-  source = build_source(Params())
+  params = Params()
+  source = build_source(params)
+  model_updates = 0
   services = ['carControl', 'carState', 'radarState', 'modelV2', 'carStateSP']
   sm = messaging.SubMaster(services, poll='modelV2', ignore_alive=['carStateSP'],
                            ignore_avg_freq=['carStateSP'], ignore_valid=['carStateSP'])
@@ -43,6 +56,9 @@ def main() -> None:
   while True:
     sm.update()
     if sm.updated['modelV2']:
+      model_updates += 1
+      if model_updates % 20 == 0:
+        refresh_source_config(source, params)
       pm.send('trafficRadarState', source.update(sm, sm.logMonoTime['modelV2']))
 
 
