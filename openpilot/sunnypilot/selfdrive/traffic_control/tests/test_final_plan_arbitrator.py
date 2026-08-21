@@ -116,7 +116,7 @@ def test_zero_remaining_distance_while_moving_keeps_braking_until_stopped():
   assert arbitrator.diagnostics.action == TrafficPlanAction.stop
   assert arbitrator.diagnostics.applied
   assert plan.aTarget < 0.0
-  assert plan.shouldStop
+  assert not plan.shouldStop
   assert not plan.allowThrottle
 
 
@@ -151,7 +151,7 @@ def test_terminal_stop_does_not_sample_zero_after_the_predicted_stop():
   assert arbitrator.diagnostics.terminal_catch_active
   assert arbitrator.diagnostics.traffic_a_target < 0.0
   assert plan.aTarget < 0.0
-  assert plan.shouldStop
+  assert not plan.shouldStop
   assert not plan.allowThrottle
 
 
@@ -167,7 +167,7 @@ def test_low_speed_stop_enters_terminal_catch_before_distance_is_exhausted():
 
   assert arbitrator.diagnostics.terminal_catch_active
   assert plan.aTarget < 0.0
-  assert plan.shouldStop
+  assert not plan.shouldStop
   assert not plan.allowThrottle
 
 
@@ -185,7 +185,7 @@ def test_terminal_catch_survives_a_short_traffic_publisher_gap():
   arbitrator.apply(latched, sm, NOW_NS + 100_000_000)
 
   assert arbitrator.diagnostics.action == TrafficPlanAction.hold
-  assert latched.shouldStop
+  assert not latched.shouldStop
   assert not latched.allowThrottle
   assert latched.aTarget < 0.0
 
@@ -200,26 +200,18 @@ def test_terminal_to_hold_sequence_brakes_until_actual_standstill():
   terminal = base_plan(a_target=0.3)
   arbitrator.apply(terminal, sm, NOW_NS)
 
-  sm["trafficRadarState"].phase = int(TrafficControlPhase.hold)
-  sm["trafficRadarState"].shouldStop = True
-  sm["trafficRadarState"].distanceToStopPoint = 0.0
-  sm["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
-  sm["carState"].vEgo = 0.7
-  moving_hold = base_plan(a_target=0.3)
-  arbitrator.apply(moving_hold, sm, NOW_NS + 50_000_000)
-
   sm.alive["trafficRadarState"] = False
-  sm["carState"].vEgo = 0.4
+  sm["carState"].vEgo = 1.0
   publisher_gap = base_plan(a_target=0.3)
-  arbitrator.apply(publisher_gap, sm, NOW_NS + 100_000_000)
+  arbitrator.apply(publisher_gap, sm, NOW_NS + 50_000_000)
 
   sm["carState"].vEgo = 0.0
   standstill = base_plan(a_target=0.3)
-  arbitrator.apply(standstill, sm, NOW_NS + 150_000_000)
+  arbitrator.apply(standstill, sm, NOW_NS + 100_000_000)
 
-  for moving_plan in (terminal, moving_hold, publisher_gap):
+  for moving_plan in (terminal, publisher_gap):
     assert moving_plan.aTarget < 0.0
-    assert moving_plan.shouldStop
+    assert not moving_plan.shouldStop
     assert not moving_plan.allowThrottle
   assert standstill.aTarget == 0.0
   assert standstill.shouldStop

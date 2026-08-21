@@ -43,6 +43,7 @@ class TrafficControlConfig:
   release_s: float = 3.0
   bypass_s: float = 10.0
   observation_dropout_s: float = 0.75
+  candidate_dropout_s: float = 2.5
   event_distance_tolerance: float = 12.0
   max_control_distance: float = 100.0
   candidate_distance_tolerance: float = 6.0
@@ -50,6 +51,7 @@ class TrafficControlConfig:
   model_alignment_min_m: float = 8.0
   model_alignment_max_m: float = 25.0
   model_alignment_ratio: float = 0.20
+  model_only_min_speed: float = 1.0
   retain_event_with_lead: bool = False
 
 
@@ -218,6 +220,22 @@ class TeslaTrafficControlController:
       self.phase = TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed
       self._mark_transition("stop_confirmed")
 
+  def _start_model_stop(self, model_stop_distance: float, v_ego: float) -> None:
+    if model_stop_distance > self.config.max_control_distance:
+      return
+    self.event_seq += 1
+    self.event_id = self.event_seq
+    self.event_source_bus = 0
+    self.event_control_source = 0
+    self.last_event_observation_ns = self.last_update_ns
+    self.remaining_distance = max(0.0, float(model_stop_distance))
+    self.light_state = 1
+    self.source_bus = 0
+    self.quality = 1
+    required = v_ego ** 2 / (2.0 * max(self.remaining_distance, 0.5))
+    self.phase = TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed
+    self._mark_transition("stop_confirmed")
+
   def _advance_latched_distance(self, dt: float, v_ego: float,
                                 observation: TeslaTrafficControlObservation) -> None:
     self.remaining_distance = max(0.0, self.remaining_distance - max(v_ego, 0.0) * dt)
@@ -241,11 +259,13 @@ class TeslaTrafficControlController:
     self.event_continuous = bool(event_continuous and same_event and distance_consistent)
     if self.event_continuous:
       self.last_event_observation_ns = self.last_update_ns
-      oem_remaining = max(0.0, observation.distance - self.stop_reference)
-      # OEM remains primary, but never allow a noisy target switch to move the
-      # committed stop point materially farther away in one planner cycle.
-      correction = float(np.clip(oem_remaining - self.remaining_distance, -2.0, 0.25 * dt))
-      self.remaining_distance = max(0.0, self.remaining_distance + correction)
+      if self.remaining_distance > 10.0:
+        oem_remaining = max(0.0, observation.distance - self.stop_reference)
+        # Far from the stop, follow a consistent OEM target with bounded
+        # corrections. CP-style final approach freezes the committed point.
+        max_close = max(v_ego, 0.0) * dt + 0.5
+        correction = float(np.clip(oem_remaining - self.remaining_distance, -max_close, 0.25 * dt))
+        self.remaining_distance = max(0.0, self.remaining_distance + correction)
 
   def update(self, observation: TeslaTrafficControlObservation, now_ns: int, *, v_ego: float, a_ego: float,
              model_stop_distance: float | None, model_stop_candidate: bool, lead_present: bool,
@@ -324,8 +344,28 @@ class TeslaTrafficControlController:
       self.source_bus = observation.source_bus
       self.quality = observation.quality
 
+    if self.phase == TrafficControlPhase.off and not (valid_red or valid_yellow):
+      if (model_stop_candidate and model_stop_distance is not None
+          and v_ego >= self.config.model_only_min_speed):
+        if self.model_confirm_since_ns is None:
+          self.model_confirm_since_ns = now_ns
+        if (now_ns - self.model_confirm_since_ns) / 1e9 >= self.config.model_confirm_s:
+          self._start_model_stop(float(model_stop_distance), v_ego)
+        return self._decision()
+      else:
+        self.model_confirm_since_ns = None
+
     if self.phase in self.ACTIVE_PHASES:
       self._advance_latched_distance(dt, v_ego, observation)
+
+      if self.event_source_bus == 0 and model_stop_candidate and model_stop_distance is not None:
+        self.last_event_observation_ns = now_ns
+        if self.remaining_distance > 10.0:
+          self.remaining_distance = max(0.0, float(model_stop_distance))
+      if self.event_source_bus == 0 and valid_red:
+        self.event_source_bus = observation.source_bus
+        self.event_control_source = observation.control_source
+        self.last_event_observation_ns = now_ns
 
       observation_dropout_s = (float("inf") if self.last_event_observation_ns is None else
                                (now_ns - self.last_event_observation_ns) / 1e9)
@@ -474,18 +514,19 @@ class TeslaTrafficControlController:
       oem_confirmed = (now_ns - self.red_since_ns) / 1e9 >= self.candidate_confirm_s
       model_confirmed = (self.model_confirm_since_ns is not None and
                          (now_ns - self.model_confirm_since_ns) / 1e9 >= self.config.model_confirm_s)
-      confirmed = oem_confirmed and model_confirmed
+      confirmed = oem_confirmed
       if valid_yellow:
         remaining = max(0.5, observation.distance - self.stop_reference)
         required = v_ego ** 2 / (2.0 * remaining)
         confirmed = confirmed and required <= self.config.comfort_brake
       if confirmed:
-        self._start_stop(observation, v_ego, model_stop_distance)
+        aligned_model_distance = model_stop_distance if model_confirmed else None
+        self._start_stop(observation, v_ego, aligned_model_distance)
       return self._decision()
 
     if self.phase == TrafficControlPhase.redCandidate and self.candidate_last_ns is not None:
       candidate_dropout_s = (now_ns - self.candidate_last_ns) / 1e9
-      if candidate_dropout_s < self.config.observation_dropout_s:
+      if candidate_dropout_s < self.config.candidate_dropout_s:
         return self._decision()
 
     candidate_cancelled = self.phase == TrafficControlPhase.redCandidate

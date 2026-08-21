@@ -98,6 +98,7 @@ class FinalPlanArbitrator:
     self._start_started_ns = 0
     self._was_stopping = False
     self._hold_latched = False
+    self._hold_latched_should_stop = False
     self.diagnostics = TrafficPlanDiagnostics()
 
   def publisher(self, pm, sm, now_ns: int | None = None):
@@ -185,7 +186,7 @@ class FinalPlanArbitrator:
     plan.accels = final_accels.tolist()
     plan.jerks = self._padded_jerks(final_accels, times, len(plan.jerks)).tolist()
     plan.aTarget = final_a_target
-    plan.shouldStop = bool(plan.shouldStop or hold or terminal)
+    plan.shouldStop = bool(plan.shouldStop or hold)
     plan.allowThrottle = bool(plan.allowThrottle and not (hold or terminal))
     return traffic_a_target
 
@@ -218,6 +219,7 @@ class FinalPlanArbitrator:
       self._completed_start_event_id = 0
       self._start_started_ns = 0
       self._hold_latched = True
+      self._hold_latched_should_stop = self._hold_latched_should_stop or hold
     self._was_stopping = True
     self.diagnostics.action = TrafficPlanAction.hold if hold else TrafficPlanAction.stop
     self.diagnostics.applied = True
@@ -260,6 +262,7 @@ class FinalPlanArbitrator:
       return False
 
     self._hold_latched = False
+    self._hold_latched_should_stop = False
 
     v_ego = float(sm["carState"].vEgo)
     if v_ego > START_MAX_SPEED:
@@ -301,17 +304,20 @@ class FinalPlanArbitrator:
     return True
 
   def _apply_latched_hold(self, plan, sm) -> None:
+    v_ego = float(sm["carState"].vEgo)
+    should_stop = self._hold_latched_should_stop or v_ego <= 0.3
     traffic_a_target = self._apply_stop_constraint(
       plan, sm,
       remaining_distance=0.0,
-      hold=True,
+      hold=should_stop,
       terminal=True,
     )
+    self._hold_latched_should_stop = should_stop
     self.diagnostics.action = TrafficPlanAction.hold
     self.diagnostics.applied = True
     self.diagnostics.event_id = self._held_event_id
     self.diagnostics.traffic_a_target = traffic_a_target
-    self.diagnostics.terminal_catch_active = float(sm["carState"].vEgo) > 0.01
+    self.diagnostics.terminal_catch_active = v_ego > 0.01
 
   def _apply_release(self, plan, sm) -> None:
     if not self._was_stopping:
@@ -359,8 +365,10 @@ class FinalPlanArbitrator:
     )
     if confirmed_release:
       self._hold_latched = False
+      self._hold_latched_should_stop = False
     elif not driver_allows:
       self._hold_latched = False
+      self._hold_latched_should_stop = False
       if self._active_start_event_id != 0:
         self._finish_start(self._active_start_event_id)
       self._was_stopping = False

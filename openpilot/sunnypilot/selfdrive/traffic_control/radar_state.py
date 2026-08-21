@@ -16,6 +16,7 @@ from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import (
   TRAFFIC_CONTROL_STALE_NS,
   TeslaTrafficControlObservation,
 )
+from openpilot.sunnypilot.selfdrive.traffic_control.stop_target_tracker import StopTargetTracker
 
 
 class TrafficRadarGoPolicy(IntEnum):
@@ -52,6 +53,7 @@ class TrafficRadarSource:
     self.go_policy = go_policy
     self._lead_suppressed = False
     self._reconfirm_since_ns: int | None = None
+    self.stop_target_tracker = StopTargetTracker()
 
   @staticmethod
   def _observation(msg, now_ns: int) -> TeslaTrafficControlObservation:
@@ -91,9 +93,13 @@ class TrafficRadarSource:
     lead_distance = min(float(lead.dRel) for lead in present_leads) if present_leads else None
     model_valid = bool(sm.seen['modelV2'] and sm.alive['modelV2'] and sm.valid['modelV2'])
     if model_valid:
-      model_distance, model_candidate = self._model_stop(sm['modelV2'], float(car_state.vEgo), lead_distance)
+      raw_model_distance, model_candidate = self._model_stop(sm['modelV2'], float(car_state.vEgo), lead_distance)
     else:
-      model_distance, model_candidate = None, False
+      raw_model_distance, model_candidate = None, False
+    filtered_model_distance = self.stop_target_tracker.update_model(
+      raw_model_distance, v_ego=float(car_state.vEgo), now_ns=now_ns,
+    )
+    model_distance = filtered_model_distance if model_candidate else None
 
     decision = self.controller.update(
       observation, now_ns, v_ego=float(car_state.vEgo), a_ego=float(car_state.aEgo),

@@ -67,21 +67,21 @@ class ReplaySubMaster:
 @pytest.mark.parametrize(
   ("route_name", "expected_present", "minimum_suppressed"),
   [
-    ("00000009--72ea96171f--1", 28, 0),
-    ("00000009--72ea96171f--2", 31, 0),
-    ("00000009--72ea96171f--4", 0, 50),
+    ("00000009--72ea96171f--1", 42, 0),
+    ("00000009--72ea96171f--2", 64, 0),
+    ("00000009--72ea96171f--4", 6, 50),
   ],
 )
 def test_recorded_traffic_candidates_replay_deterministically(route_name, expected_present, minimum_suppressed):
   routes = {route['route']: route for route in json.loads(FIXTURE.read_text())['routes']}
   source = TrafficRadarSource(
-    TrafficControlConfig(
-      mode=TrafficControlMode.stopGo, adaptive_reference=True, retain_event_with_lead=True,
-    ),
+      TrafficControlConfig(
+        mode=TrafficControlMode.stopGo, adaptive_reference=False, retain_event_with_lead=True,
+      ),
     go_policy=TrafficRadarGoPolicy.active,
   )
   sm = ReplaySubMaster()
-  present_distances = []
+  present_targets = []
   suppressed_frames = 0
   start_requests = 0
 
@@ -90,14 +90,15 @@ def test_recorded_traffic_candidates_replay_deterministically(route_name, expect
     suppressed_frames += int(target.suppressedByPhysicalLead)
     start_requests += int(target.plannerStartRequested)
     if target.targetPresent and target.controlAllowed:
-      present_distances.append(float(target.distanceToStopPoint))
+      present_targets.append((int(target.eventId), float(target.distanceToStopPoint)))
 
   positive_jumps = [
-    current - previous
-    for previous, current in zip(present_distances, present_distances[1:], strict=False)
-    if current > previous
+    current_distance - previous_distance
+    for (previous_event, previous_distance), (current_event, current_distance)
+    in zip(present_targets, present_targets[1:], strict=False)
+    if current_event == previous_event and current_distance > previous_distance
   ]
-  assert len(present_distances) == expected_present
+  assert len(present_targets) == expected_present
   assert suppressed_frames >= minimum_suppressed
   assert max(positive_jumps, default=0.0) <= 0.05
   assert start_requests == 0

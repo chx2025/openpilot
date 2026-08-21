@@ -24,16 +24,21 @@ from openpilot.sunnypilot.selfdrive.traffic_control.radar_state import TrafficRa
 
 
 class FakeParams:
-  def __init__(self, enabled, reference_dm="60"):
+  def __init__(self, enabled, reference_dm="60", adaptive=False):
     self.enabled = enabled
     self.reference_dm = reference_dm
+    self.adaptive = adaptive
 
   def get(self, key, return_default=False):
     del return_default
     return self.reference_dm if key == "TeslaTrafficStopReference" else None
 
   def get_bool(self, key):
-    return self.enabled if key == "TeslaTrafficSignalControlEnabled" else False
+    if key == "TeslaTrafficSignalControlEnabled":
+      return self.enabled
+    if key == "TeslaTrafficAdaptiveReference":
+      return self.adaptive
+    return False
 
 
 def test_independent_traffic_radar_service_uses_the_existing_twenty_hz_slot():
@@ -60,6 +65,13 @@ def test_user_switch_maps_off_to_observation_and_on_to_stop_go():
   assert active.controller.config.mode == TrafficControlMode.stopGo
   assert active.controller.config.retain_event_with_lead
   assert active.go_policy == TrafficRadarGoPolicy.active
+
+
+def test_manual_stop_reference_is_not_overridden_by_event_adaptation():
+  source = trafficcontrold.build_source(FakeParams(True, reference_dm="20", adaptive=True))
+
+  assert source.controller.config.default_stop_reference == 2.0
+  assert not source.controller.config.adaptive_reference
 
 
 def test_runtime_stop_reference_refresh_applies_when_idle_without_moving_an_active_event():

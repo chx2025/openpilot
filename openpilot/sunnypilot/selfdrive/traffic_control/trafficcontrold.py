@@ -25,7 +25,9 @@ def read_source_config(params: Params) -> tuple[TrafficControlConfig, TrafficRad
     # counterfactual observations, while enabled permits stop and bounded GO.
     mode=TrafficControlMode.stopGo if control_enabled else TrafficControlMode.observe,
     default_stop_reference=reference,
-    adaptive_reference=params.get_bool("TeslaTrafficAdaptiveReference"),
+    # A user-selected reference is a fixed physical calibration. CP-style
+    # target filtering replaces per-event adaptive offset drift.
+    adaptive_reference=False,
     retain_event_with_lead=control_enabled,
   )
   go_policy = TrafficRadarGoPolicy.active if control_enabled else TrafficRadarGoPolicy.passive

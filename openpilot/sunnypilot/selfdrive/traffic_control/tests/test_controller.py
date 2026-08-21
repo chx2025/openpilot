@@ -2,6 +2,8 @@ import math
 import json
 from pathlib import Path
 
+import pytest
+
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import (
   TeslaTrafficControlController,
   TrafficControlConfig,
@@ -87,25 +89,27 @@ def test_red_inside_100m_without_lead_enters_early_approach():
   assert 84.0 <= decision.remaining_distance <= 88.5
 
 
-def test_oem_red_without_model_stop_confirmation_never_constrains_planner():
+def test_can_authoritative_red_uses_oem_distance_without_model_stop_confirmation():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   decision = confirmed_red(controller, distance=80.0, v_ego=15.0, model_stop_distance=None)
 
-  assert decision.phase == TrafficControlPhase.redCandidate
-  assert not decision.active
-  assert not decision.apply_constraint
+  assert decision.phase == TrafficControlPhase.braking
+  assert decision.active
+  assert decision.apply_constraint
+  assert 65.0 <= decision.remaining_distance <= 67.0
 
 
-def test_oem_red_with_misaligned_model_stop_never_constrains_planner():
+def test_can_red_falls_back_to_oem_distance_when_model_stop_is_misaligned():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   decision = confirmed_red(controller, distance=80.0, v_ego=15.0, model_stop_distance=25.0)
 
-  assert decision.phase == TrafficControlPhase.redCandidate
-  assert not decision.active
-  assert not decision.apply_constraint
+  assert decision.phase == TrafficControlPhase.braking
+  assert decision.active
+  assert decision.apply_constraint
+  assert 65.0 <= decision.remaining_distance <= 67.0
 
 
-def test_model_stop_confirmation_must_be_continuous():
+def test_intermittent_model_stop_does_not_delay_a_can_authoritative_red_event():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   update(controller, 0.0, observation(80.0, now_ns=0),
          model_stop_distance=74.0, model_stop_candidate=True)
@@ -113,14 +117,64 @@ def test_model_stop_confirmation_must_be_continuous():
          model_stop_distance=None, model_stop_candidate=False)
   decision = update(controller, 0.6, observation(71.0, now_ns=int(0.6e9)),
                     model_stop_distance=65.0, model_stop_candidate=True)
-  assert decision.phase == TrafficControlPhase.redCandidate
-  decision = update(controller, 0.9, observation(66.5, now_ns=int(0.9e9)),
-                    model_stop_distance=60.5, model_stop_candidate=True)
-  assert decision.phase == TrafficControlPhase.redCandidate
-  decision = update(controller, 1.1, observation(63.5, now_ns=int(1.1e9)),
-                    model_stop_distance=57.5, model_stop_candidate=True)
   assert decision.active
   assert decision.apply_constraint
+  assert decision.remaining_distance == 65.0
+
+
+def test_model_stop_starts_early_then_binds_to_can_red_and_releases_on_can_green():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  no_can = observation(255.0, valid=False, now_ns=0)
+  decision = update(
+    controller, 0.0, no_can, v_ego=15.0,
+    model_stop_distance=70.0, model_stop_candidate=True,
+  )
+  assert decision.phase == TrafficControlPhase.off
+
+  decision = update(
+    controller, 0.5, observation(255.0, valid=False, now_ns=int(0.5e9)), v_ego=15.0,
+    model_stop_distance=65.0, model_stop_candidate=True,
+  )
+  event_id = controller.event_id
+  assert decision.phase == TrafficControlPhase.braking
+  assert decision.remaining_distance == 65.0
+  assert event_id > 0
+
+  decision = update(
+    controller, 0.6, observation(60.0, light=1, now_ns=int(0.6e9)), v_ego=14.0,
+    model_stop_distance=60.0, model_stop_candidate=True,
+  )
+  assert controller.event_id == event_id
+  assert controller.event_source_bus == 2
+  assert decision.active
+
+  green_distance = controller.remaining_distance + controller.stop_reference
+  decision = update(
+    controller,
+    0.7,
+    raw_ineligible_event_observation(
+      green_distance, light=2, state_machine=6, now_ns=int(0.7e9),
+    ),
+    v_ego=14.0,
+  )
+  assert decision.phase == TrafficControlPhase.release
+  assert controller.event_id == event_id
+
+
+def test_model_stop_does_not_create_a_new_event_while_already_stationary_without_can():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  no_can = observation(255.0, valid=False, now_ns=0)
+  update(
+    controller, 0.0, no_can, v_ego=0.0,
+    model_stop_distance=2.0, model_stop_candidate=True,
+  )
+  decision = update(
+    controller, 0.5, observation(255.0, valid=False, now_ns=int(0.5e9)), v_ego=0.0,
+    model_stop_distance=2.0, model_stop_candidate=True,
+  )
+
+  assert decision.phase == TrafficControlPhase.off
+  assert controller.event_id == 0
 
 
 def test_red_beyond_100m_is_observed_but_never_applied():
@@ -131,12 +185,14 @@ def test_red_beyond_100m_is_observed_but_never_applied():
   assert not decision.apply_constraint
 
 
-def test_dropout_cancels_far_stop_after_grace_but_not_immediately():
+def test_candidate_uses_cp_history_window_but_active_event_keeps_short_dropout_grace():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   update(controller, 0.0, observation(80, now_ns=0))
   decision = update(controller, 0.1, observation(255, valid=False, now_ns=int(0.1e9)))
   assert decision.phase == TrafficControlPhase.redCandidate
   decision = update(controller, 0.8, observation(255, valid=False, now_ns=int(0.8e9)))
+  assert decision.phase == TrafficControlPhase.redCandidate
+  decision = update(controller, 2.6, observation(255, valid=False, now_ns=int(2.6e9)))
   assert decision.phase == TrafficControlPhase.off
 
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
@@ -184,6 +240,38 @@ def test_confirmed_red_uses_cp_model_stop_distance_as_primary_target():
   # At the final confirmation sample both Tesla and CP model distances moved
   # forward by 8 m. CP's 34 m stop target should be used instead of 42-6=36 m.
   assert math.isclose(decision.remaining_distance, 34.0, abs_tol=0.5)
+
+
+def test_committed_stop_target_freezes_inside_ten_meters():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  decision = confirmed_red(controller, distance=20.0, v_ego=5.0)
+  assert decision.remaining_distance == 6.0
+
+  decision = update(
+    controller,
+    0.8,
+    observation(2.0, light=1, now_ns=int(0.8e9)),
+    v_ego=5.0,
+    model_stop_distance=0.0,
+    model_stop_candidate=True,
+  )
+
+  assert decision.remaining_distance == pytest.approx(5.0)
+
+
+def test_far_oem_target_closes_at_cp_distance_rate():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  decision = confirmed_red(controller, distance=80.0, v_ego=15.0, model_stop_distance=None)
+  assert decision.remaining_distance == 66.0
+
+  decision = update(
+    controller,
+    0.65,
+    observation(60.0, light=1, now_ns=int(0.65e9)),
+    v_ego=10.0,
+  )
+
+  assert decision.remaining_distance == pytest.approx(64.5)
 
 
 def test_green_at_255_never_releases_hold():
@@ -400,10 +488,10 @@ def test_route_candidate_jitter_preserves_one_candidate_until_a_real_dropout():
       transitions.append(controller.transition_reason)
       last_seq = controller.transition_seq
 
-  # Short qlog-observed unavailable frames and isolated distance quantization
-  # must not make the UI alternate redCandidate/off or restart confirmation.
-  assert all(decision.phase == TrafficControlPhase.redCandidate for decision in decisions)
-  assert transitions == ["candidate_started"]
+  # Short unavailable frames and isolated distance quantization must retain one
+  # CAN-authoritative event without candidate replacement or cancellation.
+  assert controller.event_id == 1
+  assert transitions == ["candidate_started", "stop_confirmed", "stationary_hold"]
 
 
 def test_large_downward_distance_jump_is_a_new_target_and_restarts_confirmation():
