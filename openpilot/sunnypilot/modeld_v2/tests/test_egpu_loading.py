@@ -1,7 +1,7 @@
 import threading
 import unittest
 
-from openpilot.sunnypilot.modeld_v2.egpu_loader import EgpuModelLoadError, configure_default_device, load_with_timeout, wait_for_link
+from openpilot.sunnypilot.modeld_v2.egpu_loader import EgpuModelLoadError, configure_default_device, load_with_timeout
 
 
 class TestEgpuLoading(unittest.TestCase):
@@ -39,14 +39,3 @@ class TestEgpuLoading(unittest.TestCase):
   def test_returns_loaded_model(self):
     model = object()
     self.assertIs(load_with_timeout(lambda: model, 1.0), model)
-
-  def test_waits_for_pcie_link(self):
-    checks = iter((False, False, True))
-    delays = []
-    self.assertTrue(wait_for_link(lambda: next(checks), attempts=3, delay_fn=delays.append))
-    self.assertEqual(delays, [1.0, 1.0])
-
-  def test_reports_pcie_link_failure(self):
-    delays = []
-    self.assertFalse(wait_for_link(lambda: False, attempts=3, delay_fn=delays.append))
-    self.assertEqual(delays, [1.0, 1.0])

@@ -1,6 +1,5 @@
 import os
 import threading
-import time
 from collections.abc import Callable, MutableMapping
 
 
@@ -33,15 +32,3 @@ def load_with_timeout[T](load: Callable[[], T], timeout: float) -> T:
   if error:
     raise EgpuModelLoadError(f"eGPU model load failed: {error[0]}") from error[0]
   return result[0]
-
-
-def wait_for_link(link_up: Callable[[], bool], attempts: int = 10,
-                  delay_fn: Callable[[float], None] = time.sleep) -> bool:
-  if attempts < 1:
-    raise ValueError("attempts must be positive")
-  for attempt in range(attempts):
-    if link_up():
-      return True
-    if attempt + 1 < attempts:
-      delay_fn(1.0)
-  return False

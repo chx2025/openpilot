@@ -10,7 +10,7 @@ import os
 os.environ['GMMU'] = '0'
 from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.selfdrive.modeld.helpers import usbgpu_present, load_oob
-from openpilot.sunnypilot.modeld_v2.egpu_loader import configure_default_device, load_with_timeout, wait_for_link
+from openpilot.sunnypilot.modeld_v2.egpu_loader import configure_default_device, load_with_timeout
 configure_default_device(COMMA_HARDWARE)
 import time
 import numpy as np
@@ -371,10 +371,7 @@ def main(demo=False):
 
   model = None
   if USBGPU:
-    from openpilot.system.hardware.chestnut.flash import link_up
     try:
-      if not wait_for_link(link_up):
-        raise RuntimeError("eGPU USB connected but PCIe link is not ready")
       model = load_with_timeout(
         lambda: ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=True),
         BIG_MODEL_TIMEOUT,
