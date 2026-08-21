@@ -245,16 +245,16 @@ def test_green_start_requires_same_event_hold_and_base_permission():
 
   assert arbitrator.diagnostics.action == TrafficPlanAction.start
   assert arbitrator.diagnostics.start_applied
-  assert 0.0 < start_plan.aTarget <= 0.60
+  assert 0.0 < start_plan.aTarget <= 1.60
   assert not start_plan.shouldStop
 
   continuing = base_plan(a_target=0.1, should_stop=False)
   arbitrator.apply(continuing, green, NOW_NS + 100_000_000)
   assert arbitrator.diagnostics.start_applied
-  assert 0.0 < continuing.aTarget <= 0.60
+  assert 0.0 < continuing.aTarget <= 1.60
 
 
-def test_stable_green_start_reaches_a_responsive_but_bounded_acceleration():
+def test_can_green_start_reaches_the_cp_low_speed_acceleration_envelope():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   hold = fake_sm(
     phase=TrafficControlPhase.hold, light_state=1, target=True,
@@ -274,10 +274,10 @@ def test_stable_green_start_reaches_a_responsive_but_bounded_acceleration():
     arbitrator.apply(plan, green, now_ns)
 
   assert arbitrator.diagnostics.start_applied
-  assert 0.45 <= plan.aTarget <= 0.60
+  assert 1.20 <= plan.aTarget <= 1.60
 
 
-def test_green_start_never_overrides_base_stop_or_negative_acceleration():
+def test_can_authoritative_green_overrides_model_stop_and_negative_base_plan():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   hold = fake_sm(
     phase=TrafficControlPhase.hold, light_state=1, target=True,
@@ -290,12 +290,12 @@ def test_green_start_never_overrides_base_stop_or_negative_acceleration():
     start=True, event_id=11, distance=0.0, v_ego=0.0,
     base_model_stop=True,
   )
-  blocked = base_plan(a_target=-0.2, should_stop=True)
-  arbitrator.apply(blocked, green, NOW_NS + 50_000_000)
+  start = base_plan(a_target=-0.2, should_stop=True)
+  arbitrator.apply(start, green, NOW_NS + 50_000_000)
 
-  assert not arbitrator.diagnostics.start_applied
-  assert blocked.aTarget == -0.2
-  assert blocked.shouldStop
+  assert arbitrator.diagnostics.start_applied
+  assert start.aTarget > 0.0
+  assert not start.shouldStop
 
 
 def test_committed_hold_survives_traffic_publisher_loss_until_driver_override():

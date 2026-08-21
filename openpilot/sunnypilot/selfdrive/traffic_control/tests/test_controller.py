@@ -245,6 +245,45 @@ def test_feature_zero_green_can_release_only_the_same_held_event():
   assert controller.event_id == event_id
 
 
+def test_can_authoritative_green_releases_the_held_event_on_its_first_fresh_transition():
+  controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  confirmed_red(controller, distance=20.0, v_ego=5.0)
+  decision = update(controller, 0.8, observation(6.0, light=1, now_ns=int(0.8e9)), v_ego=0.0)
+  event_id = controller.event_id
+  assert decision.phase == TrafficControlPhase.hold
+
+  decision = update(
+    controller,
+    1.0,
+    raw_ineligible_event_observation(6.0, light=2, state_machine=6, now_ns=int(1.0e9)),
+    v_ego=0.0,
+  )
+
+  assert decision.phase == TrafficControlPhase.release
+  assert controller.event_id == event_id
+
+
+def test_can_green_with_a_physical_lead_releases_traffic_hold_to_the_lead_planner():
+  controller = TeslaTrafficControlController(TrafficControlConfig(
+    mode=TrafficControlMode.stopGo,
+    retain_event_with_lead=True,
+  ))
+  confirmed_red(controller, distance=20.0, v_ego=5.0)
+  decision = update(controller, 0.8, observation(6.0, light=1, now_ns=int(0.8e9)), v_ego=0.0)
+  assert decision.phase == TrafficControlPhase.hold
+
+  decision = update(
+    controller,
+    1.0,
+    raw_ineligible_event_observation(6.0, light=2, state_machine=6, now_ns=int(1.0e9)),
+    v_ego=0.0,
+    lead_present=True,
+  )
+
+  assert decision.phase == TrafficControlPhase.release
+  assert not decision.should_stop
+
+
 def test_release_window_stays_active_long_enough_for_bounded_start_handoff():
   controller = TeslaTrafficControlController(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   confirmed_red(controller, distance=20.0, v_ego=5.0)

@@ -37,7 +37,9 @@ class TrafficControlConfig:
   weak_red_confirm_s: float = 0.7
   replacement_confirm_s: float = 1.0
   model_confirm_s: float = 0.4
-  green_confirm_s: float = 0.6
+  # Tesla CAN already carries the OEM traffic-state result. Match CP's
+  # red-to-green transition semantics instead of re-confirming it in planner time.
+  green_confirm_s: float = 0.0
   release_s: float = 3.0
   bypass_s: float = 10.0
   observation_dropout_s: float = 0.75
@@ -348,7 +350,10 @@ class TeslaTrafficControlController:
           self.green_since_ns = now_ns
         green_stable = (now_ns - self.green_since_ns) / 1e9 >= self.config.green_confirm_s
         moving_release = v_ego >= 0.3 and not brake_pressed
-        stopped_release = (self.config.mode == TrafficControlMode.stopGo and radar_valid and not lead_present and
+        # CP gives a physical lead priority over the traffic stop. Release our
+        # hold on green even with a lead; TrafficRadarSource withholds the
+        # explicit start request and the base lead planner takes over.
+        stopped_release = (self.config.mode == TrafficControlMode.stopGo and radar_valid and
                            not turn_signal_active and not brake_pressed)
         if green_stable and (moving_release or stopped_release):
           self.phase = TrafficControlPhase.release

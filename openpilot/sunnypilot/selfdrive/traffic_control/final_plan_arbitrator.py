@@ -13,11 +13,12 @@ from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficCon
 from openpilot.sunnypilot.selfdrive.traffic_control.stop_profile import StopProfileGenerator
 
 
-START_MAX_ACCEL = 0.55
+# CP's low-speed cruise acceleration envelope. This applies only to a
+# same-event CAN-authoritative green start and remains time/speed bounded.
+START_MAX_ACCEL = 1.6
 START_MAX_SPEED = 2.5
-START_MIN_BASE_ACCEL = -0.05
 START_MAX_DURATION_NS = 3_000_000_000
-START_JERK_LIMIT = 0.75
+START_JERK_LIMIT = 1.0
 TERMINAL_MAX_SPEED = 1.5
 TERMINAL_LOOKAHEAD_S = 0.05
 PLANNER_TRAFFIC_STALE_NS = 350_000_000
@@ -223,7 +224,7 @@ class FinalPlanArbitrator:
     self.diagnostics.traffic_a_target = traffic_a_target
     self.diagnostics.terminal_catch_active = bool(terminal_stop or (hold and v_ego > 0.01))
 
-  def _start_block_reason(self, plan, sm, traffic) -> TrafficStartBlockReason:
+  def _start_block_reason(self, sm, traffic) -> TrafficStartBlockReason:
     event_id = int(traffic.eventId)
     if self._held_event_id == 0:
       return TrafficStartBlockReason.noPreviousHold
@@ -235,10 +236,9 @@ class FinalPlanArbitrator:
       return TrafficStartBlockReason.driverOverride
     if not self._physical_radar_clear(sm):
       return TrafficStartBlockReason.physicalLead
-    if not self._healthy(sm, "modelV2") or bool(sm["modelV2"].action.shouldStop):
-      return TrafficStartBlockReason.modelStop
-    if bool(plan.shouldStop) or float(plan.aTarget) < START_MIN_BASE_ACCEL:
-      return TrafficStartBlockReason.unsafeBasePlan
+    # A same-event OEM CAN green is authoritative over a model/base-plan
+    # traffic-stop residue, matching CP's e2eStopped -> e2eCruise transition.
+    # Physical context and driver gates above remain absolute vetoes.
     v_cruise = float(sm["carState"].vCruise)
     if not 0.0 < v_cruise < V_CRUISE_UNSET:
       return TrafficStartBlockReason.invalidCruise
@@ -252,7 +252,7 @@ class FinalPlanArbitrator:
   def _apply_start(self, plan, sm, traffic, now_ns: int) -> bool:
     self.diagnostics.start_requested = True
     event_id = int(traffic.eventId)
-    block_reason = self._start_block_reason(plan, sm, traffic)
+    block_reason = self._start_block_reason(sm, traffic)
     self.diagnostics.start_block_reason = block_reason
     if block_reason != TrafficStartBlockReason.none:
       if self._active_start_event_id == event_id:
