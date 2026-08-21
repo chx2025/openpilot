@@ -36,6 +36,17 @@ class ModelManagerSP:
     self._chunk_size = 128 * 1000  # 128 KB chunks
     self._download_start_times: dict[str, float] = {}  # Track start time per model
 
+  def _download_requested(self) -> bool:
+    requested_index = self.params.get("ModelManager_DownloadIndex")
+    if requested_index is None:
+      return False
+    if self.selected_bundle is None:
+      return True
+    try:
+      return int(requested_index) == int(self.selected_bundle.index)
+    except (TypeError, ValueError):
+      return False
+
   def _sync_artifact_progress(self, source_artifact) -> None:
     """Mirror download progress to all artifacts sharing the same filename in the selected bundle."""
     if not self.selected_bundle:
@@ -76,7 +87,7 @@ class ModelManagerSP:
           f.write(chunk)
           bytes_downloaded += len(chunk)
 
-          if self.params.get("ModelManager_DownloadIndex") is None:
+          if not self._download_requested():
             raise Exception("Download cancelled")
 
           if total_size > 0:
@@ -114,7 +125,7 @@ class ModelManagerSP:
             for data in response.iter_content(chunk_size=self._chunk_size):
               f.write(data)
               chunk_downloaded += len(data)
-              if self.params.get("ModelManager_DownloadIndex") is None:
+              if not self._download_requested():
                 raise Exception("Download cancelled")
               intra = chunk_downloaded / max(chunk_size, 1)
               progress = min(99.0, ((i + intra) / num_chunks) * 100)
@@ -232,6 +243,11 @@ class ModelManagerSP:
           seen_artifacts.add(artifact.fileName)
           await self._process_artifact(artifact, destination_path)
 
+      # Cached artifacts can complete without entering a transfer loop. Recheck
+      # the request before activation so a simultaneous Default selection wins.
+      if not self._download_requested():
+        raise Exception("Download cancelled")
+
       self.active_bundle = self.selected_bundle
       self.active_bundle.status = custom.ModelManagerSP.DownloadStatus.downloaded
       self.params.put("ModelManager_ActiveBundle", self.active_bundle.to_dict(), block=True)
@@ -266,7 +282,11 @@ class ModelManagerSP:
             except Exception as e:
               cloudlog.exception(e)
             finally:
-              self.params.remove("ModelManager_DownloadIndex")
+              # Do not erase a newer selection made while this download was
+              # being cancelled.
+              current_index = self.params.get("ModelManager_DownloadIndex")
+              if current_index is not None and int(current_index) == int(index_to_download):
+                self.params.remove("ModelManager_DownloadIndex")
               self.selected_bundle = None
 
         if self.params.get("ModelManager_ClearCache"):

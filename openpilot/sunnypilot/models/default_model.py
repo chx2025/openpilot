@@ -8,8 +8,10 @@ from openpilot.selfdrive.modeld.helpers import usbgpu_present
 from openpilot.sunnypilot.models.model_name import DEFAULT_MODEL, DEFAULT_BIG_MODEL
 
 
-def get_default_model() -> str:
-  return DEFAULT_BIG_MODEL if usbgpu_present() else DEFAULT_MODEL
+def get_default_model(connected: bool | None = None) -> str:
+  """Return the built-in model name without forcing UI callers to probe sysfs."""
+  connected = usbgpu_present() if connected is None else connected
+  return DEFAULT_BIG_MODEL if connected else DEFAULT_MODEL
 
 
 DEFAULT_MODEL_NAME_PATH = os.path.join(BASEDIR, "openpilot", "sunnypilot", "models", "model_name.py")

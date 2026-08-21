@@ -11,6 +11,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from openpilot.selfdrive.ui.egpu_status import build_egpu_sidebar_status, chestnut_usb_speed_mbps, classify_egpu_link_state
 
 
 METRIC_HEIGHT = 126
@@ -57,39 +58,67 @@ class SidebarSP:
   def __init__(self):
     self._egpu_icon = gui_app.texture("icons_mici/egpu_green.png", 60, 44)
     self._egpu_icon_gray = gui_app.texture("icons_mici/egpu_gray.png", 60, 44)
+    self._egpu_icon_orange = gui_app.texture("icons_mici/egpu_orange.png", 60, 44)
+    self._egpu_icon_crossed = gui_app.texture("icons_mici/egpu_crossed.png", 60, 52)
     self._egpu_status = MetricData("eGPU", "OFFLINE", Colors.DISABLED, self._egpu_icon_gray)
     self._egpu_metric_rect = rl.Rectangle(0, 0, 0, 0)
+    self._egpu_detail = "未检测到 eGPU USB 设备"
 
   def _update_egpu_status(self):
     present = bool(ui_state.sm["deviceState"].chestnutPresent)
     eject_status = ui_state.params.get("UsbGpuEjectStatus")
-
-    if eject_status == "ejecting":
-      value, color, icon = f"{tr('REMOVE')}...", Colors.PROGRESS, self._egpu_icon_gray
-    elif eject_status == "safe":
-      value, color, icon = "REMOVE", Colors.GOOD, self._egpu_icon_gray
-    elif eject_status == "error":
-      value, color, icon = "ERROR", Colors.DANGER, self._egpu_icon_gray
-    elif present and ui_state.usbgpu_compiled:
-      value, color, icon = "ONLINE", Colors.GOOD, self._egpu_icon
-    elif present:
-      value, color, icon = "ONLINE", Colors.WARNING, self._egpu_icon_gray
-    else:
-      value, color, icon = "OFFLINE", Colors.DISABLED, self._egpu_icon_gray
-
-    self._egpu_status.update("eGPU", value, color, icon)
+    speed_mbps = chestnut_usb_speed_mbps(ui_state.sm["deviceState"])
+    telemetry = ui_state.sm["chestnutState"]
+    link_state = classify_egpu_link_state(
+      present=present,
+      usb_speed_mbps=speed_mbps,
+      telemetry_alive=bool(ui_state.sm.alive["chestnutState"]),
+      telemetry_valid=bool(ui_state.sm.valid["chestnutState"]),
+      pcie_ltssm=int(telemetry.pcieLtssm),
+    )
+    status = build_egpu_sidebar_status(
+      present=present,
+      compiled=ui_state.usbgpu_compiled,
+      link_state=link_state,
+      usb_speed_mbps=speed_mbps,
+      pcie_ltssm=int(telemetry.pcieLtssm) if ui_state.sm.valid["chestnutState"] else None,
+      eject_status=eject_status,
+      loading=ui_state.usbgpu_loading,
+      active=ui_state.usbgpu_active,
+    )
+    color = {
+      "good": Colors.GOOD,
+      "warning": Colors.WARNING,
+      "danger": Colors.DANGER,
+      "progress": Colors.PROGRESS,
+      "disabled": Colors.DISABLED,
+    }[status.severity]
+    icon = {
+      "good": self._egpu_icon,
+      "warning": self._egpu_icon_orange,
+      "danger": self._egpu_icon_crossed,
+      "progress": self._egpu_icon_gray,
+      "disabled": self._egpu_icon_gray,
+    }[status.severity]
+    if status.value == "REMOVE":
+      icon = self._egpu_icon_gray
+    self._egpu_detail = status.detail
+    self._egpu_status.update("eGPU", status.value, color, icon)
 
   def _handle_egpu_click(self, mouse_pos) -> bool:
     if not rl.check_collision_point_rec(mouse_pos, self._egpu_metric_rect):
       return False
 
     if ui_state.started:
-      gui_app.push_widget(ConfirmDialog(f"eGPU · OFFROAD · {tr('REMOVE')}", tr("OK"), cancel_text=""))
+      gui_app.push_widget(ConfirmDialog(f"{self._egpu_detail}\neGPU · OFFROAD · {tr('REMOVE')}", tr("OK"), cancel_text=""))
       return True
 
     present = bool(ui_state.sm["deviceState"].chestnutPresent)
     status = ui_state.params.get("UsbGpuEjectStatus")
-    if not present or status in ("ejecting", "safe"):
+    if not present:
+      gui_app.push_widget(ConfirmDialog(self._egpu_detail, tr("OK"), cancel_text=""))
+      return True
+    if status in ("ejecting", "safe"):
       return True
 
     def confirm(result: DialogResult):
@@ -98,9 +127,9 @@ class SidebarSP:
 
     error = ui_state.params.get("UsbGpuEjectError")
     if status == "error" and error:
-      message = f"eGPU · {tr('ERROR')}: {error}\n{tr('REMOVE')}?"
+      message = f"{self._egpu_detail}\neGPU · {tr('ERROR')}: {error}\n{tr('REMOVE')}?"
     else:
-      message = f"eGPU · {tr('REMOVE')}?\n{tr('REMOVE')}...  >  {tr('REMOVE')}"
+      message = f"{self._egpu_detail}\neGPU · {tr('REMOVE')}?\n{tr('REMOVE')}...  >  {tr('REMOVE')}"
     gui_app.push_widget(ConfirmDialog(message, tr("REMOVE"), callback=confirm))
     return True
 

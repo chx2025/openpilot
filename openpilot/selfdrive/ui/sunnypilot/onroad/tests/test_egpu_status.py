@@ -1,4 +1,10 @@
-from openpilot.selfdrive.ui.egpu_status import build_egpu_status, egpu_icon_visible, egpu_panel_style
+from openpilot.selfdrive.ui.egpu_status import (
+  build_egpu_sidebar_status,
+  build_egpu_status,
+  classify_egpu_link_state,
+  egpu_icon_visible,
+  egpu_panel_style,
+)
 
 
 def test_connected_egpu_icon_stays_visible_onroad():
@@ -55,3 +61,47 @@ def test_compiled_egpu_build_explains_disconnected_hardware():
   )
   assert status.visible
   assert "未连接" in status.headline
+
+
+def test_sidebar_makes_usb_degradation_visible_at_a_glance():
+  status = build_egpu_sidebar_status(
+    present=True, compiled=True, link_state="usb_degraded", usb_speed_mbps=480,
+    pcie_ltssm=None, eject_status=None, loading=False, active=None,
+  )
+
+  assert status.value == "USB 480"
+  assert status.severity == "danger"
+  assert "低于 5000" in status.detail
+
+
+def test_sidebar_makes_pcie_failure_distinct_from_usb_failure():
+  status = build_egpu_sidebar_status(
+    present=True, compiled=True, link_state="pcie_down", usb_speed_mbps=5000,
+    pcie_ltssm=0, eject_status=None, loading=False, active=None,
+  )
+
+  assert status.value == "PCIE ERR"
+  assert status.severity == "danger"
+  assert "LTSSM 0x00" in status.detail
+
+
+def test_sidebar_reports_ready_link_before_model_starts():
+  status = build_egpu_sidebar_status(
+    present=True, compiled=True, link_state="ready", usb_speed_mbps=5000,
+    pcie_ltssm=0x78, eject_status=None, loading=False, active=None,
+  )
+
+  assert status.value == "READY"
+  assert status.severity == "good"
+
+
+def test_sidebar_link_classification_uses_existing_chestnut_telemetry():
+  assert classify_egpu_link_state(
+    present=True, usb_speed_mbps=480, telemetry_alive=True, telemetry_valid=True, pcie_ltssm=0x78,
+  ) == "usb_degraded"
+  assert classify_egpu_link_state(
+    present=True, usb_speed_mbps=5000, telemetry_alive=True, telemetry_valid=True, pcie_ltssm=0,
+  ) == "pcie_down"
+  assert classify_egpu_link_state(
+    present=True, usb_speed_mbps=5000, telemetry_alive=True, telemetry_valid=True, pcie_ltssm=0x78,
+  ) == "ready"

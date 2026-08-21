@@ -236,6 +236,24 @@ class TestManagerDownload(ManagerDownloadTestBase):
       assert not os.path.isfile(get_manifest_path(base_path))
     self.run_with_server(body)
 
+  def test_cancelled_cached_bundle_is_not_activated(self):
+    """Selecting Default while a cached bundle is resolving must win the race."""
+    bundle = custom.ModelManagerSP.ModelBundle.new_message()
+    bundle.index = 0
+    bundle.init('models', 1)
+    bundle.models[0].artifact.fileName = 'already_cached.pkl'
+    self.manager.params.get.return_value = None
+
+    async def cached(*args, **kwargs):
+      return None
+
+    self.manager._process_artifact = cached
+    with self.assertRaisesRegex(Exception, 'cancelled'):
+      asyncio.run(self.manager._download_bundle(bundle, self.dest))
+
+    assert self.manager.active_bundle is None
+    assert not any(call.args and call.args[0] == "ModelManager_ActiveBundle" for call in self.manager.params.put.call_args_list)
+
   def test_repeat_downloads_are_stable(self):
     """Back-to-back runs must produce identical bytes and leak no start-time state."""
     def body():

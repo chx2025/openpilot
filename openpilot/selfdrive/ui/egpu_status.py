@@ -25,6 +25,60 @@ class EgpuPanelStyle:
   background_alpha: int
 
 
+@dataclass(frozen=True)
+class EgpuSidebarStatus:
+  value: str
+  severity: str
+  detail: str
+
+
+def build_egpu_sidebar_status(*, present: bool, compiled: bool, link_state: str | None,
+                              usb_speed_mbps: int, pcie_ltssm: int | None,
+                              eject_status: str | None, loading: bool,
+                              active: bool | None) -> EgpuSidebarStatus:
+  if eject_status == "ejecting":
+    return EgpuSidebarStatus("REMOVE...", "progress", "正在安全卸载 eGPU")
+  if eject_status == "safe":
+    return EgpuSidebarStatus("REMOVE", "good", "已安全卸载，可以断开 eGPU")
+  if eject_status == "error":
+    return EgpuSidebarStatus("EJECT ERR", "danger", "eGPU 安全卸载失败")
+  if not present:
+    return EgpuSidebarStatus("OFFLINE", "disabled", "未检测到 eGPU USB 设备")
+  if link_state == "usb_degraded" or 0 < usb_speed_mbps < 5000:
+    return EgpuSidebarStatus(f"USB {usb_speed_mbps}", "danger", f"USB 链路低于 5000 Mbps（当前 {usb_speed_mbps} Mbps）")
+  if link_state == "pcie_down":
+    ltssm = f"0x{pcie_ltssm:02X}" if pcie_ltssm is not None else "未知"
+    return EgpuSidebarStatus("PCIE ERR", "danger", f"USB 正常，但 PCIe 未进入 L0（LTSSM {ltssm}）")
+  if link_state == "check_error":
+    return EgpuSidebarStatus("LINK ERR", "danger", "无法被动读取 PCIe 链路状态")
+  if link_state != "ready":
+    return EgpuSidebarStatus("CHECKING", "warning", f"USB {usb_speed_mbps or '?'} Mbps，正在确认 PCIe 状态")
+  if not compiled:
+    return EgpuSidebarStatus("NO MODEL", "warning", "USB/PCIe 正常，但默认大模型尚未编译")
+  if loading:
+    return EgpuSidebarStatus("LOADING", "progress", "USB/PCIe 正常，正在加载默认大模型")
+  if active is False:
+    return EgpuSidebarStatus("MODEL ERR", "danger", "链路正常，但默认大模型加载或运行失败")
+  if active is True:
+    return EgpuSidebarStatus("ACTIVE", "good", f"eGPU 大模型运行中 · USB {usb_speed_mbps} Mbps · PCIe L0")
+  return EgpuSidebarStatus("READY", "good", f"eGPU 已就绪 · USB {usb_speed_mbps} Mbps · PCIe L0")
+
+
+def classify_egpu_link_state(*, present: bool, usb_speed_mbps: int, telemetry_alive: bool,
+                             telemetry_valid: bool, pcie_ltssm: int) -> str:
+  if not present:
+    return "disconnected"
+  if usb_speed_mbps < 5000:
+    return "usb_degraded"
+  if not telemetry_alive:
+    return "unchecked"
+  if not telemetry_valid:
+    return "check_error"
+  if pcie_ltssm != 0x78:
+    return "pcie_down"
+  return "ready"
+
+
 def egpu_icon_visible(*, connected: bool) -> bool:
   """The onroad source icon is persistent for exactly the USB-connected state."""
   return connected
@@ -77,7 +131,7 @@ def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active:
   ))
 
 
-def _usb_speed_mbps(device_state) -> int:
+def chestnut_usb_speed_mbps(device_state) -> int:
   speeds = [int(device.speedMbps) for device in device_state.usbState.devices
             if (int(device.vendorId), int(device.productId)) in CHESTNUT_USB_IDS]
   return max(speeds, default=0)
@@ -98,7 +152,7 @@ def draw_egpu_status_panel(rect: rl.Rectangle, font: rl.Font, *, compact: bool) 
   status = build_egpu_status(
     connected=connected, compiled=ui_state.usbgpu_compiled, loading=ui_state.usbgpu_loading,
     active=ui_state.usbgpu_active, model_alive=model_alive, model_big=model_big,
-    telemetry_valid=telemetry_valid, usb_speed_mbps=_usb_speed_mbps(sm["deviceState"]),
+    telemetry_valid=telemetry_valid, usb_speed_mbps=chestnut_usb_speed_mbps(sm["deviceState"]),
     model_fps=float(telemetry.modelFps), power_w=float(telemetry.powerDrawW),
     temp_c=float(telemetry.tempC), memory_temp_c=float(telemetry.memoryTempC),
     memory_used_mb=int(telemetry.memoryUsedMb), memory_total_mb=int(telemetry.memoryTotalMb),

@@ -194,6 +194,7 @@ procs += [
   # the upstream process graph and control behavior.
   PythonProcess("device_console", "openpilot.selfdrive.debug.device_console", use_device_console),
   PythonProcess("alert_output", "openpilot.sunnypilot.system.alert_output", use_external_buzzer),
+  PythonProcess("chestnut_statusd", "openpilot.system.hardware.chestnut.statusd", only_offroad),
 
   # Models
   PythonProcess("models_manager", "openpilot.sunnypilot.models.manager", only_offroad),

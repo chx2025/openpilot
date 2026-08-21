@@ -156,6 +156,14 @@ def get_active_model_runner(params: Params | None = None, force_check: bool = Fa
   return runner_type
 
 
+def select_default_model(params: Params | None = None) -> None:
+  """Atomically make the built-in stock runner win over pending bundle work."""
+  params = params or Params()
+  params.remove("ModelManager_DownloadIndex")
+  params.remove("ModelManager_ActiveBundle")
+  params.put("ModelRunnerTypeCache", int(custom.ModelManagerSP.Runner.stock), block=True)
+
+
 def _get_model():
   if bundle := get_active_bundle():
     drive_model = next(model for model in bundle.models if model.type == ModelManager.Model.Type.supercombo)
