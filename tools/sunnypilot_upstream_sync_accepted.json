@@ -1,0 +1,29 @@
+{
+  "b8e14d85fbb5e3da1af7f3596e0d9eb49965056d": {
+    "reason": "superseded upstream by 03711a13b0a7740f28ac480b42da67a86ed1d1dd"
+  },
+  "b7657f6553855a569e30e2a971d6e7043d3badc4": {
+    "reason": "superseded upstream by 9f1709a7e152be90a3328438adceb99ef88f30f1"
+  },
+  "3d09a47a4754c6960bceb7d9f2cb0b5a5e537867": {
+    "reason": "semantically ported with local planner seam and tests",
+    "local_commits": ["ed001aa021"]
+  },
+  "2b576c5fce0aebe5e1af3110f2ceba720fd9df72": {
+    "reason": "intentionally skipped: temporary upstream UI report disable"
+  },
+  "9f1709a7e152be90a3328438adceb99ef88f30f1": {
+    "reason": "revert half of an upstream pair; final tree already has the intended state"
+  },
+  "03711a13b0a7740f28ac480b42da67a86ed1d1dd": {
+    "reason": "revert half of an upstream pair; final tree already has the intended state"
+  },
+  "8edce0da4492307df211c710af6c4ece1c4a218e": {
+    "reason": "semantically ported while preserving the C3XL eject seam",
+    "local_commits": ["48a5279298"]
+  },
+  "c783f2225adc7b1bf9515fb35cf225cf9f90e59b": {
+    "reason": "dependency and opendbc changes were split to preserve the local Tesla submodule history",
+    "local_commits": ["6920192fbe", "5a87209dd9", "86a80e5abc"]
+  }
+}
