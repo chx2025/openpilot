@@ -9,7 +9,6 @@
 #include "openpilot/cereal/messaging/messaging.h"
 #include "common/swaglog.h"
 #include "common/util.h"
-#include "sunnypilot/hardware/profile.h"
 
 const bool PANDAD_MAXOUT = getenv("PANDAD_MAXOUT") != nullptr;
 
@@ -17,13 +16,7 @@ Panda::Panda(std::string serial) {
   handle = std::make_unique<PandaSpiHandle>(serial);
   LOGW("connected to %s over SPI", serial.c_str());
 
-  raw_hw_type = get_hw_type();
-  hw_type = static_cast<cereal::PandaState::PandaType>(
-    sunnypilot::hardware::resolve_internal_panda_type(static_cast<uint8_t>(raw_hw_type))
-  );
-  LOGW("Panda hardware type raw=%d effective=%d profile=%s",
-       static_cast<int>(raw_hw_type), static_cast<int>(hw_type),
-       sunnypilot::hardware::is_c3xl() ? "c3xl" : "standard");
+  hw_type = cereal::PandaState::PandaType::TRES;
   can_reset_communications();
 }
 
