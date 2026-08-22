@@ -68,13 +68,13 @@ def test_absent_egpu_has_no_panel():
   assert not status.visible
 
 
-def test_compiled_egpu_build_explains_disconnected_hardware():
+def test_optional_egpu_absence_stays_quiet_even_when_big_model_is_compiled():
   status = build_egpu_status(
     connected=False, compiled=True, loading=False, active=None,
     model_alive=False, model_big=False, telemetry_valid=False,
   )
-  assert status.visible
-  assert "未连接" in status.headline
+  assert not status.visible
+  assert not status.headline
 
 
 def test_sidebar_makes_usb_degradation_visible_at_a_glance():

@@ -107,8 +107,7 @@ def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active:
                       gpu_usage_percent: int = 0, gpu_clock_mhz: int = 0,
                       fan_speed_rpm: int = 0) -> EgpuStatus:
   if not connected:
-    return (EgpuStatus(True, False, "eGPU 未连接 · 当前不能运行大模型", ("检查 UT3G 供电与 USB 连接",))
-            if compiled else EgpuStatus(False, False, "", ()))
+    return EgpuStatus(False, False, "", ())
 
   link = f"USB {usb_speed_mbps} Mbps" if usb_speed_mbps else "USB 已连接"
   if not compiled:
