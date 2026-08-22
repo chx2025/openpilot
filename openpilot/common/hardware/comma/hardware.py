@@ -14,6 +14,7 @@ from openpilot.common.esim.base import LPABase
 from openpilot.common.hardware.base import HardwareBase, ThermalConfig, ThermalZone
 from openpilot.common.hardware.comma.pins import GPIO
 from openpilot.common.hardware.comma.amplifier import Amplifier
+from openpilot.sunnypilot.hardware.profile import has_amplifier
 
 MODEM_STATE_PATH = "/dev/shm/modem"
 
@@ -70,7 +71,7 @@ class HardwareComma(HardwareBase):
 
   @cached_property
   def amplifier(self):
-    if self.get_device_type() == "mici":
+    if self.get_device_type() == "mici" or not has_amplifier():
       return None
     return Amplifier()
 
