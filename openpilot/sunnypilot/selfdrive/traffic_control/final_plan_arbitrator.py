@@ -55,6 +55,7 @@ class TrafficStartBlockReason(IntEnum):
 
 @dataclass
 class TrafficPlanDiagnostics:
+  mode: int = 0
   action: TrafficPlanAction = TrafficPlanAction.none
   applied: bool = False
   start_requested: bool = False
@@ -108,6 +109,8 @@ class FinalPlanArbitrator:
     self._was_stopping = False
     self._hold_latched = False
     self._hold_latched_should_stop = False
+    self._lead_release_event_id = 0
+    self._lead_release_cycles = 0
     self.diagnostics = TrafficPlanDiagnostics()
 
   def publisher(self, pm, sm, now_ns: int | None = None):
@@ -129,6 +132,27 @@ class FinalPlanArbitrator:
       return False
     radar = sm["radarState"]
     return not (radar.leadOne.present or radar.leadTwo.present)
+
+  def _moving_lead_release_ready(self, plan, sm, traffic) -> bool:
+    """Confirm a moving lead for two planner cycles without adding acceleration."""
+    event_id = int(traffic.eventId)
+    if event_id != self._lead_release_event_id:
+      self._lead_release_event_id = event_id
+      self._lead_release_cycles = 0
+    if not self._healthy(sm, "radarState") or not self._driver_allows_start(sm):
+      self._lead_release_cycles = 0
+      return False
+    radar = sm["radarState"]
+    v_ego = max(0.0, float(sm["carState"].vEgo))
+    moving_lead = any(
+      lead.present and float(lead.dRel) > 1.0 and v_ego + float(lead.vRel) > 0.5
+      for lead in (radar.leadOne, radar.leadTwo)
+    )
+    speeds = np.asarray(plan.speeds, dtype=float)
+    base_rising = len(speeds) >= 2 and float(speeds[-1]) > float(speeds[0]) + 0.05
+    eligible = moving_lead and float(plan.aTarget) > 0.0 and base_rising
+    self._lead_release_cycles = self._lead_release_cycles + 1 if eligible else 0
+    return self._lead_release_cycles >= 2
 
   @staticmethod
   def _driver_allows_stop(sm) -> bool:
@@ -162,6 +186,7 @@ class FinalPlanArbitrator:
     if traffic is None:
       return
     self.diagnostics.event_id = int(traffic.eventId)
+    self.diagnostics.mode = int(traffic.mode)
     self.diagnostics.phase = int(traffic.phase)
     self.diagnostics.light_state = int(traffic.lightState)
     self.diagnostics.remaining_distance = max(0.0, float(traffic.distanceToStopPoint))
@@ -415,10 +440,11 @@ class FinalPlanArbitrator:
 
     physical_clear = self._physical_radar_clear(sm)
     driver_allows_stop = self._driver_allows_stop(sm)
-    confirmed_release = bool(
-      traffic is not None and int(traffic.eventId) == self._held_event_id
+    signal_release = bool(
+      traffic is not None and int(traffic.eventId) > 0
       and int(traffic.phase) == int(TrafficControlPhase.release) and int(traffic.lightState) == 2
     )
+    confirmed_release = bool(signal_release and int(traffic.eventId) == self._held_event_id)
     if confirmed_release:
       self._hold_latched = False
       self._hold_latched_should_stop = False
@@ -434,9 +460,10 @@ class FinalPlanArbitrator:
       return
     active_stop = bool(
       traffic is not None and traffic.targetPresent and traffic.controlAllowed
-      and int(traffic.lightState) == 1 and float(traffic.confidence) >= 0.9
+      and float(traffic.confidence) >= 0.9
       and int(traffic.phase) in (
         int(TrafficControlPhase.approachRed), int(TrafficControlPhase.braking), int(TrafficControlPhase.hold),
+        int(TrafficControlPhase.flashingGreenStop), int(TrafficControlPhase.yellowStop),
       )
       and physical_clear and driver_allows_stop
     )
@@ -445,6 +472,15 @@ class FinalPlanArbitrator:
     elif traffic is not None and bool(traffic.plannerStartRequested) and int(traffic.lightState) == 2:
       if not self._apply_start(plan, sm, traffic, now_ns):
         self._apply_release(plan, sm)
+    elif signal_release and not physical_clear:
+      # The lead planner owns every numeric trajectory field. Two healthy
+      # moving-lead cycles may clear only the stale traffic shouldStop latch.
+      if self._moving_lead_release_ready(plan, sm, traffic):
+        plan.shouldStop = False
+        self._was_stopping = False
+        self._profile.reset()
+        self.diagnostics.action = TrafficPlanAction.release
+        self.diagnostics.applied = True
     elif (self._hold_latched and float(sm["carState"].vEgo) <= TERMINAL_MAX_SPEED
           and physical_clear and driver_allows_stop):
       self._apply_latched_hold(plan, sm)
@@ -460,7 +496,7 @@ class FinalPlanArbitrator:
     diagnostics = self.diagnostics
     plan_sp.aTarget = diagnostics.final_a_target
     target = plan_sp.teslaTrafficControl
-    target.mode = 4
+    target.mode = diagnostics.mode
     target.phase = diagnostics.phase
     target.active = diagnostics.action != TrafficPlanAction.none
     target.shadow = False

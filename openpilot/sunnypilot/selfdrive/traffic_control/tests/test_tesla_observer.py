@@ -100,7 +100,7 @@ def test_observer_accepts_logged_feature_zero_yellow_transition():
   assert observation.distance == 49
 
 
-def test_observer_still_rejects_other_disabled_or_unavailable_states():
+def test_observer_ignores_internal_availability_fields_for_color_distance_control():
   observer = TeslaTrafficControlObserver()
   address, data, _ = _frame({
     "APP_tcFeatureState": 0,
@@ -113,7 +113,7 @@ def test_observer_still_rejects_other_disabled_or_unavailable_states():
     "APP_tcVisionLight": 1,
   })
   observer.update([(3_100_000_000, [(address, data, 2)])], 3_100_000_000)
-  assert not observer.snapshot(3_100_000_000).valid_for_control
+  assert observer.snapshot(3_100_000_000).valid_for_control
 
 
 def test_observer_uses_only_ap_party_and_never_falls_back_to_party():
@@ -139,13 +139,13 @@ def test_observer_uses_only_ap_party_and_never_falls_back_to_party():
   assert observation.light_state == 1
   assert observation.distance == 60
 
-  expired = observer.snapshot(5_300_000_000)
+  expired = observer.snapshot(5_800_000_001)
   assert expired.source_bus == 2
   assert not expired.available
-  assert expired.distance == 255
+  assert expired.distance == 60
 
 
-def test_observer_expires_control_data_quickly():
+def test_observer_accepts_two_hz_frames_but_expires_after_750ms():
   observer = TeslaTrafficControlObserver()
   address, data, _ = _frame({
     "APP_tcFeatureState": 3,
@@ -156,4 +156,17 @@ def test_observer_expires_control_data_quickly():
   })
   observer.update([(4_000_000_000, [(address, data, 2)])], 4_000_000_000)
   assert observer.snapshot(4_200_000_000).available
-  assert not observer.snapshot(4_300_000_000).available
+  assert observer.snapshot(4_700_000_000).available
+  assert not observer.snapshot(4_750_000_001).available
+
+
+def test_observer_accepts_200m_boundary_and_rejects_201m_for_control():
+  observer = TeslaTrafficControlObserver()
+  for timestamp, distance in ((6_000_000_000, 200), (6_100_000_000, 201)):
+    address, data, _ = _frame({
+      "APP_tcControlType": 3,
+      "APP_tcControlDistance": distance,
+      "APP_tcControlLightState": 1,
+    })
+    observer.update([(timestamp, [(address, data, 2)])], timestamp)
+    assert observer.snapshot(timestamp).valid_for_control == (distance == 200)

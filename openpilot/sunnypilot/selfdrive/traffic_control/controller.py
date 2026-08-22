@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from enum import IntEnum
 
 import numpy as np
 
-from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import TeslaTrafficControlObservation
+from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import (
+  TRAFFIC_CONTROL_MAX_DISTANCE,
+  TeslaTrafficControlObservation,
+)
 
 
 class TrafficControlMode(IntEnum):
@@ -25,30 +29,32 @@ class TrafficControlPhase(IntEnum):
   goCandidate = 5
   release = 6
   bypass = 7
+  greenFlashCandidate = 8
+  flashingGreenStop = 9
+  yellowStop = 10
+  yellowPass = 11
+  lateRed = 12
+  passed = 13
 
 
 @dataclass
 class TrafficControlConfig:
   mode: TrafficControlMode = TrafficControlMode.off
-  default_stop_reference: float = 6.0
+  default_stop_reference: float = 5.0
   adaptive_reference: bool = False
   comfort_brake: float = 2.4
   red_confirm_s: float = 0.5
   weak_red_confirm_s: float = 0.7
   replacement_confirm_s: float = 1.0
   model_confirm_s: float = 0.4
-  # Tesla CAN already carries the OEM traffic-state result. Match CP's
-  # red-to-green transition semantics instead of re-confirming it in planner time.
   green_confirm_s: float = 0.0
-  # Yellow-origin events need a stable green before release so Tesla's
-  # green/yellow transition flicker cannot cancel an already planned stop.
   yellow_green_confirm_s: float = 0.6
   release_s: float = 3.0
   bypass_s: float = 10.0
   observation_dropout_s: float = 0.75
   candidate_dropout_s: float = 2.5
   event_distance_tolerance: float = 12.0
-  max_control_distance: float = 100.0
+  max_control_distance: float = TRAFFIC_CONTROL_MAX_DISTANCE
   candidate_distance_tolerance: float = 6.0
   candidate_distance_tolerance_ratio: float = 0.08
   model_alignment_min_m: float = 8.0
@@ -56,9 +62,12 @@ class TrafficControlConfig:
   model_alignment_ratio: float = 0.20
   model_only_min_speed: float = 1.0
   retain_event_with_lead: bool = False
-  # New red-light events are observation-only above this speed. An already
-  # active stop is never dropped merely because the live setting changes.
   max_control_speed: float = float("inf")
+  final_distance_freeze_m: float = 10.0
+  yellow_stop_decel: float = 2.2
+  yellow_pass_decel: float = 3.0
+  flash_interval_min_s: float = 0.5
+  flash_interval_max_s: float = 1.5
 
 
 @dataclass(frozen=True)
@@ -77,9 +86,15 @@ class TrafficControlDecision:
 
 
 class TeslaTrafficControlController:
-  """OEM-primary stop/go state machine with CP-inspired distance latching."""
+  """CAN-color traffic-light state machine with a CP-style latched stop point."""
 
-  ACTIVE_PHASES = (TrafficControlPhase.approachRed, TrafficControlPhase.braking, TrafficControlPhase.hold)
+  ACTIVE_PHASES = (
+    TrafficControlPhase.approachRed,
+    TrafficControlPhase.braking,
+    TrafficControlPhase.hold,
+    TrafficControlPhase.flashingGreenStop,
+    TrafficControlPhase.yellowStop,
+  )
 
   def __init__(self, config: TrafficControlConfig | None = None) -> None:
     self.config = config or TrafficControlConfig()
@@ -87,37 +102,39 @@ class TeslaTrafficControlController:
     self.transition_reason = ""
     self.event_seq = 0
     self.event_id = 0
-    self.last_distance_innovation = 0.0
     self.phase = TrafficControlPhase.off
-    self.red_since_ns: int | None = None
-    self.green_since_ns: int | None = None
-    self.release_since_ns: int | None = None
-    self.bypass_until_ns = 0
     self.last_update_ns: int | None = None
+    self.last_real_frame_ns = 0
+    self.last_real_color = 0
+    self.last_raw_distance: float | None = None
+    self.last_distance_ego_station = 0.0
+    self.ego_station = 0.0
+    self.stop_station: float | None = None
+    self.station_samples: deque[float] = deque(maxlen=3)
     self.remaining_distance = 0.0
     self.stop_reference = self.config.default_stop_reference
     self.light_state = 0
     self.source_bus = 0
+    self.quality = 0
     self.event_source_bus = 0
     self.event_control_source = 0
-    self.candidate_source_bus = 0
-    self.candidate_control_source = 0
-    self.candidate_distance = 0.0
-    self.candidate_last_ns: int | None = None
-    self.candidate_anchor_distance = 0.0
-    self.candidate_travel_distance = 0.0
-    self.candidate_confirm_s = self.config.red_confirm_s
-    self.pending_candidate_since_ns: int | None = None
-    self.pending_candidate_distance = 0.0
-    self.pending_candidate_last_ns: int | None = None
-    self.pending_candidate_travel_distance = 0.0
-    self.model_confirm_since_ns: int | None = None
-    self.last_event_observation_ns: int | None = None
-    self.quality = 0
     self.event_continuous = False
-    self.event_started_yellow = False
-    self.event_has_red = False
-    self.candidate_started_yellow = False
+    self.candidate_color = 0
+    self.candidate_count = 0
+    self.candidate_last_ns = 0
+    self.candidate_distance = 0.0
+    self.pending_distance = 0.0
+    self.pending_ego_station = 0.0
+    self.pending_color = 0
+    self.pending_count = 0
+    self.green_count = 0
+    self.first_off_ns = 0
+    self.green_between_off = False
+    self.flash_latched = False
+    self.yellow_latched: bool | None = None
+    self.release_since_ns: int | None = None
+    self.bypass_until_ns = 0
+    self.last_distance_innovation = 0.0
 
   def _mark_transition(self, reason: str) -> None:
     self.transition_seq += 1
@@ -134,49 +151,46 @@ class TeslaTrafficControlController:
   def reset(self) -> None:
     self.phase = TrafficControlPhase.off
     self.event_id = 0
-    self.red_since_ns = None
-    self.green_since_ns = None
-    self.release_since_ns = None
+    self.last_real_frame_ns = 0
+    self.last_real_color = 0
+    self.last_raw_distance = None
+    self.last_distance_ego_station = self.ego_station
+    self.stop_station = None
+    self.station_samples.clear()
     self.remaining_distance = 0.0
     self.stop_reference = self.config.default_stop_reference
     self.light_state = 0
     self.source_bus = 0
+    self.quality = 0
     self.event_source_bus = 0
     self.event_control_source = 0
-    self.candidate_source_bus = 0
-    self.candidate_control_source = 0
-    self.candidate_distance = 0.0
-    self.candidate_last_ns = None
-    self.candidate_anchor_distance = 0.0
-    self.candidate_travel_distance = 0.0
-    self.candidate_confirm_s = self.config.red_confirm_s
-    self.pending_candidate_since_ns = None
-    self.pending_candidate_distance = 0.0
-    self.pending_candidate_last_ns = None
-    self.pending_candidate_travel_distance = 0.0
-    self.model_confirm_since_ns = None
-    self.last_distance_innovation = 0.0
-    self.last_event_observation_ns = None
-    self.quality = 0
     self.event_continuous = False
-    self.event_started_yellow = False
-    self.event_has_red = False
-    self.candidate_started_yellow = False
+    self.candidate_color = 0
+    self.candidate_count = 0
+    self.candidate_last_ns = 0
+    self.candidate_distance = 0.0
+    self.pending_distance = 0.0
+    self.pending_ego_station = self.ego_station
+    self.pending_color = 0
+    self.pending_count = 0
+    self.green_count = 0
+    self.first_off_ns = 0
+    self.green_between_off = False
+    self.flash_latched = False
+    self.yellow_latched = None
+    self.release_since_ns = None
+    self.last_distance_innovation = 0.0
     self.last_update_ns = None
 
   def _decision(self) -> TrafficControlDecision:
     active = self.phase in self.ACTIVE_PHASES or self.phase == TrafficControlPhase.release
-    # shouldStop switches longcontrol out of its normal PID into the fixed
-    # standstill policy. Keep approach/braking on the planned acceleration
-    # profile and request the standstill policy only for the final hold.
-    stopping = self.phase == TrafficControlPhase.hold
     return TrafficControlDecision(
       mode=self.config.mode,
       phase=self.phase,
       active=active,
       apply_constraint=self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and active,
       shadow=self.config.mode == TrafficControlMode.shadow and active,
-      should_stop=stopping,
+      should_stop=self.phase == TrafficControlPhase.hold,
       remaining_distance=max(0.0, self.remaining_distance),
       stop_reference=self.stop_reference,
       light_state=self.light_state,
@@ -184,406 +198,261 @@ class TeslaTrafficControlController:
       quality=self.quality,
     )
 
-  def _update_reference(self, observation: TeslaTrafficControlObservation,
-                        model_stop_distance: float | None, model_stop_candidate: bool) -> None:
-    if not self.config.adaptive_reference or not model_stop_candidate or model_stop_distance is None:
-      return
-    estimate = observation.distance - model_stop_distance
-    if 2.0 <= estimate <= 12.0:
-      self.stop_reference = 0.75 * self.stop_reference + 0.25 * estimate
+  def _distance_tolerance(self, a: float, b: float) -> float:
+    return max(self.config.candidate_distance_tolerance,
+               self.config.candidate_distance_tolerance_ratio * max(a, b))
 
-  def _model_confirms_stop(self, observation: TeslaTrafficControlObservation,
-                           model_stop_distance: float | None, model_stop_candidate: bool) -> bool:
-    if not model_stop_candidate or model_stop_distance is None:
-      return False
-    expected_stop_distance = max(0.0, observation.distance - self.stop_reference)
-    tolerance = float(np.clip(
-      observation.distance * self.config.model_alignment_ratio,
-      self.config.model_alignment_min_m,
-      self.config.model_alignment_max_m,
-    ))
-    return abs(model_stop_distance - expected_stop_distance) <= tolerance
+  def _same_track(self, observation: TeslaTrafficControlObservation) -> bool:
+    if self.last_raw_distance is None:
+      return True
+    expected = max(0.0, self.last_raw_distance - (self.ego_station - self.last_distance_ego_station))
+    innovation = observation.distance - expected
+    self.last_distance_innovation = innovation
+    return bool(observation.source_bus == self.source_bus and
+                abs(innovation) <= self._distance_tolerance(observation.distance, expected))
+
+  def _update_stop_station(self, observation: TeslaTrafficControlObservation) -> None:
+    sample = self.ego_station + observation.distance - self.stop_reference
+    self.station_samples.append(sample)
+    filtered = float(np.median(np.asarray(self.station_samples, dtype=float)))
+    if self.stop_station is None:
+      self.stop_station = filtered
+    elif self.remaining_distance > self.config.final_distance_freeze_m:
+      # Distance quantization must not move a committed stop target away from
+      # the car by meters at a time. Closing corrections are accepted; outward
+      # corrections are bounded to five centimetres per real CAN sample.
+      self.stop_station = min(filtered, self.stop_station + 0.05)
+    self.remaining_distance = max(0.0, (self.stop_station or self.ego_station) - self.ego_station)
 
   def _start_stop(self, observation: TeslaTrafficControlObservation, v_ego: float,
-                  model_stop_distance: float | None) -> None:
-    # Distant visual estimates are useful for building confidence but are too
-    # unstable and lack lane identity. Never let them constrain the planner.
-    if observation.distance > self.config.max_control_distance:
-      return
+                  phase: TrafficControlPhase, reason: str) -> None:
     self.event_seq += 1
     self.event_id = self.event_seq
     self.event_source_bus = observation.source_bus
     self.event_control_source = observation.control_source
-    self.event_started_yellow = self.candidate_started_yellow
-    self.event_has_red = observation.light_state == 1
-    self.last_event_observation_ns = self.last_update_ns
-    # CP's e2e stop state commits the model stop distance, while the traffic
-    # light detector decides whether that stop is a traffic-control event. Use
-    # the same split: Tesla CAN confirms red and event identity; the aligned CP
-    # model target supplies the primary stopping point.
-    tesla_remaining = max(0.0, observation.distance - self.stop_reference)
-    self.remaining_distance = (tesla_remaining if model_stop_distance is None else
-                               max(0.0, float(model_stop_distance)))
-    # A stable target may begin constraining as it crosses 100 m. The stop
-    # profile still derives its acceleration from current speed and remaining
-    # distance; this boundary only prevents distant visual estimates from
-    # touching the planner.
-    activation_control_distance = self.config.max_control_distance
-    if observation.distance <= activation_control_distance:
-      required = v_ego ** 2 / (2.0 * max(self.remaining_distance, 0.5))
-      self.phase = TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed
-      self._mark_transition("stop_confirmed")
-
-  def _start_model_stop(self, model_stop_distance: float, v_ego: float) -> None:
-    if model_stop_distance > self.config.max_control_distance:
-      return
-    self.event_seq += 1
-    self.event_id = self.event_seq
-    self.event_source_bus = 0
-    self.event_control_source = 0
-    self.event_started_yellow = False
-    self.event_has_red = False
-    self.last_event_observation_ns = self.last_update_ns
-    self.remaining_distance = max(0.0, float(model_stop_distance))
-    self.light_state = 1
-    self.source_bus = 0
-    self.quality = 1
+    self.stop_reference = self.config.default_stop_reference
+    self._update_stop_station(observation)
     required = v_ego ** 2 / (2.0 * max(self.remaining_distance, 0.5))
-    self.phase = TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed
-    self._mark_transition("stop_confirmed")
+    self.phase = (TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed) \
+      if phase == TrafficControlPhase.approachRed else phase
+    self._mark_transition(reason)
 
-  def _advance_latched_distance(self, dt: float, v_ego: float,
-                                observation: TeslaTrafficControlObservation) -> None:
-    self.remaining_distance = max(0.0, self.remaining_distance - max(v_ego, 0.0) * dt)
-    same_event = (observation.source_bus == self.event_source_bus and
-                  observation.control_source == self.event_control_source)
-    expected_distance = self.remaining_distance + self.stop_reference
-    distance_consistent = abs(observation.distance - expected_distance) <= self.config.event_distance_tolerance
-    raw_event_continuous = bool(
-      observation.available
-      and observation.feature_state == 0
-      and observation.source_bus == 2
-      and observation.control_type == 3
-      and observation.control_source in (2, 3)
-      and observation.light_state in (1, 3)
-      and observation.state_machine in (2, 3, 4, 5)
-      and observation.unavailable_reason in (0, 1)
-      and 2.0 <= observation.distance < 255.0
-      and observation.vision_light
+  def _set_release(self, now_ns: int) -> None:
+    self.phase = TrafficControlPhase.release
+    self.release_since_ns = now_ns
+    self.remaining_distance = 0.0
+    self._mark_transition("green_release")
+
+  def _handle_flash(self, observation: TeslaTrafficControlObservation, now_ns: int, v_ego: float) -> bool:
+    color = observation.light_state
+    if color == 0 and self.last_real_color == 2:
+      if self.first_off_ns and self.green_between_off:
+        interval_s = (now_ns - self.first_off_ns) / 1e9
+        if self.config.flash_interval_min_s <= interval_s <= self.config.flash_interval_max_s:
+          self.flash_latched = True
+          if self.phase not in self.ACTIVE_PHASES:
+            self._start_stop(observation, v_ego, TrafficControlPhase.flashingGreenStop, "flashing_green_stop")
+          else:
+            self.phase = TrafficControlPhase.flashingGreenStop
+          return True
+      self.first_off_ns = now_ns
+      self.green_between_off = False
+      if self.phase not in self.ACTIVE_PHASES:
+        self.phase = TrafficControlPhase.greenFlashCandidate
+        self._mark_transition("green_flash_candidate")
+    elif color == 2 and self.first_off_ns:
+      self.green_between_off = True
+    elif color in (1, 3):
+      self.first_off_ns = 0
+      self.green_between_off = False
+    return False
+
+  def _update_candidate(self, observation: TeslaTrafficControlObservation) -> bool:
+    same = bool(
+      self.candidate_count > 0
+      and self.candidate_color == observation.light_state
+      and abs(observation.distance - self.candidate_distance) <=
+      self._distance_tolerance(observation.distance, self.candidate_distance)
     )
-    event_continuous = observation.valid_for_control or raw_event_continuous
-    self.event_continuous = bool(event_continuous and same_event and distance_consistent)
-    if self.event_continuous:
-      self.last_event_observation_ns = self.last_update_ns
-      if self.remaining_distance > 10.0:
-        oem_remaining = max(0.0, observation.distance - self.stop_reference)
-        # Far from the stop, follow a consistent OEM target with bounded
-        # corrections. CP-style final approach freezes the committed point.
-        max_close = max(v_ego, 0.0) * dt + 0.5
-        correction = float(np.clip(oem_remaining - self.remaining_distance, -max_close, 0.25 * dt))
-        self.remaining_distance = max(0.0, self.remaining_distance + correction)
+    if same:
+      self.candidate_count += 1
+    else:
+      self.candidate_color = observation.light_state
+      self.candidate_count = 1
+    self.candidate_distance = observation.distance
+    self.candidate_last_ns = observation.frame_mono_time
+    return self.candidate_count >= 2
+
+  def _pending_replacement_confirmed(self, observation: TeslaTrafficControlObservation) -> bool:
+    expected = max(0.0, self.pending_distance - (self.ego_station - self.pending_ego_station))
+    same = bool(
+      self.pending_count > 0
+      and self.pending_color == observation.light_state
+      and abs(observation.distance - expected) <= self._distance_tolerance(observation.distance, expected)
+    )
+    self.pending_count = self.pending_count + 1 if same else 1
+    self.pending_distance = observation.distance
+    self.pending_ego_station = self.ego_station
+    self.pending_color = observation.light_state
+    return self.pending_count >= 2
 
   def update(self, observation: TeslaTrafficControlObservation, now_ns: int, *, v_ego: float, a_ego: float,
              model_stop_distance: float | None, model_stop_candidate: bool, lead_present: bool,
              radar_valid: bool, enabled: bool, long_active: bool, gas_pressed: bool,
              brake_pressed: bool, turn_signal_active: bool) -> TrafficControlDecision:
-    del a_ego
+    del a_ego, model_stop_distance, model_stop_candidate, lead_present, turn_signal_active
     dt = 0.0 if self.last_update_ns is None else max(0.0, min((now_ns - self.last_update_ns) / 1e9, 0.5))
     self.last_update_ns = now_ns
+    self.ego_station += max(0.0, v_ego) * dt
+    if self.stop_station is not None:
+      self.remaining_distance = max(0.0, self.stop_station - self.ego_station)
     self.event_continuous = False
 
     if self.config.mode == TrafficControlMode.off:
       self.reset()
       return self._decision()
-
     if gas_pressed:
-      entering_bypass = self.phase != TrafficControlPhase.bypass
+      entering = self.phase != TrafficControlPhase.bypass
       self.phase = TrafficControlPhase.bypass
       self.bypass_until_ns = now_ns + int(self.config.bypass_s * 1e9)
-      self.red_since_ns = None
-      self.green_since_ns = None
-      if entering_bypass:
+      if entering:
         self._mark_transition("driver_bypass")
       return self._decision()
-
     if self.phase == TrafficControlPhase.bypass:
       if now_ns < self.bypass_until_ns:
         return self._decision()
       self.reset()
       self.last_update_ns = now_ns
-
     if not enabled or (self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and not long_active):
       self.reset()
       return self._decision()
-
-    # "No lead" must be positively established before traffic-control data is
-    # allowed to constrain longitudinal planning. If a lead appears, release
-    # this independent constraint and leave following entirely to the base
-    # planner. Invalid radar is treated conservatively as unknown, not no lead.
     if self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and not radar_valid:
-      was_tracking = self.phase != TrafficControlPhase.off
-      self.reset()
-      self.last_update_ns = now_ns
-      if was_tracking:
-        self._mark_transition("radar_invalid")
       return self._decision()
-    if (self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and lead_present and
-        not self.config.retain_event_with_lead):
-      was_tracking = self.phase != TrafficControlPhase.off
-      self.reset()
-      self.last_update_ns = now_ns
-      if was_tracking:
-        self._mark_transition("lead_present")
-      return self._decision()
-
-    if (self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo)
-        and self.phase not in (*self.ACTIVE_PHASES, TrafficControlPhase.release)
+    if (self.phase not in (*self.ACTIVE_PHASES, TrafficControlPhase.release)
         and v_ego > self.config.max_control_speed):
-      had_candidate = bool(self.phase == TrafficControlPhase.redCandidate or self.model_confirm_since_ns is not None)
-      self.reset()
-      self.last_update_ns = now_ns
-      if had_candidate:
-        self._mark_transition("speed_above_limit")
+      self.candidate_count = 0
+      self.phase = TrafficControlPhase.off
       return self._decision()
 
-    valid_red = observation.valid_for_control and observation.light_state == 1
-    feature_zero_event_green = bool(
-      self.phase in self.ACTIVE_PHASES
-      and observation.available
-      and observation.feature_state == 0
-      and observation.source_bus == 2
-      and observation.control_type == 3
-      and observation.control_source in (2, 3)
-      and observation.light_state == 2
-      and observation.state_machine in (5, 6)
-      and observation.unavailable_reason in (0, 1)
-      and 2.0 <= observation.distance < 255.0
-      and observation.vision_light
-    )
-    valid_green = bool(
-      observation.light_state == 2
-      and (observation.valid_for_control or feature_zero_event_green)
-    )
-    valid_yellow = observation.valid_for_control and observation.light_state == 3
-    # During a committed stop, a decoded frame with no color is a sampling gap,
-    # not a new traffic state. Candidate/off/release phases retain the original
-    # observation semantics.
-    if observation.available:
-      if self.phase not in self.ACTIVE_PHASES or observation.light_state in (1, 2, 3):
-        self.light_state = observation.light_state
-      self.source_bus = observation.source_bus
-      self.quality = observation.quality
+    new_frame = bool(observation.available and observation.frame_mono_time > 0 and
+                     observation.frame_mono_time != self.last_real_frame_ns and
+                     observation.source_bus == 2 and observation.dlc >= 6 and
+                     observation.control_type == 3 and observation.light_state in (0, 1, 2, 3))
+    if not new_frame:
+      if self.phase in (TrafficControlPhase.redCandidate, TrafficControlPhase.greenFlashCandidate):
+        if self.candidate_last_ns and now_ns - self.candidate_last_ns > int(self.config.candidate_dropout_s * 1e9):
+          self.phase = TrafficControlPhase.off
+          self.candidate_count = 0
+      if v_ego < 0.3 and self.phase in self.ACTIVE_PHASES and self.remaining_distance <= 1.5:
+        self.phase = TrafficControlPhase.hold
+      return self._decision()
 
-    if self.phase == TrafficControlPhase.off and not (valid_red or valid_yellow):
-      if (model_stop_candidate and model_stop_distance is not None
-          and v_ego >= self.config.model_only_min_speed):
-        if self.model_confirm_since_ns is None:
-          self.model_confirm_since_ns = now_ns
-        if (now_ns - self.model_confirm_since_ns) / 1e9 >= self.config.model_confirm_s:
-          self._start_model_stop(float(model_stop_distance), v_ego)
+    previous_color = self.last_real_color
+    self.last_real_frame_ns = observation.frame_mono_time
+    self.light_state = observation.light_state
+    self.source_bus = observation.source_bus
+    self.quality = observation.quality
+
+    if observation.distance > self.config.max_control_distance:
+      wrapped = bool(self.last_raw_distance is not None and self.last_raw_distance <= 2.0 and observation.distance >= 250.0)
+      if wrapped:
+        self.phase = TrafficControlPhase.passed
+        self.remaining_distance = 0.0
+        self._mark_transition("distance_wrap_passed")
+      self.last_real_color = observation.light_state
+      return self._decision()
+
+    same_track = self._same_track(observation)
+    self.event_continuous = same_track
+    if not same_track and self.phase in self.ACTIVE_PHASES:
+      # Adjacent signals frequently share the same CAN stream. A single
+      # discontinuous tuple cannot replace or release the current event.
+      # Only a motion-consistent two-frame red/yellow trajectory is promoted.
+      replace = observation.light_state in (1, 3) and self._pending_replacement_confirmed(observation)
+      if not replace:
+        self.last_real_color = observation.light_state
         return self._decision()
-      else:
-        self.model_confirm_since_ns = None
+      self.station_samples.clear()
+      self.stop_station = None
+      self.last_raw_distance = observation.distance
+      self.last_distance_ego_station = self.ego_station
+      replacement_phase = (TrafficControlPhase.yellowStop if observation.light_state == 3
+                           else TrafficControlPhase.approachRed)
+      self._start_stop(observation, v_ego, replacement_phase, "candidate_replaced")
+      self.pending_count = 0
+      self.last_real_color = observation.light_state
+      return self._decision()
+    if same_track:
+      self.pending_count = 0
+
+    self.last_raw_distance = observation.distance
+    self.last_distance_ego_station = self.ego_station
+    self._update_stop_station(observation)
+
+    self.last_real_color = previous_color
+    if self._handle_flash(observation, now_ns, v_ego):
+      self.last_real_color = observation.light_state
+      return self._decision()
+
+    color = observation.light_state
+    confirmed = self._update_candidate(observation)
 
     if self.phase in self.ACTIVE_PHASES:
-      self._advance_latched_distance(dt, v_ego, observation)
-
-      if self.event_source_bus == 0 and model_stop_candidate and model_stop_distance is not None:
-        self.last_event_observation_ns = now_ns
-        if self.remaining_distance > 10.0:
-          self.remaining_distance = max(0.0, float(model_stop_distance))
-      if self.event_source_bus == 0 and valid_red:
-        self.event_source_bus = observation.source_bus
-        self.event_control_source = observation.control_source
-        self.event_has_red = True
-        self.last_event_observation_ns = now_ns
-      elif valid_red:
-        self.event_has_red = True
-
-      observation_dropout_s = (float("inf") if self.last_event_observation_ns is None else
-                               (now_ns - self.last_event_observation_ns) / 1e9)
-      # A noisy distance jump must not become irrevocable merely because it
-      # landed close to the nominal stop point. Only an actual stationary hold
-      # survives loss of the traffic-control observation.
-      committed = self.phase == TrafficControlPhase.hold
-      if observation_dropout_s >= self.config.observation_dropout_s and not committed:
-        self.reset()
-        self.last_update_ns = now_ns
-        self._mark_transition("observation_dropout")
-        return self._decision()
-
-      if v_ego < 0.3 and self.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking):
+      if self.flash_latched:
+        self.phase = (TrafficControlPhase.hold if v_ego < 0.3 and self.remaining_distance <= 1.5
+                      else TrafficControlPhase.flashingGreenStop)
+      elif color == 2:
+        self.green_count = self.green_count + 1 if previous_color == 2 else 1
+        if self.config.mode == TrafficControlMode.stopGo and self.green_count >= 2 and not brake_pressed:
+          self._set_release(now_ns)
+      else:
+        self.green_count = 0
+        if color == 3:
+          self.phase = TrafficControlPhase.yellowStop
+        elif color == 1 and self.phase != TrafficControlPhase.hold:
+          required = v_ego ** 2 / (2.0 * max(self.remaining_distance, 0.5))
+          self.phase = TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed
+      if v_ego < 0.3 and self.remaining_distance <= 1.5 and self.phase != TrafficControlPhase.release:
         self.phase = TrafficControlPhase.hold
         self._mark_transition("stationary_hold")
-
-      expected_distance = self.remaining_distance + self.stop_reference
-      same_event_green = (valid_green and observation.source_bus == self.event_source_bus and
-                          observation.control_source == self.event_control_source and
-                          abs(observation.distance - expected_distance) <= self.config.event_distance_tolerance)
-      if same_event_green:
-        self.last_event_observation_ns = now_ns
-        if self.green_since_ns is None:
-          self.green_since_ns = now_ns
-        green_confirm_s = (
-          self.config.yellow_green_confirm_s
-          if self.event_started_yellow and not self.event_has_red
-          else self.config.green_confirm_s
-        )
-        green_stable = (now_ns - self.green_since_ns) / 1e9 >= green_confirm_s
-        moving_release = v_ego >= 0.3 and not brake_pressed
-        # CP gives a physical lead priority over the traffic stop. Release our
-        # hold on green even with a lead; TrafficRadarSource withholds the
-        # explicit start request and the base lead planner takes over.
-        stopped_release = (self.config.mode == TrafficControlMode.stopGo and radar_valid and
-                           not turn_signal_active and not brake_pressed)
-        if green_stable and (moving_release or stopped_release):
-          self.phase = TrafficControlPhase.release
-          self.release_since_ns = now_ns
-          self.remaining_distance = 0.0
-          self._mark_transition("green_release")
-      else:
-        self.green_since_ns = None
-
-      if self.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking) and self.remaining_distance > 0.0:
-        required = v_ego ** 2 / (2.0 * max(self.remaining_distance, 0.5))
-        self.phase = TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed
+      self.last_real_color = observation.light_state
       return self._decision()
 
     if self.phase == TrafficControlPhase.release:
-      if valid_red:
-        self.phase = TrafficControlPhase.redCandidate
-        self.red_since_ns = now_ns
-        self.release_since_ns = None
-      elif self.release_since_ns is not None and (now_ns - self.release_since_ns) / 1e9 >= self.config.release_s:
+      if color == 1 and confirmed:
+        self._start_stop(observation, v_ego, TrafficControlPhase.approachRed, "red_after_release")
+      elif self.release_since_ns is not None and now_ns - self.release_since_ns >= int(self.config.release_s * 1e9):
         self.reset()
         self.last_update_ns = now_ns
+      self.last_real_color = observation.light_state
       return self._decision()
 
-    if valid_red or valid_yellow:
-      candidate_dt = (0.0 if self.candidate_last_ns is None else
-                      max(0.0, (now_ns - self.candidate_last_ns) / 1e9))
-      expected_distance = max(0.0, self.candidate_distance - max(v_ego, 0.0) * candidate_dt)
-      projected_travel = self.candidate_travel_distance + max(v_ego, 0.0) * candidate_dt
-      anchor_expected_distance = max(0.0, self.candidate_anchor_distance - projected_travel)
-      distance_tolerance = max(
-        self.config.candidate_distance_tolerance,
-        self.config.candidate_distance_tolerance_ratio * max(self.candidate_distance, observation.distance),
-      )
-      anchor_tolerance = max(
-        self.config.candidate_distance_tolerance,
-        self.config.candidate_distance_tolerance_ratio * self.candidate_anchor_distance,
-      )
-      same_candidate = (observation.source_bus == self.candidate_source_bus and
-                        observation.control_source == self.candidate_control_source and
-                        abs(observation.distance - expected_distance) <= distance_tolerance and
-                        abs(observation.distance - anchor_expected_distance) <= anchor_tolerance)
-      self.last_distance_innovation = 0.0 if self.red_since_ns is None else observation.distance - expected_distance
-      same_source = (observation.source_bus == self.candidate_source_bus and
-                     observation.control_source == self.candidate_control_source)
-
-      # Route 00000003--5d11656108 segments 5/6 shows the same stationary
-      # AP-PARTY red target quantizing by 7-8 m. A single distance innovation
-      # is not a new event identity: require the alternative trajectory to
-      # remain motion-consistent for the already-defined replacement window.
-      if self.red_since_ns is not None and same_source and not same_candidate:
-        pending_dt = (0.0 if self.pending_candidate_last_ns is None else
-                      max(0.0, (now_ns - self.pending_candidate_last_ns) / 1e9))
-        pending_expected = max(0.0, self.pending_candidate_distance - max(v_ego, 0.0) * pending_dt)
-        pending_tolerance = max(
-          self.config.candidate_distance_tolerance,
-          self.config.candidate_distance_tolerance_ratio * max(self.pending_candidate_distance, observation.distance),
-        )
-        pending_consistent = (self.pending_candidate_since_ns is not None and
-                              abs(observation.distance - pending_expected) <= pending_tolerance)
-        if not pending_consistent:
-          self.pending_candidate_since_ns = now_ns
-          self.pending_candidate_travel_distance = 0.0
-        else:
-          self.pending_candidate_travel_distance += max(v_ego, 0.0) * pending_dt
-        self.pending_candidate_distance = observation.distance
-        self.pending_candidate_last_ns = now_ns
-        self.candidate_last_ns = now_ns
-        replacement_stable = ((now_ns - self.pending_candidate_since_ns) / 1e9 >=
-                              self.config.replacement_confirm_s)
-        if not replacement_stable:
-          self.phase = TrafficControlPhase.redCandidate
-          return self._decision()
-        # Commit only a sustained alternative trajectory, then run the normal
-        # candidate/model confirmation from a clean event anchor below.
-        same_candidate = False
-      elif same_candidate:
-        self.pending_candidate_since_ns = None
-        self.pending_candidate_distance = 0.0
-        self.pending_candidate_last_ns = None
-        self.pending_candidate_travel_distance = 0.0
-
-      if self.red_since_ns is None or not same_candidate:
-        replacement = self.red_since_ns is not None
-        self.red_since_ns = now_ns
-        self.stop_reference = self.config.default_stop_reference
-        self.source_bus = observation.source_bus
-        self.candidate_source_bus = observation.source_bus
-        self.candidate_control_source = observation.control_source
-        self.candidate_anchor_distance = observation.distance
-        self.candidate_travel_distance = 0.0
-        self.candidate_started_yellow = valid_yellow
-        base_confirm_s = self.config.red_confirm_s if observation.quality >= 2 else self.config.weak_red_confirm_s
-        self.candidate_confirm_s = max(base_confirm_s, self.config.replacement_confirm_s if replacement else 0.0)
-        self.model_confirm_since_ns = None
-        self.pending_candidate_since_ns = None
-        self.pending_candidate_distance = 0.0
-        self.pending_candidate_last_ns = None
-        self.pending_candidate_travel_distance = 0.0
-        self._mark_transition("candidate_replaced" if replacement else "candidate_started")
-      else:
-        self.candidate_travel_distance = projected_travel
-      self.candidate_distance = observation.distance
-      self.candidate_last_ns = now_ns
+    if color == 1:
       self.phase = TrafficControlPhase.redCandidate
-      self._update_reference(observation, model_stop_distance, model_stop_candidate)
-      model_confirms = self._model_confirms_stop(observation, model_stop_distance, model_stop_candidate)
-      if model_confirms:
-        # plannerd calls this adapter only when modelV2 is updated. The adapter
-        # separately requires the fresh message to be valid before it reaches
-        # this state machine.
-        if self.model_confirm_since_ns is None:
-          self.model_confirm_since_ns = now_ns
-      else:
-        self.model_confirm_since_ns = None
-      oem_confirmed = (now_ns - self.red_since_ns) / 1e9 >= self.candidate_confirm_s
-      model_confirmed = (self.model_confirm_since_ns is not None and
-                         (now_ns - self.model_confirm_since_ns) / 1e9 >= self.config.model_confirm_s)
-      confirmed = oem_confirmed
-      if valid_yellow:
-        remaining = max(0.5, observation.distance - self.stop_reference)
-        required = v_ego ** 2 / (2.0 * remaining)
-        confirmed = confirmed and required <= self.config.comfort_brake
       if confirmed:
-        aligned_model_distance = model_stop_distance if model_confirmed else None
-        self._start_stop(observation, v_ego, aligned_model_distance)
-      return self._decision()
+        self._start_stop(observation, v_ego, TrafficControlPhase.approachRed, "stop_confirmed")
+    elif color == 3:
+      required = v_ego ** 2 / (2.0 * max(observation.distance - self.stop_reference, 0.5))
+      if self.yellow_latched is None and confirmed:
+        if required <= self.config.yellow_stop_decel:
+          self.yellow_latched = True
+        elif required >= self.config.yellow_pass_decel:
+          self.yellow_latched = False
+        else:
+          self.yellow_latched = required <= self.config.comfort_brake
+      if self.yellow_latched is True:
+        self._start_stop(observation, v_ego, TrafficControlPhase.yellowStop, "yellow_stop")
+      elif self.yellow_latched is False:
+        self.phase = TrafficControlPhase.yellowPass
+        self._mark_transition("yellow_pass")
+      else:
+        self.phase = TrafficControlPhase.redCandidate
+    elif color == 2:
+      self.green_count = self.green_count + 1 if previous_color == 2 else 1
+      if self.phase != TrafficControlPhase.greenFlashCandidate and self.green_count >= 2:
+        self.phase = TrafficControlPhase.off
+    elif color == 0 and self.phase != TrafficControlPhase.greenFlashCandidate:
+      self.phase = TrafficControlPhase.off
 
-    if self.phase == TrafficControlPhase.redCandidate and self.candidate_last_ns is not None:
-      candidate_dropout_s = (now_ns - self.candidate_last_ns) / 1e9
-      if candidate_dropout_s < self.config.candidate_dropout_s:
-        return self._decision()
-
-    candidate_cancelled = self.phase == TrafficControlPhase.redCandidate
-    self.red_since_ns = None
-    self.candidate_source_bus = 0
-    self.candidate_control_source = 0
-    self.candidate_distance = 0.0
-    self.candidate_last_ns = None
-    self.candidate_anchor_distance = 0.0
-    self.candidate_travel_distance = 0.0
-    self.candidate_started_yellow = False
-    self.candidate_confirm_s = self.config.red_confirm_s
-    self.pending_candidate_since_ns = None
-    self.pending_candidate_distance = 0.0
-    self.pending_candidate_last_ns = None
-    self.pending_candidate_travel_distance = 0.0
-    self.model_confirm_since_ns = None
-    self.phase = TrafficControlPhase.off
-    if candidate_cancelled:
-      self._mark_transition("candidate_cancelled")
+    self.last_real_color = observation.light_state
     return self._decision()

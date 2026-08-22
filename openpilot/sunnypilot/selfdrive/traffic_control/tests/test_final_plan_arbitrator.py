@@ -74,6 +74,51 @@ def test_no_target_is_output_transparent():
   assert arbitrator.diagnostics.action == TrafficPlanAction.none
 
 
+def test_moving_lead_green_handoff_only_clears_should_stop_after_two_cycles():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  hold_sm = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=True, event_id=71, distance=0.0, v_ego=0.0,
+  )
+  arbitrator.apply(base_plan(should_stop=True), hold_sm, NOW_NS)
+
+  green = fake_sm(
+    phase=TrafficControlPhase.release, light_state=2, target=False,
+    allowed=False, start=False, event_id=71, distance=0.0, v_ego=0.0,
+  )
+  green["radarState"].leadOne = ns(present=True, dRel=8.0, vRel=1.0)
+  green["radarState"].leadTwo = ns(present=False, dRel=0.0, vRel=0.0)
+
+  first = base_plan(a_target=0.4, should_stop=True)
+  first.speeds = np.linspace(0.0, 2.0, 17).tolist()
+  original_first = (list(first.speeds), list(first.accels), list(first.jerks), first.aTarget)
+  arbitrator.apply(first, green, NOW_NS + 50_000_000)
+  assert first.shouldStop
+  assert (first.speeds, first.accels, first.jerks, first.aTarget) == original_first
+
+  second = base_plan(a_target=0.4, should_stop=True)
+  second.speeds = np.linspace(0.0, 2.0, 17).tolist()
+  original_second = (list(second.speeds), list(second.accels), list(second.jerks), second.aTarget)
+  arbitrator.apply(second, green, NOW_NS + 100_000_000)
+  assert not second.shouldStop
+  assert (second.speeds, second.accels, second.jerks, second.aTarget) == original_second
+
+
+def test_moving_lead_handoff_does_not_require_traffic_module_to_have_owned_the_hold():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  green = fake_sm(
+    phase=TrafficControlPhase.release, light_state=2, target=False,
+    allowed=False, start=False, event_id=72, distance=0.0, v_ego=0.0,
+  )
+  green["radarState"].leadOne = ns(present=True, dRel=8.0, vRel=1.0)
+  green["radarState"].leadTwo = ns(present=False, dRel=0.0, vRel=0.0)
+  for cycle in range(2):
+    plan = base_plan(a_target=0.4, should_stop=True)
+    plan.speeds = np.linspace(0.0, 2.0, 17).tolist()
+    arbitrator.apply(plan, green, NOW_NS + cycle * 50_000_000)
+  assert not plan.shouldStop
+
+
 def test_confirmed_red_builds_a_bounded_complete_stop_plan():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   plan = base_plan()

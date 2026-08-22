@@ -12,7 +12,8 @@ TRAFFIC_CONTROL_ADDRESS = 0x25D
 # another logical bus: identical IDs may carry different semantics.
 TRAFFIC_CONTROL_BUSES = (2,)
 TRAFFIC_CONTROL_MIN_DLC = 6
-TRAFFIC_CONTROL_STALE_NS = 250_000_000
+TRAFFIC_CONTROL_STALE_NS = 750_000_000
+TRAFFIC_CONTROL_MAX_DISTANCE = 200.0
 
 
 @dataclass(frozen=True)
@@ -65,46 +66,12 @@ class TeslaTrafficControlObserver:
 
   @staticmethod
   def _control_eligible(values: dict[str, float], decoded: bool) -> bool:
-    if not decoded:
-      return False
-    feature_state = int(values["APP_tcFeatureState"])
-    state_machine = int(values["APP_tcStateMachine"])
-    control_source = int(values["APP_tcControlSource"])
-    light_state = int(values["APP_tcControlLightState"])
+    # Tesla's feature/state-machine/continuation fields describe its internal
+    # UI/availability state, not a safe STOP/PASS decision. Keep publishing
+    # them for diagnostics, but base control eligibility only on the displayed
+    # traffic-light color and its bounded forward distance.
     distance = float(values["APP_tcControlDistance"])
-    logged_red_aware = feature_state == 0 and light_state == 1 and state_machine == 2
-    # Route 00000032--01039b53db records Tesla's green-to-red transition as
-    # feature-disabled yellow, stateMachine=go, continuation=5. Accept only
-    # this exact vision-backed AP-PARTY signature; broader disabled yellow
-    # states remain observation-only.
-    logged_yellow_transition = bool(
-      feature_state == 0
-      and light_state == 3
-      and state_machine == 6
-      and control_source == 3
-      and int(values["APP_tcContinuationReason"]) == 5
-      and int(values["APP_tcUnavailableReason"]) == 1
-      and bool(values["APP_tcVisionLight"])
-    )
-    state_matches_light = (
-      (light_state == 1 and state_machine in (2, 3, 4, 5)) or
-      (light_state == 3 and state_machine in (3, 4, 5)) or
-      (light_state == 2 and state_machine in (5, 6)) or
-      logged_yellow_transition
-    )
-    # Logged AP-PARTY traffic-light sequences keep featureState disabled while
-    # stateMachine=aware, then report a coherent vision/map red target. Admit
-    # only that narrow combination; all other disabled-feature frames remain
-    # ineligible.
-    feature_matches = feature_state == 3 or logged_red_aware or logged_yellow_transition
-    availability_matches = (
-      int(values["APP_tcUnavailableReason"]) == 0
-      or logged_red_aware
-      or logged_yellow_transition
-    )
-    return (feature_matches and state_matches_light and control_source in (2, 3) and
-            2.0 <= distance < 255.0 and availability_matches and
-            bool(values["APP_tcVisionLight"]))
+    return bool(decoded and 0.0 <= distance <= TRAFFIC_CONTROL_MAX_DISTANCE)
 
   @staticmethod
   def _quality(decoded: bool, eligible: bool) -> int:
@@ -118,7 +85,7 @@ class TeslaTrafficControlObserver:
     control_source = int(values["APP_tcControlSource"])
     light_state = int(values["APP_tcControlLightState"])
     distance = float(values["APP_tcControlDistance"])
-    decoded = control_type == 3 and control_source in (1, 2, 3) and light_state in (1, 2, 3) and distance < 255.0
+    decoded = control_type == 3 and light_state in (0, 1, 2, 3) and distance < 255.0
     eligible = cls._control_eligible(values, decoded)
     return TeslaTrafficControlObservation(
       available=True,
@@ -176,11 +143,29 @@ class TeslaTrafficControlObserver:
     for bus in TRAFFIC_CONTROL_BUSES:
       observation = self.latest_by_bus.get(bus)
       if observation is not None:
+        # Preserve the last raw tuple for diagnostics, while making it
+        # impossible for a stale frame to advance any confirmation counter.
         return TeslaTrafficControlObservation(
+          available=False,
+          valid_for_control=False,
           source_bus=observation.source_bus,
           dlc=observation.dlc,
-          distance=255.0,
+          feature_state=observation.feature_state,
+          state_machine=observation.state_machine,
+          control_source=observation.control_source,
+          control_type=observation.control_type,
+          distance=observation.distance,
+          light_state=observation.light_state,
+          continuation_reason=observation.continuation_reason,
+          confirmation_type=observation.confirmation_type,
+          warning_suppression_reason=observation.warning_suppression_reason,
+          unavailable_reason=observation.unavailable_reason,
+          vision_light=observation.vision_light,
+          vision_sign=observation.vision_sign,
+          vision_road_marking=observation.vision_road_marking,
+          vision_line=observation.vision_line,
           frame_mono_time=observation.frame_mono_time,
+          quality=observation.quality,
         )
     return TeslaTrafficControlObservation()
 

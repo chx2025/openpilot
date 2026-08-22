@@ -67,9 +67,9 @@ class ReplaySubMaster:
 @pytest.mark.parametrize(
   ("route_name", "expected_present", "minimum_suppressed"),
   [
-    ("00000009--72ea96171f--1", 42, 0),
-    ("00000009--72ea96171f--2", 64, 0),
-    ("00000009--72ea96171f--4", 6, 50),
+    ("00000009--72ea96171f--1", 165, 0),
+    ("00000009--72ea96171f--2", 79, 0),
+    ("00000009--72ea96171f--4", 19, 50),
   ],
 )
 def test_recorded_traffic_candidates_replay_deterministically(route_name, expected_present, minimum_suppressed):

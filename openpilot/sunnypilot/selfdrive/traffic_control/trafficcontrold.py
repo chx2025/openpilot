@@ -19,7 +19,7 @@ def read_source_config(params: Params) -> tuple[TrafficControlConfig, TrafficRad
   try:
     reference = float(np.clip(float(reference_dm) / 10.0, 2.0, 12.0))
   except (TypeError, ValueError):
-    reference = 6.0
+    reference = 5.0
   try:
     max_control_speed = float(np.clip(float(max_speed_kph), 20.0, 120.0)) / 3.6
   except (TypeError, ValueError):
