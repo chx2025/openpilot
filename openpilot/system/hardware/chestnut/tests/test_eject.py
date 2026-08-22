@@ -1,10 +1,12 @@
 import os
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from openpilot.system.hardware.chestnut import eject
 from openpilot.system.hardware.chestnut.ejector import ChestnutEjector
+from openpilot.common.basedir import BASEDIR
 
 
 class FakeParams:
@@ -83,6 +85,87 @@ def test_ejector_rejects_onroad_request():
   assert not params.get_bool("UsbGpuEjectRequest")
 
 
+def test_ejector_runs_project_f3_poweroff_script(monkeypatch):
+  params = FakeParams()
+  captured = {}
+  report = {
+    "schema": "ut3g-safe-f3-poweroff-v1",
+    "state": "f3-powered-off",
+    "f3_writes": 1,
+    "persistent_writes": 0,
+    "safe_to_cut_external_power": True,
+  }
+
+  def run(command, **kwargs):
+    captured["command"] = command
+    captured["kwargs"] = kwargs
+    return SimpleNamespace(returncode=0, stdout=json.dumps(report))
+
+  monkeypatch.setattr("openpilot.system.hardware.chestnut.ejector.subprocess.run", run)
+  ChestnutEjector(params).eject()
+
+  assert captured["command"] == [
+    "sudo", "env", f"PYTHONPATH={BASEDIR}/tinygrad_repo", "/usr/local/venv/bin/python", "-u",
+    f"{BASEDIR}/tools/ut3g_safe_f3_poweroff.py",
+  ]
+  assert params.get("UsbGpuEjectStatus") == "safe"
+  assert params.get("UsbGpuEjectError") is None
+
+
+def test_ejector_rejects_success_exit_without_safe_f3_report(monkeypatch):
+  params = FakeParams()
+  report = {
+    "schema": "ut3g-safe-f3-poweroff-v1",
+    "state": "f3-powered-off",
+    "f3_writes": 1,
+    "persistent_writes": 0,
+    "safe_to_cut_external_power": False,
+  }
+  ret = SimpleNamespace(returncode=0, stdout=json.dumps(report))
+  monkeypatch.setattr("openpilot.system.hardware.chestnut.ejector.subprocess.run", lambda *args, **kwargs: ret)
+
+  ChestnutEjector(params).eject()
+
+  assert params.get("UsbGpuEjectStatus") == "error"
+  assert "safe_to_cut_external_power" in params.get("UsbGpuEjectError")
+
+
+def test_ejector_rejects_report_with_persistent_writes(monkeypatch):
+  params = FakeParams()
+  report = {
+    "schema": "ut3g-safe-f3-poweroff-v1",
+    "state": "f3-powered-off",
+    "f3_writes": 1,
+    "persistent_writes": 1,
+    "safe_to_cut_external_power": True,
+  }
+  ret = SimpleNamespace(returncode=0, stdout=json.dumps(report))
+  monkeypatch.setattr("openpilot.system.hardware.chestnut.ejector.subprocess.run", lambda *args, **kwargs: ret)
+
+  ChestnutEjector(params).eject()
+
+  assert params.get("UsbGpuEjectStatus") == "error"
+  assert "persistent_writes" in params.get("UsbGpuEjectError")
+
+
+def test_ejector_rejects_unknown_poweroff_state(monkeypatch):
+  params = FakeParams()
+  report = {
+    "schema": "ut3g-safe-f3-poweroff-v1",
+    "state": "unknown",
+    "f3_writes": 0,
+    "persistent_writes": 0,
+    "safe_to_cut_external_power": True,
+  }
+  ret = SimpleNamespace(returncode=0, stdout=json.dumps(report))
+  monkeypatch.setattr("openpilot.system.hardware.chestnut.ejector.subprocess.run", lambda *args, **kwargs: ret)
+
+  ChestnutEjector(params).eject()
+
+  assert params.get("UsbGpuEjectStatus") == "error"
+  assert "state" in params.get("UsbGpuEjectError")
+
+
 def test_safe_status_clears_only_after_disconnect_and_5gbps_return():
   params = FakeParams({"UsbGpuEjectStatus": "safe"})
   ejector = ChestnutEjector(params)
@@ -99,7 +182,7 @@ def test_safe_status_clears_only_after_disconnect_and_5gbps_return():
   assert params.get("UsbGpuEjectStatus") is None
 
 
-def test_late_disconnect_converges_timeout_error_to_safe(monkeypatch):
+def test_disconnect_never_overrides_missing_safe_f3_report(monkeypatch):
   params = FakeParams()
   ejector = ChestnutEjector(params)
   ret = SimpleNamespace(returncode=eject.DETACH_PENDING_EXIT_CODE, stdout="eGPU detach is still pending")
@@ -109,8 +192,8 @@ def test_late_disconnect_converges_timeout_error_to_safe(monkeypatch):
   assert params.get("UsbGpuEjectStatus") == "error"
 
   ejector.update(True, [])
-  assert params.get("UsbGpuEjectStatus") == "safe"
-  assert params.get("UsbGpuEjectError") is None
+  assert params.get("UsbGpuEjectStatus") == "error"
+  assert params.get("UsbGpuEjectError") == "eGPU detach is still pending"
 
 
 def test_non_pending_error_does_not_converge_to_safe(monkeypatch):
