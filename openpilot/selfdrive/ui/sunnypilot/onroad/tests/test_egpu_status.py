@@ -4,7 +4,21 @@ from openpilot.selfdrive.ui.egpu_status import (
   classify_egpu_link_state,
   egpu_icon_visible,
   egpu_panel_style,
+  resolve_egpu_connection,
 )
+
+
+class FakeDeviceState:
+  def __init__(self, present: bool):
+    self.chestnutPresent = present
+
+
+def test_physical_disconnect_immediately_clears_egpu_connection():
+  device_state = FakeDeviceState(True)
+  assert resolve_egpu_connection(device_state)
+
+  device_state.chestnutPresent = False
+  assert not resolve_egpu_connection(device_state)
 
 
 def test_connected_egpu_icon_stays_visible_onroad():

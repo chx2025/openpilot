@@ -11,7 +11,9 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
-from openpilot.selfdrive.ui.egpu_status import build_egpu_sidebar_status, chestnut_usb_speed_mbps, classify_egpu_link_state
+from openpilot.selfdrive.ui.egpu_status import (
+  build_egpu_sidebar_status, chestnut_usb_speed_mbps, classify_egpu_link_state, resolve_egpu_connection,
+)
 
 
 METRIC_HEIGHT = 126
@@ -65,7 +67,7 @@ class SidebarSP:
     self._egpu_detail = "未检测到 eGPU USB 设备"
 
   def _update_egpu_status(self):
-    present = bool(ui_state.sm["deviceState"].chestnutPresent)
+    present = resolve_egpu_connection(ui_state.sm["deviceState"])
     eject_status = ui_state.params.get("UsbGpuEjectStatus")
     speed_mbps = chestnut_usb_speed_mbps(ui_state.sm["deviceState"])
     telemetry = ui_state.sm["chestnutState"]
@@ -113,7 +115,7 @@ class SidebarSP:
       gui_app.push_widget(ConfirmDialog(f"{self._egpu_detail}\neGPU · OFFROAD · {tr('REMOVE')}", tr("OK"), cancel_text=""))
       return True
 
-    present = bool(ui_state.sm["deviceState"].chestnutPresent)
+    present = resolve_egpu_connection(ui_state.sm["deviceState"])
     status = ui_state.params.get("UsbGpuEjectStatus")
     if not present:
       gui_app.push_widget(ConfirmDialog(self._egpu_detail, tr("OK"), cancel_text=""))

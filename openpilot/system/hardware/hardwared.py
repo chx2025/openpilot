@@ -20,7 +20,7 @@ from openpilot.selfdrive.modeld.helpers import MODELS_DIR, usbgpu_compiled
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.common.hardware import HARDWARE, COMMA_HARDWARE
 from openpilot.common.basedir import BASEDIR
-from openpilot.common.hardware.usb import CHESTNUT_FW_VERSION, CHESTNUT_ROM_USB_IDS, CHESTNUT_USB_IDS, get_usb_state, get_usb_topology, set_usb_state
+from openpilot.common.hardware.usb import CHESTNUT_FW_VERSION, CHESTNUT_ROM_USB_IDS, CHESTNUT_USB_IDS, get_usb_state, set_usb_state
 from openpilot.common.linux import LinuxSystemStats
 from openpilot.system.loggerd.config import get_available_percent
 from openpilot.common.swaglog import cloudlog
@@ -81,6 +81,26 @@ class Chestnut:
 ThermalBand = namedtuple("ThermalBand", ['min_temp', 'max_temp'])
 HardwareState = namedtuple("HardwareState", ['network_type', 'network_info', 'network_strength', 'network_stats',
                                              'network_metered', 'modem_temps', 'usb_state'])
+
+
+def put_latest(state_queue: queue.Queue, state) -> None:
+  """Publish latest-value state without allowing a stale queued sample to win."""
+  try:
+    state_queue.put_nowait(state)
+    return
+  except queue.Full:
+    pass
+
+  try:
+    state_queue.get_nowait()
+  except queue.Empty:
+    pass
+
+  try:
+    state_queue.put_nowait(state)
+  except queue.Full:
+    # The consumer and another producer raced us; that producer is at least as new.
+    pass
 
 # List of thermal bands. We will stay within this region as long as we are within the bounds.
 # When exiting the bounds, we'll jump to the lower or higher band. Bands are ordered in the dict.
@@ -149,15 +169,14 @@ def hw_state_thread(end_event, hw_queue):
   """Handles non critical hardware state, and sends over queue"""
   count = 0
   prev_hw_state = None
-  prev_usb_topology = set()
 
   while not end_event.is_set():
-    usb_topology = get_usb_topology()
-    usb_changed = usb_topology != prev_usb_topology
-
-    # these are expensive calls. update every 10s or when USB devices change
-    if (count % int(10. / DT_HW)) == 0 or usb_changed:
-      prev_usb_topology = usb_topology
+    # USB state is cheap and user-visible, so sample it every cycle. Network and
+    # modem queries remain on the slower 10 second cadence.
+    usb_state = get_usb_state()
+    refresh_network = prev_hw_state is None or (count % int(10. / DT_HW)) == 0
+    next_hw_state = None
+    if refresh_network:
       try:
         network_type = HARDWARE.get_network_type()
         modem_temps = HARDWARE.get_modem_temperatures()
@@ -166,24 +185,25 @@ def hw_state_thread(end_event, hw_queue):
 
         tx, rx = HARDWARE.get_modem_data_usage()
 
-        hw_state = HardwareState(
+        next_hw_state = HardwareState(
           network_type=network_type,
           network_info=HARDWARE.get_network_info(),
           network_strength=HARDWARE.get_network_strength(network_type),
           network_stats={'wwanTx': tx, 'wwanRx': rx},
           network_metered=HARDWARE.get_network_metered(network_type),
           modem_temps=modem_temps,
-          usb_state=get_usb_state(),
+          usb_state=usb_state,
         )
-
-        try:
-          hw_queue.put_nowait(hw_state)
-        except queue.Full:
-          pass
-
-        prev_hw_state = hw_state
       except Exception:
         cloudlog.exception("Error getting hardware state")
+        if prev_hw_state is not None and usb_state != prev_hw_state.usb_state:
+          next_hw_state = prev_hw_state._replace(usb_state=usb_state)
+    elif usb_state != prev_hw_state.usb_state:
+      next_hw_state = prev_hw_state._replace(usb_state=usb_state)
+
+    if next_hw_state is not None:
+      put_latest(hw_queue, next_hw_state)
+      prev_hw_state = next_hw_state
 
     count += 1
     time.sleep(DT_HW)

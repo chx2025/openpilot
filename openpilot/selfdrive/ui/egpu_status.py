@@ -84,6 +84,11 @@ def egpu_icon_visible(*, connected: bool) -> bool:
   return connected
 
 
+def resolve_egpu_connection(device_state) -> bool:
+  """Return the current physical Chestnut USB presence without trip latching."""
+  return bool(device_state.chestnutPresent)
+
+
 def egpu_panel_style(*, compact: bool) -> EgpuPanelStyle:
   return EgpuPanelStyle(
     font_size=48,
@@ -143,7 +148,7 @@ def draw_egpu_status_panel(rect: rl.Rectangle, font: rl.Font, *, compact: bool) 
   from openpilot.selfdrive.ui.ui_state import ui_state
 
   sm = ui_state.sm
-  connected = bool(sm["deviceState"].chestnutPresent or ui_state.usbgpu)
+  connected = resolve_egpu_connection(sm["deviceState"])
   model_seen = sm.recv_frame["modelV2"] > ui_state.started_frame
   model_alive = bool(model_seen and sm.alive["modelV2"])
   model_big = bool(model_alive and sm["modelV2"].big)

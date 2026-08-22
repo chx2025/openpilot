@@ -3,6 +3,8 @@ import time
 
 from openpilot.cereal import log
 import pyray as rl
+
+from openpilot.selfdrive.ui.egpu_status import resolve_egpu_connection
 from collections.abc import Callable
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.layouts import HBoxLayout
@@ -248,8 +250,9 @@ class MiciHomeLayout(Widget):
 
     # ***** Center-aligned bottom section icons *****
     self._experimental_icon.set_visible(ui_state.experimental_mode)
-    self._egpu_icon.set_visible(ui_state.sm["deviceState"].chestnutPresent and ui_state.usbgpu_compiled)
-    self._egpu_icon_gray.set_visible(ui_state.sm["deviceState"].chestnutPresent and not ui_state.usbgpu_compiled)
+    egpu_connected = resolve_egpu_connection(ui_state.sm["deviceState"])
+    self._egpu_icon.set_visible(egpu_connected and ui_state.usbgpu_compiled)
+    self._egpu_icon_gray.set_visible(egpu_connected and not ui_state.usbgpu_compiled)
     self._mic_icon.set_visible(ui_state.recording_audio)
     self._body_icon.set_visible(bool(ui_state.is_body))
 

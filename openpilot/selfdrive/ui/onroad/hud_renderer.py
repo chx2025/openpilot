@@ -2,7 +2,7 @@ import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
-from openpilot.selfdrive.ui.egpu_status import draw_egpu_status_panel, egpu_icon_visible
+from openpilot.selfdrive.ui.egpu_status import draw_egpu_status_panel, egpu_icon_visible, resolve_egpu_connection
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
@@ -127,7 +127,7 @@ class HudRenderer(Widget):
     self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
 
   def _draw_egpu_icon(self, rect: rl.Rectangle) -> None:
-    if not egpu_icon_visible(connected=bool(ui_state.sm["deviceState"].chestnutPresent)):
+    if not egpu_icon_visible(connected=resolve_egpu_connection(ui_state.sm["deviceState"])):
       return
     icon = self._egpu_icon_green if ui_state.usbgpu_active is True else self._egpu_icon_orange
     rl.draw_texture_ex(

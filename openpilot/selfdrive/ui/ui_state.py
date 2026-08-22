@@ -14,6 +14,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.hardware import HARDWARE, PC
 from openpilot.common.hardware.hw import Paths
 from openpilot.selfdrive.modeld.helpers import usbgpu_compiled
+from openpilot.selfdrive.ui.egpu_status import resolve_egpu_connection
 from openpilot.sunnypilot.models.artifact_status import bundle_artifacts_ready
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 
@@ -228,8 +229,7 @@ class UIState(UIStateSP):
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
     self.experimental_mode_confirmed = self.params.get_bool("ExperimentalModeConfirmed")
-    # keep usbgpu UI active until offroad transition when gpu disappears
-    self.usbgpu = self.sm["deviceState"].chestnutPresent or (self.usbgpu and self.started)
+    self.usbgpu = resolve_egpu_connection(self.sm["deviceState"])
     if not self.usbgpu_compiled:
       self.usbgpu_compiled = _usbgpu_model_ready(self.params)
     self.usbgpu_active = self.params.get("UsbGpuActive")
