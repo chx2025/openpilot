@@ -3,7 +3,7 @@ import hashlib
 from openpilot.cereal import custom
 from openpilot.common.hardware.hw import Paths
 from openpilot.sunnypilot.models.default_model import get_default_model
-from openpilot.sunnypilot.models.helpers import get_active_model_runner, select_default_model, validate_active_bundle
+from openpilot.sunnypilot.models.helpers import get_active_model_runner, select_default_model, usbgpu_model_ready, validate_active_bundle
 
 
 class FakeParams:
@@ -123,3 +123,26 @@ def test_usbgpu_model_uses_selected_runner_when_hardware_returns():
 
   assert runner == custom.ModelManagerSP.Runner.tinygrad
   assert params.get("ModelRunnerTypeCache") == int(custom.ModelManagerSP.Runner.tinygrad)
+
+
+def test_downloaded_usbgpu_bundle_satisfies_model_readiness(monkeypatch, tmp_path):
+  model_data = b"compiled USBGPU model"
+  model_name = "driving_lebowski_tinygrad.pkl"
+  (tmp_path / model_name).write_bytes(model_data)
+  monkeypatch.setattr(Paths, "model_root", staticmethod(lambda: str(tmp_path)))
+  monkeypatch.setattr("openpilot.sunnypilot.models.helpers.usbgpu_compiled", lambda: False)
+  params = FakeParams({
+    "ModelManager_ActiveBundle": {
+      "internalName": "LM",
+      "models": [{
+        "artifact": {
+          "fileName": model_name,
+          "downloadUri": {"sha256": hashlib.sha256(model_data).hexdigest()},
+        },
+      }],
+      "runner": "tinygrad",
+      "minimumSelectorVersion": 17,
+    },
+  })
+
+  assert usbgpu_model_ready(params)

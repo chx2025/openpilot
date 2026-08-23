@@ -16,6 +16,8 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.models.constants import Meta, MetaSimPose, MetaTombRaider
 from openpilot.common.hardware.hw import Paths
+from openpilot.selfdrive.modeld.helpers import usbgpu_compiled
+from openpilot.sunnypilot.models.artifact_status import bundle_artifacts_ready
 
 # SET ME TO THE EXACT JSON VERSION WE SET IN SUNNYPILOT_MODELS REPO
 REQUIRED_JSON_VERSION = 17
@@ -139,6 +141,15 @@ def get_active_bundle(params: Params | None = None, raw_bundle_dict: dict | byte
   except Exception:
     pass
   return None
+
+
+def usbgpu_model_ready(params: Params | None = None) -> bool:
+  if usbgpu_compiled():
+    return True
+  params = params or Params()
+  bundle = get_active_bundle(params)
+  return bool(bundle is not None and bundle.runner == custom.ModelManagerSP.Runner.tinygrad and
+              bundle_artifacts_ready(bundle, Paths.model_root()))
 
 
 def get_active_model_runner(params: Params | None = None, force_check: bool = False,

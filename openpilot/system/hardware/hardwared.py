@@ -16,7 +16,7 @@ from openpilot.common.utils import strip_deprecated_keys
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_HW
-from openpilot.selfdrive.modeld.helpers import MODELS_DIR, usbgpu_compiled
+from openpilot.sunnypilot.models.helpers import usbgpu_model_ready
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.common.hardware import HARDWARE, COMMA_HARDWARE
 from openpilot.common.basedir import BASEDIR
@@ -261,7 +261,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   fan_controller = FanController(int(1./DT_HW))
   chestnut = Chestnut()
   chestnut_ejector = ChestnutEjector(params)
-  big_model_available = (MODELS_DIR / 'big_driving_supercombo.onnx').is_file() or usbgpu_compiled()
+  big_model_available = usbgpu_model_ready(params)
 
   while not end_event.is_set():
     sm.update(PANDA_STATES_TIMEOUT)
