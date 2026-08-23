@@ -53,6 +53,7 @@ class TrafficControlConfig:
   yellow_pass_decel: float = 3.0
   flash_interval_min_s: float = 0.5
   flash_interval_max_s: float = 1.5
+  far_candidate_confirm_s: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ class TeslaTrafficControlController:
     self.event_continuous = False
     self.candidate_color = 0
     self.candidate_count = 0
+    self.candidate_first_ns = 0
     self.candidate_last_ns = 0
     self.candidate_distance = 0.0
     self.candidate_ego_station = 0.0
@@ -121,6 +123,7 @@ class TeslaTrafficControlController:
     self.pending_ego_station = 0.0
     self.pending_color = 0
     self.pending_count = 0
+    self.pending_first_ns = 0
     self.green_count = 0
     self.first_off_ns = 0
     self.green_between_off = False
@@ -170,6 +173,7 @@ class TeslaTrafficControlController:
     self.event_continuous = False
     self.candidate_color = 0
     self.candidate_count = 0
+    self.candidate_first_ns = 0
     self.candidate_last_ns = 0
     self.candidate_distance = 0.0
     self.candidate_ego_station = self.ego_station
@@ -177,6 +181,7 @@ class TeslaTrafficControlController:
     self.pending_ego_station = self.ego_station
     self.pending_color = 0
     self.pending_count = 0
+    self.pending_first_ns = 0
     self.green_count = 0
     self.first_off_ns = 0
     self.green_between_off = False
@@ -329,7 +334,22 @@ class TeslaTrafficControlController:
       self.green_between_off = False
     return False
 
-  def _update_candidate(self, observation: TeslaTrafficControlObservation) -> bool:
+  def _far_stop_candidate(self, observation: TeslaTrafficControlObservation, v_ego: float) -> bool:
+    if observation.light_state not in (1, 3):
+      return False
+    usable_distance = max(observation.distance - self.stop_reference, 0.5)
+    required_decel = v_ego ** 2 / (2.0 * usable_distance)
+    return required_decel < 0.5
+
+  def _candidate_confirmed(self, observation: TeslaTrafficControlObservation, v_ego: float,
+                           count: int, first_ns: int) -> bool:
+    if count < 2:
+      return False
+    if not self._far_stop_candidate(observation, v_ego):
+      return True
+    return observation.frame_mono_time - first_ns >= int(self.config.far_candidate_confirm_s * 1e9)
+
+  def _update_candidate(self, observation: TeslaTrafficControlObservation, v_ego: float) -> bool:
     expected = max(0.0, self.candidate_distance - (self.ego_station - self.candidate_ego_station))
     same = bool(
       self.candidate_count > 0
@@ -342,12 +362,15 @@ class TeslaTrafficControlController:
     else:
       self.candidate_color = observation.light_state
       self.candidate_count = 1
+      self.candidate_first_ns = observation.frame_mono_time
     self.candidate_distance = observation.distance
     self.candidate_ego_station = self.ego_station
     self.candidate_last_ns = observation.frame_mono_time
-    return self.candidate_count >= 2
+    return self._candidate_confirmed(
+      observation, v_ego, self.candidate_count, self.candidate_first_ns,
+    )
 
-  def _pending_replacement_confirmed(self, observation: TeslaTrafficControlObservation) -> bool:
+  def _pending_replacement_confirmed(self, observation: TeslaTrafficControlObservation, v_ego: float) -> bool:
     expected = max(0.0, self.pending_distance - (self.ego_station - self.pending_ego_station))
     same = bool(
       self.pending_count > 0
@@ -355,10 +378,14 @@ class TeslaTrafficControlController:
       and abs(observation.distance - expected) <= self._distance_tolerance(observation.distance, expected)
     )
     self.pending_count = self.pending_count + 1 if same else 1
+    if not same:
+      self.pending_first_ns = observation.frame_mono_time
     self.pending_distance = observation.distance
     self.pending_ego_station = self.ego_station
     self.pending_color = observation.light_state
-    return self.pending_count >= 2
+    return self._candidate_confirmed(
+      observation, v_ego, self.pending_count, self.pending_first_ns,
+    )
 
   def update(self, observation: TeslaTrafficControlObservation, now_ns: int, *, v_ego: float, a_ego: float,
              model_stop_distance: float | None, model_stop_candidate: bool,
@@ -418,6 +445,7 @@ class TeslaTrafficControlController:
     if (self.phase not in (*self.ACTIVE_PHASES, TrafficControlPhase.release)
         and v_ego > self.config.max_control_speed):
       self.candidate_count = 0
+      self.candidate_first_ns = 0
       self.phase = TrafficControlPhase.off
       return self._decision()
 
@@ -430,6 +458,7 @@ class TeslaTrafficControlController:
         if self.candidate_last_ns and now_ns - self.candidate_last_ns > int(self.config.candidate_dropout_s * 1e9):
           self.phase = TrafficControlPhase.off
           self.candidate_count = 0
+          self.candidate_first_ns = 0
       if v_ego < 0.3 and self.phase in self.ACTIVE_PHASES and self._hold_distance_consistent():
         self.phase = TrafficControlPhase.hold
       return self._decision()
@@ -470,8 +499,9 @@ class TeslaTrafficControlController:
     if not same_track and self.phase in self.ACTIVE_PHASES:
       # Adjacent signals frequently share the same CAN stream. A single
       # discontinuous tuple cannot replace or release the current event.
-      # Only a motion-consistent two-frame red/yellow trajectory is promoted.
-      replace = observation.light_state in (1, 3) and self._pending_replacement_confirmed(observation)
+      # Only a motion-consistent red/yellow trajectory is promoted; distant,
+      # low-urgency replacements additionally need the configured dwell time.
+      replace = observation.light_state in (1, 3) and self._pending_replacement_confirmed(observation, v_ego)
       if not replace:
         self.last_real_color = observation.light_state
         return self._decision()
@@ -484,10 +514,12 @@ class TeslaTrafficControlController:
       self.stop_reconfirm_required = False
       self.stop_reconfirm_count = 0
       self.pending_count = 0
+      self.pending_first_ns = 0
       self.last_real_color = observation.light_state
       return self._decision()
     if same_track:
       self.pending_count = 0
+      self.pending_first_ns = 0
 
     if self.stop_reconfirm_required and not self.stop_direction_unknown:
       if observation.light_state in (1, 3):
@@ -507,7 +539,7 @@ class TeslaTrafficControlController:
       return self._decision()
 
     color = observation.light_state
-    confirmed = self._update_candidate(observation)
+    confirmed = self._update_candidate(observation, v_ego)
 
     if self.phase in self.ACTIVE_PHASES:
       if self.flash_latched:

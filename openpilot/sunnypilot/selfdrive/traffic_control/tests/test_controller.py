@@ -70,6 +70,58 @@ def test_two_hz_high_speed_red_candidate_compensates_ego_motion():
   assert c.event_id == 1
 
 
+def test_far_low_urgency_red_requires_half_second_continuous_evidence():
+  c = controller()
+  first = update(c, 1.00, observation(199.0, 1, 1.00), v_ego=13.5)
+  second = update(c, 1.05, observation(198.3, 1, 1.05), v_ego=13.5)
+  third = update(c, 1.17, observation(196.7, 1, 1.17), v_ego=13.5)
+  expired = update(c, 1.28, observation(196.7, 0, 1.28), v_ego=13.5)
+
+  assert first.phase == TrafficControlPhase.redCandidate
+  assert second.phase == TrafficControlPhase.redCandidate
+  assert third.phase == TrafficControlPhase.redCandidate
+  assert expired.phase == TrafficControlPhase.off
+  assert c.event_id == 0
+  assert c.stop_session_id == 0
+
+
+def test_far_low_urgency_red_confirms_after_half_second():
+  c = controller()
+  update(c, 1.0, observation(190.0, 1, 1.0), v_ego=10.0)
+  update(c, 1.1, observation(189.0, 1, 1.1), v_ego=10.0)
+  decision = update(c, 1.5, observation(185.0, 1, 1.5), v_ego=10.0)
+
+  assert decision.phase in c.ACTIVE_PHASES
+  assert c.event_id == 1
+
+
+def test_near_urgent_red_still_confirms_in_two_frames():
+  c = controller()
+  first = update(c, 1.0, observation(45.0, 1, 1.0), v_ego=15.0)
+  second = update(c, 1.1, observation(43.5, 1, 1.1), v_ego=15.0)
+
+  assert first.phase == TrafficControlPhase.redCandidate
+  assert second.phase in c.ACTIVE_PHASES
+  assert c.event_id == 1
+
+
+def test_far_low_urgency_replacement_requires_half_second_continuous_evidence():
+  c = controller()
+  establish_red(c, distance=35.0, speed=5.0)
+  original_event = c.event_id
+  original_session = c.stop_session_id
+
+  update(c, 2.0, observation(190.0, 1, 2.0), v_ego=10.0)
+  early = update(c, 2.1, observation(189.0, 1, 2.1), v_ego=10.0)
+  assert c.event_id == original_event
+  assert c.stop_session_id == original_session
+
+  confirmed = update(c, 2.5, observation(185.0, 1, 2.5), v_ego=10.0)
+  assert c.event_id == original_event + 1
+  assert c.stop_session_id == original_session
+  assert confirmed.phase in c.ACTIVE_PHASES
+
+
 def test_internal_tesla_state_fields_do_not_change_color_decision():
   c = controller()
   update(c, 1.0, observation(50, 1, 1.0, feature_state=0, state_machine=6))

@@ -12,6 +12,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import (
   traffic_action_text,
   traffic_card_rect,
 )
+from openpilot.selfdrive.ui.egpu_status import egpu_panel_style
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
 
 
@@ -108,9 +109,12 @@ def test_view_model_exposes_direction_shadow_and_driver_override():
 def test_card_is_below_max_speed_and_speed_limit_stack():
   card = traffic_card_rect(rl.Rectangle(0, 0, 2160, 1080))
   assert card.x == 46
-  assert card.y == 440
-  assert card.width == 438
+  assert card.y == 427
+  assert card.width == 520
   assert card.y > 425  # optional speed-limit-ahead panel bottom
+  egpu_style = egpu_panel_style(compact=False)
+  egpu_top = 1080 - egpu_style.bottom_gap - 4 * egpu_style.line_height
+  assert card.y + card.height <= egpu_top - 4
 
 
 @pytest.mark.parametrize(("kwargs", "expected"), ACTION_CASES)
@@ -140,7 +144,7 @@ def test_all_english_action_labels_fit_the_card_at_render_size():
     "Signal detected · monitoring",
     "Traffic signals · monitoring",
   }
-  available_width = TRAFFIC_CARD_WIDTH - 82.0
+  available_width = TRAFFIC_CARD_WIDTH - 92.0
   for label in labels:
-    width = sum(metrics[cmap.get(ord(char), ".notdef")][0] for char in label) / units_per_em * 25.0
+    width = sum(metrics[cmap.get(ord(char), ".notdef")][0] for char in label) / units_per_em * 30.0
     assert width <= available_width, f"{label!r} is {width:.1f}px wide; available width is {available_width:.1f}px"

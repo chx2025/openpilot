@@ -21,14 +21,14 @@ CARD = rl.Color(12, 15, 19, 210)
 BORDER = rl.Color(255, 255, 255, 38)
 TEXT = rl.Color(245, 247, 250, 255)
 MUTED = rl.Color(190, 197, 205, 255)
-TRAFFIC_CARD_WIDTH = 438.0
+TRAFFIC_CARD_WIDTH = 520.0
 TRAFFIC_CARD_HEIGHT = 124.0
 
 
 def traffic_card_rect(rect: rl.Rectangle) -> rl.Rectangle:
   return rl.Rectangle(
     rect.x + 46.0,
-    rect.y + UI_CONFIG.header_height + 140.0,
+    rect.y + UI_CONFIG.header_height + 127.0,
     TRAFFIC_CARD_WIDTH,
     TRAFFIC_CARD_HEIGHT,
   )
@@ -158,25 +158,25 @@ class TrafficControlRenderer(Widget):
     rl.draw_rectangle_rounded(card, 0.28, 12, CARD)
     rl.draw_rectangle_rounded_lines_ex(card, 0.28, 12, 2, BORDER)
 
-    housing = rl.Rectangle(x + 14, y + 17, 40, 90)
+    housing = rl.Rectangle(x + 14, y + 14, 46, 96)
     rl.draw_rectangle_rounded(housing, 0.45, 10, rl.Color(0, 0, 0, 210))
     colors = (RED, AMBER, GREEN)
     states = (1, 3, 2)
     for index, (color, state) in enumerate(zip(colors, states, strict=True)):
-      center = rl.Vector2(housing.x + housing.width / 2, housing.y + 18 + index * 27)
+      center = rl.Vector2(housing.x + housing.width / 2, housing.y + 20 + index * 28)
       active = self.state.has_signal and self.state.light_state == state
       if self.state.has_signal and self.state.flashing and state == 2:
         active = int(gui_app.frame / max(1, gui_app.target_fps // 2)) % 2 == 0
       if active:
         glow = 3.0 + 2.0 * math.sin(gui_app.frame / max(1, gui_app.target_fps) * math.pi)
         rl.draw_circle_v(center, 10.0 + glow, rl.Color(color.r, color.g, color.b, 42))
-      rl.draw_circle_v(center, 9.0, color if active else LAMP_OFF)
+      rl.draw_circle_v(center, 11.0, color if active else LAMP_OFF)
 
     distance_text = f"{self.state.distance_m:.0f} m" if self.state.has_signal else "-- m"
-    distance_size = 44
-    distance_pos = rl.Vector2(x + 70, y + 14)
+    distance_size = 50
+    distance_pos = rl.Vector2(x + 78, y + 10)
     rl.draw_text_ex(self.font, distance_text, distance_pos, distance_size, 0, TEXT)
 
     detail, detail_color = traffic_action_text(self.state)
-    detail_size = 25
-    rl.draw_text_ex(self.font_regular, detail, rl.Vector2(x + 70, y + 78), detail_size, 0, detail_color)
+    detail_size = 30
+    rl.draw_text_ex(self.font_regular, detail, rl.Vector2(x + 78, y + 76), detail_size, 0, detail_color)

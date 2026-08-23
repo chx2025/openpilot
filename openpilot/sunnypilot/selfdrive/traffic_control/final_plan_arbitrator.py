@@ -49,7 +49,7 @@ class TrafficStartBlockReason(IntEnum):
   unsafeBasePlan = 3
   modelStop = 4
   driverOverride = 5
-  physicalLead = 6  # Reserved for historical logs; active traffic control does not read radarState.
+  physicalLead = 6
   invalidCruise = 7
   alreadyStarted = 8
 
@@ -322,7 +322,7 @@ class FinalPlanArbitrator:
     self.diagnostics.traffic_a_target = traffic_a_target
     self.diagnostics.terminal_catch_active = bool(terminal_stop or (hold and v_ego > 0.01))
 
-  def _start_block_reason(self, sm, traffic) -> TrafficStartBlockReason:
+  def _start_block_reason(self, plan, sm, traffic) -> TrafficStartBlockReason:
     session_id = int(traffic.stopSessionId)
     if session_id == 0:
       return TrafficStartBlockReason.noPreviousHold
@@ -332,6 +332,10 @@ class FinalPlanArbitrator:
       return TrafficStartBlockReason.alreadyStarted
     if not self._driver_allows_start(sm):
       return TrafficStartBlockReason.driverOverride
+    # All longitudinal backends publish this common planner result. When a
+    # lead is present, leave GO entirely to the base follow/stop controller.
+    if bool(plan.hasLead):
+      return TrafficStartBlockReason.physicalLead
     # A same-event OEM CAN green is authoritative over a model/base-plan
     # traffic-stop residue, matching CP's e2eStopped -> e2eCruise transition.
     # Session, driver, direction, cruise, speed, and duration gates remain.
@@ -348,10 +352,11 @@ class FinalPlanArbitrator:
   def _apply_start(self, plan, sm, traffic, now_ns: int) -> bool:
     self.diagnostics.start_requested = True
     session_id = int(traffic.stopSessionId)
-    block_reason = self._start_block_reason(sm, traffic)
+    block_reason = self._start_block_reason(plan, sm, traffic)
     self.diagnostics.start_block_reason = block_reason
     if block_reason != TrafficStartBlockReason.none:
-      if self._active_start_session_id == session_id:
+      if (block_reason != TrafficStartBlockReason.physicalLead
+          and self._active_start_session_id == session_id):
         self._finish_start(session_id)
       return False
 
@@ -399,7 +404,7 @@ class FinalPlanArbitrator:
 
   def _apply_rolling_release(self, plan, sm, traffic, now_ns: int) -> bool:
     self.diagnostics.start_requested = True
-    block_reason = self._start_block_reason(sm, traffic)
+    block_reason = self._start_block_reason(plan, sm, traffic)
     self.diagnostics.start_block_reason = block_reason
     if block_reason != TrafficStartBlockReason.none:
       return False
@@ -569,7 +574,9 @@ class FinalPlanArbitrator:
         self.diagnostics.start_requested = True
         self.diagnostics.start_block_reason = TrafficStartBlockReason.driverOverride
       elif float(sm["carState"].vEgo) > START_MAX_SPEED:
-        self._apply_rolling_release(plan, sm, traffic, now_ns)
+        if not self._apply_rolling_release(plan, sm, traffic, now_ns):
+          self._profile.reset()
+          self._was_stopping = False
       elif not self._apply_start(plan, sm, traffic, now_ns):
         self._profile.reset()
         self._was_stopping = False
