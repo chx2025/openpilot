@@ -2645,3 +2645,103 @@ msgstr[0] "{} 分钟前"
 #: openpilot/selfdrive/ui/widgets/prime.py
 msgid "✓ SUBSCRIBED"
 msgstr "✓ 已订阅"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "No traffic signal"
+msgstr "未检测到红绿灯"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Red detected · brake pending"
+msgstr "检测红灯 · 暂不制动"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Red detected · waiting"
+msgstr "检测红灯 · 等待制动时机"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Red · slowing to stop"
+msgstr "红灯 · 正在减速停车"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Red · holding"
+msgstr "红灯 · 正在停车保持"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · auto start"
+msgstr "绿灯 · 正在自动起步"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · releasing brakes"
+msgstr "绿灯 · 正在解除制动"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · continuing"
+msgstr "绿灯 · 正在继续行驶"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal changing · stopping"
+msgstr "灯色变化 · 正在减速停车"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Direction unclear · monitoring"
+msgstr "方向不确定 · 停车控制仅监测"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Driver override · paused"
+msgstr "驾驶员接管 · 红绿灯控制暂停"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal lost · slowing continues"
+msgstr "信号暂时中断 · 继续减速停车"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal lost · holding stop"
+msgstr "信号暂时中断 · 继续停车保持"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal expired · control idle"
+msgstr "信号过期 · 不新增控制"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · planner control"
+msgstr "检测绿灯 · 由纵向规划控制"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal detected · monitoring"
+msgstr "检测灯色 · 正在监测"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Traffic signals · monitoring"
+msgstr "红绿灯系统 · 正在监测"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Allow the local browser on port 8088 to read and display live SP model and Tesla CAN information."
+msgstr "Allow the local browser on port 8088 to read and display live SP model and Tesla CAN information."
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Allow the local browser to send bounded turn-signal validation frames using fresh OEM templates. Restart after changing."
+msgstr "Allow the local browser to send bounded turn-signal validation frames using fresh OEM templates. Restart after changing."
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Allow the local browser to send one bounded speed-button validation tick using a fresh OEM template. Restart after changing."
+msgstr "Allow the local browser to send one bounded speed-button validation tick using a fresh OEM template. Restart after changing."
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Browser Driving Information"
+msgstr "Browser Driving Information"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Model Status"
+msgstr "Model Status"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/developer.py
+msgid "Store forward road-camera video with each route. Enabled automatically at every system startup; older routes are deleted when storage is low."
+msgstr "Store forward road-camera video with each route. Enabled automatically at every system startup; older routes are deleted when storage is low."
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Tesla Speed Button CAN Test"
+msgstr "Tesla Speed Button CAN Test"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
+msgid "Tesla Turn Signal CAN Test"
+msgstr "Tesla Turn Signal CAN Test"

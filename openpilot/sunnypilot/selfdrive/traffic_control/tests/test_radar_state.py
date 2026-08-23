@@ -49,12 +49,14 @@ def red_light_sm():
   }
 
   class FakeSubMaster:
-    seen = dict.fromkeys(messages, True)
-    alive = dict.fromkeys(messages, True)
-    valid = dict.fromkeys(messages, True)
+    def __init__(self):
+      self.messages = messages
+      self.seen = dict.fromkeys(messages, True)
+      self.alive = dict.fromkeys(messages, True)
+      self.valid = dict.fromkeys(messages, True)
 
     def __getitem__(self, key):
-      return messages[key]
+      return self.messages[key]
 
   return FakeSubMaster()
 
@@ -78,6 +80,79 @@ def test_confirmed_red_is_published_as_a_separate_radar_like_target():
   assert not sm["radarState"].leadTwo.present
 
 
+def test_red_and_green_control_do_not_depend_on_radar_health():
+  sm = red_light_sm()
+  for health in (sm.seen, sm.alive, sm.valid):
+    health.pop("radarState")
+  sm.messages.pop("radarState")
+  sm["carState"].vEgo = 0.0
+  sm["carStateSP"].teslaTrafficControl.distance = 12.0
+  source = TrafficRadarSource(
+    TrafficControlConfig(mode=TrafficControlMode.stopGo),
+    go_policy=TrafficRadarGoPolicy.active,
+  )
+
+  for now_ns in range(100_000_000, 1_100_000_001, 100_000_000):
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    red = source.update(sm, now_ns).trafficRadarState
+
+  assert red.targetPresent
+  assert source.update(sm, 1_100_000_000).valid
+  assert red.stopControlAllowed
+  assert red.controlAllowed
+  assert red.stopSessionId > 0
+
+  sm["carStateSP"].teslaTrafficControl.lightState = 2
+  sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_200_000_000
+  source.update(sm, 1_200_000_000)
+  sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_700_000_000
+  green = source.update(sm, 1_700_000_000).trafficRadarState
+
+  assert green.releaseEligible
+  assert green.plannerStartRequested
+
+
+def test_message_valid_requires_vehicle_and_control_state_but_not_radar():
+  source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+
+  no_radar = red_light_sm()
+  for health in (no_radar.seen, no_radar.alive, no_radar.valid):
+    health.pop("radarState")
+  no_radar.messages.pop("radarState")
+  no_radar["carStateSP"].teslaTrafficControl.frameMonoTime = 100_000_000
+  assert source.update(no_radar, 100_000_000).valid
+
+  bad_car = red_light_sm()
+  bad_car.valid["carState"] = False
+  bad_car["carStateSP"].teslaTrafficControl.frameMonoTime = 200_000_000
+  assert not source.update(bad_car, 200_000_000).valid
+
+  bad_control = red_light_sm()
+  bad_control.alive["carControl"] = False
+  bad_control["carStateSP"].teslaTrafficControl.frameMonoTime = 300_000_000
+  assert not source.update(bad_control, 300_000_000).valid
+
+
+def test_a_published_lead_never_changes_traffic_permissions():
+  clear = red_light_sm()
+  lead = red_light_sm()
+  lead["radarState"].leadOne.present = True
+  lead["radarState"].leadOne.dRel = 8.0
+  clear_source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  lead_source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+
+  for now_ns in range(100_000_000, 1_100_000_001, 100_000_000):
+    clear["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    lead["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    clear_target = clear_source.update(clear, now_ns).trafficRadarState
+    lead_target = lead_source.update(lead, now_ns).trafficRadarState
+
+  assert lead_target.targetPresent == clear_target.targetPresent
+  assert lead_target.controlAllowed == clear_target.controlAllowed
+  assert lead_target.stopControlAllowed == clear_target.stopControlAllowed
+  assert not lead_target.suppressedByPhysicalLead
+
+
 def test_model_turn_direction_downgrades_generic_signal_to_shadow():
   sm = red_light_sm()
   sm["modelDataV2SP"].laneTurnDirection = 1
@@ -88,6 +163,19 @@ def test_model_turn_direction_downgrades_generic_signal_to_shadow():
   assert target.directionUnknown
   assert target.targetPresent
   assert not target.controlAllowed
+
+
+def test_vehicle_blinker_suppresses_only_stop_permission_not_existing_go_permission():
+  sm = red_light_sm()
+  sm["carState"].leftBlinker = True
+  source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  for now_ns in range(0, 1_000_000_001, 100_000_000):
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    target = source.update(sm, now_ns).trafficRadarState
+  assert target.stopDirectionUnknown
+  assert not target.stopControlAllowed
+  assert not target.directionUnknown
+  assert target.controlAllowed
 
 
 def test_stale_observation_keeps_raw_age_and_distance_only_for_diagnostics():
@@ -103,7 +191,18 @@ def test_stale_observation_keeps_raw_age_and_distance_only_for_diagnostics():
   assert target.rawDistance == 80.0
 
 
-def test_real_lead_suppresses_traffic_target_without_being_replaced():
+def test_missing_raw_frame_is_reported_as_expired_not_zero_age():
+  sm = red_light_sm()
+  sm["carStateSP"].teslaTrafficControl.frameMonoTime = 0
+  source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+
+  target = source.update(sm, 1_000_000_000).trafficRadarState
+
+  assert not target.rawObservationFresh
+  assert target.observationAgeMs > 2000.0
+
+
+def test_a_published_lead_is_left_to_the_base_planner():
   sm = red_light_sm()
   source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   for now_ns in range(0, 1_000_000_001, 100_000_000):
@@ -116,17 +215,16 @@ def test_real_lead_suppresses_traffic_target_without_being_replaced():
   sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_100_000_000
   target = source.update(sm, 1_100_000_000).trafficRadarState
 
-  assert not target.controlAllowed
-  assert target.suppressedByPhysicalLead
+  assert target.controlAllowed
+  assert target.stopControlAllowed
+  assert not target.suppressedByPhysicalLead
   assert real_lead.present
   assert real_lead.dRel == 18.0
 
 
-def test_suppressed_red_event_resumes_immediately_after_the_lead_clears():
+def test_lead_message_changes_do_not_change_the_red_event():
   sm = red_light_sm()
-  source = TrafficRadarSource(TrafficControlConfig(
-    mode=TrafficControlMode.stopGo, retain_event_with_lead=True,
-  ))
+  source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   for now_ns in range(0, 1_000_000_001, 100_000_000):
     sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
     confirmed = source.update(sm, now_ns).trafficRadarState
@@ -135,9 +233,10 @@ def test_suppressed_red_event_resumes_immediately_after_the_lead_clears():
   sm["radarState"].leadOne.present = True
   sm["radarState"].leadOne.dRel = 18.0
   sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_100_000_000
-  suppressed = source.update(sm, 1_100_000_000).trafficRadarState
-  assert suppressed.suppressedByPhysicalLead
-  assert suppressed.eventId == event_id
+  with_lead = source.update(sm, 1_100_000_000).trafficRadarState
+  assert not with_lead.suppressedByPhysicalLead
+  assert with_lead.controlAllowed
+  assert with_lead.eventId == event_id
 
   sm["radarState"].leadOne.present = False
   sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_200_000_000
@@ -215,13 +314,13 @@ def test_two_real_can_green_frames_request_cp_style_start():
   assert target.plannerStartRequested
 
 
-def test_can_green_with_a_lead_releases_hold_without_requesting_traffic_start():
+def test_can_green_request_is_independent_of_a_published_lead():
   sm = red_light_sm()
   sm["carState"].vEgo = 0.0
   sm["carStateSP"].teslaTrafficControl.distance = 12.0
   sm["modelV2"].position.x = [6.0] * 33
   source = TrafficRadarSource(
-    TrafficControlConfig(mode=TrafficControlMode.stopGo, retain_event_with_lead=True),
+    TrafficControlConfig(mode=TrafficControlMode.stopGo),
     go_policy=TrafficRadarGoPolicy.active,
   )
   for now_ns in range(0, 1_000_000_001, 100_000_000):
@@ -244,17 +343,17 @@ def test_can_green_with_a_lead_releases_hold_without_requesting_traffic_start():
   target = source.update(sm, 1_600_000_000).trafficRadarState
 
   assert target.phase == 6
-  assert target.suppressedByPhysicalLead
-  assert not target.plannerStartRequested
+  assert not target.suppressedByPhysicalLead
+  assert target.plannerStartRequested
 
 
-def test_cleared_transient_lead_does_not_stick_suppress_same_event_green_start():
+def test_transient_lead_message_does_not_affect_same_event_green_start():
   sm = red_light_sm()
   sm["carState"].vEgo = 0.0
   sm["carStateSP"].teslaTrafficControl.distance = 12.0
   sm["modelV2"].position.x = [6.0] * 33
   source = TrafficRadarSource(
-    TrafficControlConfig(mode=TrafficControlMode.stopGo, retain_event_with_lead=True),
+    TrafficControlConfig(mode=TrafficControlMode.stopGo),
     go_policy=TrafficRadarGoPolicy.active,
   )
   for now_ns in range(0, 1_000_000_001, 100_000_000):
@@ -264,8 +363,9 @@ def test_cleared_transient_lead_does_not_stick_suppress_same_event_green_start()
   sm["radarState"].leadOne.present = True
   sm["radarState"].leadOne.dRel = 25.0
   sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_050_000_000
-  suppressed = source.update(sm, 1_050_000_000).trafficRadarState
-  assert suppressed.suppressedByPhysicalLead
+  unaffected = source.update(sm, 1_050_000_000).trafficRadarState
+  assert not unaffected.suppressedByPhysicalLead
+  assert unaffected.controlAllowed
 
   sm["radarState"].leadOne.present = False
   traffic = sm["carStateSP"].teslaTrafficControl

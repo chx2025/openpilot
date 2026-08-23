@@ -3,9 +3,9 @@
 ## Decision
 
 Official continues to instantiate the upstream planner provider. Its shared MPC
-has only the optional Traffic-target setter and the existing tuning adapter;
-with Traffic Off and the Default profile, explicit fast paths preserve upstream
-inputs and outputs without a floating-point round trip. Experimental and
+retains the existing tuning adapter; with Traffic Off and the Default profile,
+explicit fast paths preserve upstream inputs and outputs without a
+floating-point round trip. Experimental and
 TN-NoDEC restore the final `sp-dev-rs408`/`sp-dev-egpu` planner decision flow:
 the legacy cruise obstacle is solved inside MPC, final arbitration is MPC plus
 the legacy optional E2E candidate, state recursion and acceleration clipping
@@ -24,16 +24,23 @@ engaged would violate the safety-first deployment gate.
 
 Traffic control is produced once by `trafficcontrold` as a typed
 `trafficRadarState`. The message is not `radarState`, is not fed to modeld, and
-does not create or overwrite a physical `leadOne` or `leadTwo`. Each planner may
-include it as an independent obstacle candidate; `lead2` identifies that source
-without making `hasLead` or FCW report a physical vehicle. A current physical
-lead suppresses the Traffic target at both producer and planner boundaries.
+does not create or overwrite a physical `leadOne` or `leadTwo`. The selected
+Official, Experimental, or TN-NoDEC backend first produces its normal base
+plan. `FinalPlanArbitrator` then consumes `trafficRadarState` at the common
+post-planner publish boundary. No planner or MPC contains a Traffic target,
+adapter, or `lead2` injection path.
 
-The direct Stop Profile and Traffic Radar strategies consume the same producer
-event and state machine. A GO request is read only by the longitudinal planner,
-is bounded and deduplicated per event, and never modifies Tesla vehicle state,
-CAN, or other vehicle signals. Traffic Off, Observe, and Shadow are output-
-transparent.
+Traffic control does not subscribe to or gate its state on `radarState`.
+Physical and vision leads remain inputs of the selected base planner, not inputs
+of the traffic-light state machine. A STOP is merged as a more conservative
+post-plan constraint. A confirmed same-session GREEN may apply the bounded,
+time-limited START or rolling-release profile; it does not represent obstacle
+clearance and does not use lead presence as a veto. This is an explicit product
+choice, not an inference that the path is clear.
+
+The GO request is bounded and deduplicated per stop session and never modifies
+Tesla vehicle state, CAN, or other vehicle signals. Traffic Off and Observe are
+output-transparent.
 
 ## Consequences
 
@@ -45,6 +52,8 @@ transparent.
 - Old route output remains the behavioral oracle through target-specific
   Darwin/arm64 and Linux/aarch64 baselines; synthetic convergence and timing
   tests are additional deployment gates.
-- The old fake-`leadTwo` Traffic adapter is forbidden.
+- The old planner adapter, MPC Traffic-target setter, and fake-`leadTwo` path
+  are removed; the post-planner arbitrator is the only longitudinal control
+  seam.
 - The three backend profiles remain independently adjustable and require an
   explicit, lossless configuration migration when their schema changes.

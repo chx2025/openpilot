@@ -22,15 +22,12 @@ class TrafficRadarGoPolicy(IntEnum):
   active = 1
 
 
-class TrafficControlStrategy(IntEnum):
-  stopProfile = 0
-  trafficRadar = 1
-
-
 TRANSITION_REASON_CODES = {
   "": 0,
   "stop_confirmed": 1,
   "driver_bypass": 2,
+  # Values 3 and 4 were used by the former radar/lead gate and remain
+  # reserved so historical eventTransitionReason logs keep their meaning.
   "radar_invalid": 3,
   "lead_present": 4,
   "observation_dropout": 5,
@@ -65,6 +62,9 @@ class TrafficRadarSource:
 
   def update(self, sm, now_ns: int):
     car_state_sp_valid = bool(sm.seen['carStateSP'] and sm.alive['carStateSP'] and sm.valid['carStateSP'])
+    car_state_valid = bool(sm.seen['carState'] and sm.alive['carState'] and sm.valid['carState'])
+    car_control_valid = bool(sm.seen['carControl'] and sm.alive['carControl'] and sm.valid['carControl'])
+    vehicle_inputs_valid = car_state_valid and car_control_valid
     raw_traffic = sm['carStateSP'].teslaTrafficControl if car_state_sp_valid else None
     raw_frame_mono_time = int(raw_traffic.frameMonoTime) if raw_traffic is not None else 0
     raw_distance = float(raw_traffic.distance) if raw_traffic is not None else 255.0
@@ -72,10 +72,6 @@ class TrafficRadarSource:
                    if raw_traffic is not None else TeslaTrafficControlObservation())
     car_state = sm['carState']
     car_control = sm['carControl']
-    radar_valid = bool(sm.seen['radarState'] and sm.alive['radarState'] and sm.valid['radarState'])
-    leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo) if radar_valid else ()
-    present_leads = [lead for lead in leads if lead.present]
-    lead_present = bool(present_leads)
     model_direction_unknown = bool(
       'modelDataV2SP' in sm.seen and sm.seen['modelDataV2SP']
       and sm.alive['modelDataV2SP'] and sm.valid['modelDataV2SP']
@@ -84,23 +80,24 @@ class TrafficRadarSource:
     decision = self.controller.update(
       observation, now_ns, v_ego=float(car_state.vEgo), a_ego=float(car_state.aEgo),
       model_stop_distance=None, model_stop_candidate=False,
-      lead_present=lead_present, radar_valid=radar_valid, enabled=bool(car_control.enabled),
-      long_active=bool(car_control.longActive), gas_pressed=bool(car_state.gasPressed),
+      enabled=bool(vehicle_inputs_valid and car_control.enabled),
+      long_active=bool(vehicle_inputs_valid and car_control.longActive), gas_pressed=bool(car_state.gasPressed),
       brake_pressed=bool(car_state.brakePressed),
       turn_signal_active=bool(car_control.leftBlinker or car_control.rightBlinker or model_direction_unknown),
+      stop_direction_unknown=bool(
+        getattr(car_state, 'leftBlinker', False) or getattr(car_state, 'rightBlinker', False)
+        or car_control.leftBlinker or car_control.rightBlinker or model_direction_unknown
+      ),
     )
 
     active_stop = decision.phase in (
       TrafficControlPhase.approachRed, TrafficControlPhase.braking, TrafficControlPhase.hold,
       TrafficControlPhase.flashingGreenStop, TrafficControlPhase.yellowStop,
     )
-    # Physical radar is a live per-cycle veto, never a sticky event state.
-    # The CAN target remains latched behind a lead and resumes immediately
-    # when radar positively reports that the lead is gone.
-    suppressed_by_physical_lead = lead_present
-    valid_for_control = bool(
-      radar_valid and not suppressed_by_physical_lead and decision.apply_constraint
-    )
+    # Traffic-light control is independent of physical or vision lead sensing.
+    # Only the selected base longitudinal planner interprets lead inputs.
+    valid_for_control = bool(decision.apply_constraint)
+    stop_valid_for_control = bool(decision.stop_control_allowed)
     msg = messaging.new_message('trafficRadarState')
     target = msg.trafficRadarState
     target.targetPresent = bool(active_stop)
@@ -125,7 +122,11 @@ class TrafficRadarSource:
     target.stationInnovation = float(decision.station_innovation)
     target.publishMonoTime = int(now_ns)
     target.controlAllowed = valid_for_control
-    target.suppressedByPhysicalLead = suppressed_by_physical_lead
+    target.stopControlAllowed = stop_valid_for_control
+    target.stopSafetyAllowed = decision.stop_safety_allowed
+    target.rawObservationFresh = decision.raw_observation_fresh
+    target.stopDirectionUnknown = decision.stop_direction_unknown
+    target.suppressedByPhysicalLead = False
     target.shouldStop = bool(decision.should_stop)
     target.plannerStartRequested = bool(
       self.go_policy == TrafficRadarGoPolicy.active and
@@ -143,7 +144,7 @@ class TrafficRadarSource:
     target.eventTransitionSeq = self.controller.transition_seq
     target.rawDistance = raw_distance
     target.observationAgeMs = float(
-      max(0, now_ns - raw_frame_mono_time) / 1e6 if raw_frame_mono_time > 0 else 0.0
+      max(0, now_ns - raw_frame_mono_time) / 1e6 if raw_frame_mono_time > 0 else 1.0e9
     )
-    msg.valid = bool(car_state_sp_valid and radar_valid)
+    msg.valid = bool(car_state_sp_valid and vehicle_inputs_valid)
     return msg

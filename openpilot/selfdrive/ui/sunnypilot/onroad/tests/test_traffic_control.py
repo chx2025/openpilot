@@ -1,12 +1,48 @@
 from types import SimpleNamespace
+from pathlib import Path
 
-from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import TrafficSignalDisplayState
+from fontTools.ttLib import TTFont
+import pyray as rl
+import pytest
+
+import openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control as traffic_control_module
+from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import (
+  TrafficSignalDisplayState,
+  TRAFFIC_CARD_WIDTH,
+  traffic_action_text,
+  traffic_card_rect,
+)
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
+
+
+ACTION_CASES = [
+  ({"quality": 0, "raw_distance": 255}, "No traffic signal"),
+  ({"light": 1, "stop_allowed": False}, "Red detected · brake pending"),
+  ({"light": 1, "stop_allowed": True}, "Red detected · waiting"),
+  ({"light": 1, "applied": True, "action": 1}, "Red · slowing to stop"),
+  ({"light": 1, "applied": True, "action": 2, "should_stop": True}, "Red · holding"),
+  ({"light": 2, "applied": True, "action": 3}, "Green · auto start"),
+  ({"light": 2, "applied": True, "action": 4}, "Green · releasing brakes"),
+  ({"light": 2, "applied": True, "action": 5}, "Green · continuing"),
+  ({"light": 2}, "Green · planner control"),
+  ({"light": 1, "raw_fresh": False}, "Signal expired · control idle"),
+  ({"light": 1, "raw_fresh": False, "applied": True, "action": 1}, "Signal lost · slowing continues"),
+  ({"light": 1, "raw_fresh": False, "applied": True, "action": 2, "should_stop": True}, "Signal lost · holding stop"),
+  ({"light": 2, "raw_fresh": False, "applied": True, "action": 3}, "Green · auto start"),
+  ({"light": 2, "raw_fresh": False, "applied": True, "action": 4}, "Green · releasing brakes"),
+  ({"light": 2, "raw_fresh": False, "applied": True, "action": 5}, "Green · continuing"),
+]
+
+
+@pytest.fixture(autouse=True)
+def identity_translation(monkeypatch):
+  monkeypatch.setattr(traffic_control_module, "tr", lambda text: text)
 
 
 def target(*, light=1, raw_distance=80.0, remaining=35.0, reference=5.0,
            phase=TrafficControlPhase.braking, quality=2, mode=4, applied=False,
-           direction_unknown=False, driver_override=False):
+           direction_unknown=False, driver_override=False, action=0, should_stop=False,
+           raw_fresh=True, stop_allowed=None, stop_direction_unknown=None):
   return SimpleNamespace(
     lightState=light,
     mode=mode,
@@ -14,10 +50,15 @@ def target(*, light=1, raw_distance=80.0, remaining=35.0, reference=5.0,
     applied=applied,
     directionUnknown=direction_unknown,
     driverOverrideActive=driver_override,
+    stopControlAllowed=applied if stop_allowed is None else stop_allowed,
+    rawObservationFresh=raw_fresh,
+    stopDirectionUnknown=(direction_unknown if stop_direction_unknown is None else stop_direction_unknown),
     remainingDistance=remaining,
     stopReference=reference,
     phase=int(phase),
     quality=quality,
+    action=action,
+    shouldStop=should_stop,
   )
 
 
@@ -62,3 +103,44 @@ def test_view_model_exposes_direction_shadow_and_driver_override():
   override = TrafficSignalDisplayState.from_plan(target(driver_override=True))
   assert direction.direction_unknown
   assert override.driver_override_active
+
+
+def test_card_is_below_max_speed_and_speed_limit_stack():
+  card = traffic_card_rect(rl.Rectangle(0, 0, 2160, 1080))
+  assert card.x == 46
+  assert card.y == 440
+  assert card.width == 438
+  assert card.y > 425  # optional speed-limit-ahead panel bottom
+
+
+@pytest.mark.parametrize(("kwargs", "expected"), ACTION_CASES)
+def test_action_text_matches_final_plan_action(kwargs, expected):
+  state = TrafficSignalDisplayState.from_plan(target(**kwargs))
+  assert traffic_action_text(state)[0] == expected
+
+
+def test_applied_go_action_takes_priority_over_stop_only_direction_shadow():
+  state = TrafficSignalDisplayState.from_plan(target(
+    light=2, applied=True, action=3, direction_unknown=False, stop_direction_unknown=True,
+  ))
+  assert traffic_action_text(state)[0] == "Green · auto start"
+
+
+def test_all_english_action_labels_fit_the_card_at_render_size():
+  font_path = Path(__file__).resolve().parents[4] / "assets" / "fonts" / "Inter-Regular.ttf"
+  with TTFont(font_path) as font:
+    cmap = font.getBestCmap()
+    metrics = font["hmtx"].metrics
+    units_per_em = font["head"].unitsPerEm
+
+  labels = {expected for _, expected in ACTION_CASES} | {
+    "Signal changing · stopping",
+    "Direction unclear · monitoring",
+    "Driver override · paused",
+    "Signal detected · monitoring",
+    "Traffic signals · monitoring",
+  }
+  available_width = TRAFFIC_CARD_WIDTH - 82.0
+  for label in labels:
+    width = sum(metrics[cmap.get(ord(char), ".notdef")][0] for char in label) / units_per_em * 25.0
+    assert width <= available_width, f"{label!r} is {width:.1f}px wide; available width is {available_width:.1f}px"

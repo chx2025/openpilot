@@ -38,7 +38,6 @@ def _replay(backend: int):
     custom_params={
       "LongitudinalPlannerMode": backend,
       "MpcTuningProfile": 0,
-      "TeslaTrafficControlMode": 0,
       "DynamicExperimentalControl": False,
       "SmartCruiseControlVision": False,
       "SmartCruiseControlMap": False,

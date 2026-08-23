@@ -78,13 +78,13 @@ def test_custom_backend_selection_is_latched():
   assert params.values[ACTIVE_BACKEND_PARAM] == int(BackendId.TN_NO_DEC)
 
 
-def test_factory_leaves_traffic_control_adapter_disconnected(monkeypatch):
+def test_factory_returns_the_selected_backend_without_a_wrapper(monkeypatch):
   configured = []
   planner = SimpleNamespace(
     mpc=SimpleNamespace(configure_runtime_tuning=lambda params, spec: configured.append((params, spec))),
   )
   spec = SimpleNamespace(id=BackendId.OFFICIAL)
-  params = FakeParams({"TeslaTrafficControlMode": 4})
+  params = FakeParams({})
   monkeypatch.setattr(factory, "latch_active_backend", lambda _: spec)
   monkeypatch.setattr(factory, "_load_provider", lambda _: lambda CP, CP_SP: planner)
 

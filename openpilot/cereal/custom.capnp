@@ -531,6 +531,11 @@ struct TeslaTrafficControlPlan {
   driverOverrideActive @23 :Bool;
   canRemaining @24 :Float32;
   stationInnovation @25 :Float32;
+  stopControlAllowed @26 :Bool;
+  rawObservationFresh @27 :Bool;
+  rawObservationAgeMs @28 :Float32;
+  stopDirectionUnknown @29 :Bool;
+  stopSafetyAllowed @30 :Bool;  # All STOP gates except raw CAN freshness.
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {
@@ -555,8 +560,9 @@ struct ModelDataV2SP @0xa1680744031fdb2d {
 }
 
 struct TrafficRadarState @0xcb9fd56c7057593a {
-  # An independent Traffic Lead. It is never a physical vehicle and must not
-  # be forwarded to radarState, modelV2, FCW, car state, or vehicle CAN.
+  # Legacy-named independent traffic-control target. It is never a physical
+  # vehicle and must not be forwarded to radarState, modelV2, FCW, car state,
+  # or vehicle CAN.
   targetPresent @0 :Bool;
   oemTargetDistance @1 :Float32;
   targetRelativeVelocity @2 :Float32;
@@ -570,7 +576,7 @@ struct TrafficRadarState @0xcb9fd56c7057593a {
   eventId @10 :UInt32;
   publishMonoTime @11 :UInt64;
   controlAllowed @12 :Bool;
-  suppressedByPhysicalLead @13 :Bool;
+  suppressedByPhysicalLead @13 :Bool;  # Deprecated; traffic control does not consume radarState.
   shouldStop @14 :Bool;
   plannerStartRequested @15 :Bool;
   mode @16 :UInt8;
@@ -586,6 +592,10 @@ struct TrafficRadarState @0xcb9fd56c7057593a {
   driverOverrideActive @26 :Bool;
   canRemaining @27 :Float32;
   stationInnovation @28 :Float32;
+  stopControlAllowed @29 :Bool;
+  rawObservationFresh @30 :Bool;
+  stopDirectionUnknown @31 :Bool;
+  stopSafetyAllowed @32 :Bool;  # All STOP gates except raw CAN freshness.
 }
 
 struct CustomReserved11 @0xc2243c65e0340384 {

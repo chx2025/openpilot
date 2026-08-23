@@ -29,13 +29,13 @@ def observation(distance=80.0, light=1, now_s=1.0, *, available=True, bus=2,
   )
 
 
-def update(controller, now_s, obs, *, v_ego=10.0, lead=False, radar=True,
+def update(controller, now_s, obs, *, v_ego=10.0,
            brake=False, gas=False, blinker=False, enabled=True, long_active=True,
            model_distance=None, model_candidate=False):
   return controller.update(
     obs, int(now_s * 1e9), v_ego=v_ego, a_ego=0.0,
     model_stop_distance=model_distance, model_stop_candidate=model_candidate,
-    lead_present=lead, radar_valid=radar, enabled=enabled, long_active=long_active,
+    enabled=enabled, long_active=long_active,
     gas_pressed=gas, brake_pressed=brake, turn_signal_active=blinker,
   )
 
@@ -59,6 +59,15 @@ def test_red_requires_two_distinct_real_frames():
   assert duplicate.phase == TrafficControlPhase.redCandidate
   assert confirmed.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking)
   assert confirmed.apply_constraint
+
+
+def test_two_hz_high_speed_red_candidate_compensates_ego_motion():
+  c = controller()
+  first = update(c, 1.0, observation(80.0, 1, 1.0), v_ego=20.0)
+  second = update(c, 1.5, observation(70.0, 1, 1.5), v_ego=20.0)
+  assert first.phase == TrafficControlPhase.redCandidate
+  assert second.phase in c.ACTIVE_PHASES
+  assert c.event_id == 1
 
 
 def test_internal_tesla_state_fields_do_not_change_color_decision():
@@ -109,13 +118,77 @@ def test_stop_station_keeps_converging_to_fresh_can_inside_ten_meters():
   assert c.remaining_distance < 10.0
 
 
-def test_committed_stop_survives_transport_dropout_and_radar_health_blip():
+def test_committed_stop_survives_transport_dropout():
   c = controller()
   establish_red(c)
   stale = observation(70, 1, 1.5, available=False)
-  decision = update(c, 2.5, stale, radar=False)
+  decision = update(c, 2.5, stale)
   assert decision.phase in c.ACTIVE_PHASES
   assert decision.apply_constraint
+
+
+def test_stop_safety_permission_is_independent_from_raw_freshness():
+  c = controller()
+  establish_red(c)
+
+  stale = update(c, 2.0, observation(70, 1, 1.5, available=False))
+  assert stale.stop_safety_allowed
+  assert not stale.stop_control_allowed
+
+  direction_shadow = update(c, 2.1, observation(69, 1, 2.1), blinker=True)
+  assert not direction_shadow.stop_safety_allowed
+  assert not direction_shadow.stop_control_allowed
+
+
+def test_long_raw_dropout_requires_two_fresh_stop_frames_before_rearming():
+  c = controller()
+  establish_red(c, distance=60.0, speed=5.0)
+
+  update(c, 2.0, observation(55.0, 1, 1.5, available=False), v_ego=5.0)
+  first = update(c, 4.1, observation(44.5, 1, 4.1), v_ego=5.0)
+  assert not first.stop_safety_allowed
+  assert not first.stop_control_allowed
+
+  duplicate = update(c, 4.2, observation(44.5, 1, 4.1), v_ego=5.0)
+  assert not duplicate.stop_safety_allowed
+  assert not duplicate.stop_control_allowed
+
+  second = update(c, 4.6, observation(42.0, 1, 4.6), v_ego=5.0)
+  assert second.stop_safety_allowed
+  assert second.stop_control_allowed
+
+
+def test_critical_dropout_age_starts_at_the_last_real_can_frame():
+  c = controller()
+  establish_red(c, distance=60.0, speed=5.0)
+
+  update(c, 2.3, observation(57.5, 1, 1.5, available=False), v_ego=5.0)
+  first_recovery = update(c, 3.6, observation(52.5, 1, 3.6), v_ego=5.0)
+
+  assert not first_recovery.stop_safety_allowed
+  assert not first_recovery.stop_control_allowed
+
+
+def test_direct_multi_second_real_frame_gap_requires_reconfirmation():
+  c = controller()
+  establish_red(c, distance=60.0, speed=5.0)
+
+  first_after_gap = update(c, 4.1, observation(50.0, 1, 4.1), v_ego=5.0)
+
+  assert not first_after_gap.stop_safety_allowed
+  assert not first_after_gap.stop_control_allowed
+
+
+def test_long_dropout_stop_reconfirmation_does_not_delay_green_release():
+  c = controller()
+  establish_red(c, distance=30.0, speed=5.0)
+
+  first_green = update(c, 4.1, observation(25.0, 2, 4.1), v_ego=5.0)
+  second_green = update(c, 4.6, observation(22.5, 2, 4.6), v_ego=5.0)
+
+  assert first_green.phase in c.ACTIVE_PHASES
+  assert second_green.phase == TrafficControlPhase.release
+  assert second_green.apply_constraint
 
 
 def test_green_requires_two_real_frames_and_releases_same_event():
@@ -164,6 +237,36 @@ def test_green_off_green_off_pattern_latches_flashing_green_stop():
   assert c.flash_latched
 
 
+def test_full_flash_pattern_reconfirms_stop_after_direction_shadow():
+  c = controller()
+  for now_s, distance, light in ((1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 0)):
+    shadow = update(c, now_s, observation(distance, light, now_s), v_ego=8.0, blinker=True)
+  assert shadow.phase == TrafficControlPhase.flashingGreenStop
+  assert not shadow.stop_control_allowed
+
+  for now_s, distance, light in ((2.7, 66.4, 2), (3.2, 62.4, 0),
+                                 (3.7, 58.4, 2), (4.2, 54.4, 0)):
+    reconfirmed = update(c, now_s, observation(distance, light, now_s), v_ego=8.0, blinker=False)
+
+  assert reconfirmed.phase == TrafficControlPhase.flashingGreenStop
+  assert reconfirmed.stop_safety_allowed
+  assert reconfirmed.stop_control_allowed
+
+
+def test_route4f_discontinuous_off_cannot_form_flash_but_yellow_can_stop():
+  c = controller()
+  update(c, 1.0, observation(62.5, 2, 1.0), v_ego=5.0)
+  update(c, 1.5, observation(60.0, 2, 1.5), v_ego=5.0)
+  discontinuous_off = update(c, 2.0, observation(94.0, 0, 2.0), v_ego=5.0)
+  assert discontinuous_off.phase != TrafficControlPhase.greenFlashCandidate
+  assert not c.flash_latched
+  update(c, 2.5, observation(49.0, 3, 2.5), v_ego=8.0)
+  yellow = update(c, 3.0, observation(45.0, 3, 3.0), v_ego=8.0)
+  assert yellow.phase == TrafficControlPhase.yellowStop
+  assert yellow.remaining_distance == 40.0
+
+
 def test_flashing_green_stop_is_not_released_by_later_green_pulse():
   c = controller()
   for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
@@ -185,6 +288,18 @@ def test_early_yellow_stops_and_late_yellow_passes_once():
   late_decision = update(late, 1.2, observation(17, 3, 1.2), v_ego=15.0)
   assert late_decision.phase == TrafficControlPhase.yellowPass
   assert not late_decision.apply_constraint
+
+
+def test_yellow_pass_latch_does_not_leak_into_the_next_intersection():
+  c = controller()
+  update(c, 1.0, observation(20, 3, 1.0), v_ego=15.0)
+  first = update(c, 1.2, observation(17, 3, 1.2), v_ego=15.0)
+  assert first.phase == TrafficControlPhase.yellowPass
+  update(c, 2.0, observation(254, 2, 2.0), v_ego=15.0)
+  update(c, 3.0, observation(80, 3, 3.0), v_ego=5.0)
+  second = update(c, 3.5, observation(77.5, 3, 3.5), v_ego=5.0)
+  assert second.phase == TrafficControlPhase.yellowStop
+  assert second.stop_control_allowed
 
 
 def test_mid_dilemma_yellow_makes_and_latches_one_decision():
@@ -215,15 +330,15 @@ def test_zero_to_254_distance_wrap_is_passed_not_a_new_forward_target():
   assert decision.remaining_distance == 0.0
 
 
-def test_lead_does_not_erase_the_signal_event_and_never_changes_stop_geometry():
-  c = controller(retain_event_with_lead=True)
+def test_signal_event_keeps_its_identity_and_stop_geometry_across_updates():
+  c = controller()
   establish_red(c)
   event_id = c.event_id
   before = c.stop_station
-  decision = update(c, 2.0, observation(70, 1, 2.0), lead=True)
+  decision = update(c, 2.0, observation(70, 1, 2.0))
   assert decision.active
   assert c.event_id == event_id
-  assert c.stop_station == before or c.remaining_distance > c.config.final_distance_freeze_m
+  assert c.stop_station == before or c.remaining_distance > 10.0
 
 
 def test_active_event_replacement_requires_two_continuous_stop_color_frames():
@@ -283,6 +398,108 @@ def test_turning_marks_generic_signal_direction_unknown_and_disables_control():
   assert decision.direction_unknown
   assert decision.active
   assert not decision.apply_constraint
+
+
+def test_stop_requires_two_fresh_frames_after_direction_shadow_clears():
+  c = controller()
+  establish_red(c, distance=40.0, speed=5.0)
+  shadow = update(c, 1.6, observation(34.5, 1, 1.6), v_ego=5.0, blinker=True)
+  assert not shadow.stop_control_allowed
+  cached = update(c, 1.7, observation(34.5, 1, 1.6), v_ego=5.0, blinker=False)
+  assert not cached.stop_control_allowed
+  first = update(c, 2.1, observation(32.0, 1, 2.1), v_ego=5.0)
+  assert not first.stop_control_allowed
+  second = update(c, 2.6, observation(29.5, 1, 2.6), v_ego=5.0)
+  assert second.stop_control_allowed
+
+
+def test_discontinuous_red_cannot_clear_direction_stop_reconfirmation():
+  c = controller()
+  establish_red(c, distance=40.0, speed=5.0)
+  update(c, 1.6, observation(34.5, 1, 1.6), v_ego=5.0, blinker=True)
+  first = update(c, 2.0, observation(32.5, 1, 2.0), v_ego=5.0, blinker=False)
+  assert not first.stop_control_allowed
+  discontinuous = update(c, 2.5, observation(100.0, 1, 2.5), v_ego=5.0)
+  assert not discontinuous.stop_control_allowed
+  update(c, 3.0, observation(97.5, 1, 3.0), v_ego=5.0)
+  continuous = update(c, 3.5, observation(95.0, 1, 3.5), v_ego=5.0)
+  assert continuous.stop_control_allowed
+
+
+def test_far_active_stop_expires_after_raw_can_dropout():
+  c = controller()
+  establish_red(c, distance=80.0, speed=10.0)
+  stale = observation(70.0, 1, 1.5, available=False)
+  update(c, 2.0, stale, v_ego=10.0)
+  expired = update(c, 3.0, stale, v_ego=10.0)
+  assert not expired.stop_control_allowed
+  assert expired.phase in c.ACTIVE_PHASES
+
+
+def test_near_active_stop_has_bounded_dropout_but_hold_remains_latched():
+  c = controller()
+  establish_red(c, distance=20.0, speed=2.0)
+  stale = observation(15.0, 1, 1.5, available=False)
+  update(c, 2.0, stale, v_ego=1.0)
+  expired = update(c, 4.1, stale, v_ego=1.0)
+  assert expired.phase in c.ACTIVE_PHASES
+  assert not expired.stop_control_allowed
+
+  held = controller()
+  establish_red(held, distance=6.0, speed=0.0)
+  update(held, 2.0, observation(6.0, 1, 2.0), v_ego=0.0)
+  assert held.phase == TrafficControlPhase.hold
+  still_held = update(held, 5.0, observation(6.0, 1, 2.0, available=False), v_ego=0.0)
+  assert still_held.phase == TrafficControlPhase.hold
+
+
+def test_stop_reconfirmation_never_adds_extra_green_go_delay():
+  c = controller()
+  establish_red(c, distance=30.0, speed=5.0)
+  update(c, 1.7, observation(26.5, 1, 1.7), v_ego=5.0, blinker=True)
+  first_green = update(c, 2.0, observation(25.0, 2, 2.0), v_ego=5.0, blinker=False)
+  second_green = update(c, 2.5, observation(22.5, 2, 2.5), v_ego=5.0, blinker=False)
+  assert first_green.phase in c.ACTIVE_PHASES
+  assert second_green.phase == TrafficControlPhase.release
+
+
+def test_far_red_after_release_starts_a_new_session():
+  c = controller()
+  establish_red(c, distance=20.0, speed=0.0)
+  old_session = c.stop_session_id
+  update(c, 2.0, observation(20.0, 2, 2.0), v_ego=0.0)
+  update(c, 2.5, observation(20.0, 2, 2.5), v_ego=0.0)
+  update(c, 3.0, observation(150.0, 1, 3.0), v_ego=10.0)
+  update(c, 3.5, observation(145.0, 1, 3.5), v_ego=10.0)
+  assert c.stop_session_id != old_session
+
+
+def test_same_target_red_flicker_after_release_preserves_session():
+  c = controller()
+  establish_red(c, distance=20.0, speed=0.0)
+  old_session = c.stop_session_id
+  update(c, 2.0, observation(20.0, 2, 2.0), v_ego=0.0)
+  update(c, 2.5, observation(20.0, 2, 2.5), v_ego=0.0)
+  update(c, 3.0, observation(19.0, 1, 3.0), v_ego=0.0)
+  update(c, 3.5, observation(18.0, 1, 3.5), v_ego=0.0)
+  assert c.stop_session_id == old_session
+
+
+def test_flashing_green_latch_clears_after_passed_before_new_red():
+  c = controller()
+  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 0)):
+    update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
+  assert c.flash_latched
+  now_s = 2.2
+  for distance in (65.4, 60.4, 55.4, 50.4, 45.4, 40.4, 35.4, 30.4, 25.4, 20.4, 15.4, 10.4, 5.4, 1.0):
+    now_s += 0.5
+    update(c, now_s, observation(distance, 1, now_s), v_ego=10.0)
+  update(c, now_s + 0.1, observation(254.0, 1, now_s + 0.1), v_ego=10.0)
+  assert not c.flash_latched
+  update(c, now_s + 1.0, observation(50.0, 1, now_s + 1.0), v_ego=5.0)
+  decision = update(c, now_s + 1.5, observation(47.5, 1, now_s + 1.5), v_ego=5.0)
+  assert decision.phase in (TrafficControlPhase.approachRed, TrafficControlPhase.braking)
 
 
 def test_driver_gas_temporarily_suppresses_control_and_disabled_longitudinal_resets():

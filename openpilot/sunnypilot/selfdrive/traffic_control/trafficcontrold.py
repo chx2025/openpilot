@@ -30,10 +30,6 @@ def read_source_config(params: Params) -> tuple[TrafficControlConfig, TrafficRad
     # counterfactual observations, while enabled permits stop and bounded GO.
     mode=TrafficControlMode.stopGo if control_enabled else TrafficControlMode.observe,
     default_stop_reference=reference,
-    # A user-selected reference is a fixed physical calibration. CP-style
-    # target filtering replaces per-event adaptive offset drift.
-    adaptive_reference=False,
-    retain_event_with_lead=control_enabled,
     max_control_speed=max_control_speed,
   )
   go_policy = TrafficRadarGoPolicy.active if control_enabled else TrafficRadarGoPolicy.passive
@@ -56,7 +52,7 @@ def main() -> None:
   params = Params()
   source = build_source(params)
   model_updates = 0
-  services = ['carControl', 'carState', 'radarState', 'modelV2', 'modelDataV2SP', 'carStateSP']
+  services = ['carControl', 'carState', 'modelV2', 'modelDataV2SP', 'carStateSP']
   sm = messaging.SubMaster(services, poll='modelV2', ignore_alive=['carStateSP'],
                            ignore_avg_freq=['carStateSP'], ignore_valid=['carStateSP'])
   pm = messaging.PubMaster(['trafficRadarState'])

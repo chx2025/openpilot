@@ -16,7 +16,7 @@ def ns(**kwargs):
 
 
 class ReplaySubMaster:
-  SERVICES = ('carStateSP', 'carState', 'carControl', 'radarState', 'modelV2')
+  SERVICES = ('carStateSP', 'carState', 'carControl', 'modelV2')
 
   def __init__(self) -> None:
     self.seen = dict.fromkeys(self.SERVICES, True)
@@ -31,7 +31,6 @@ class ReplaySubMaster:
     now_ns = frame['tNs']
     available, valid_for_control, bus, control_source, distance, light, quality = frame['traffic']
     v_ego, a_ego, brake, left_blinker, right_blinker = frame['car']
-    radar_valid, lead_present, lead_distance = frame['radar']
     model_valid, model_distance, model_terminal_speed = frame['model']
     traffic = ns(
       available=available, validForControl=valid_for_control, sourceBus=bus, dlc=6,
@@ -49,34 +48,29 @@ class ReplaySubMaster:
       'carState': ns(vEgo=v_ego, aEgo=a_ego, gasPressed=False, brakePressed=brake),
       'carControl': ns(enabled=True, longActive=True,
                        leftBlinker=left_blinker, rightBlinker=right_blinker),
-      'radarState': ns(
-        leadOne=ns(present=lead_present, dRel=lead_distance),
-        leadTwo=ns(present=False, dRel=0.0),
-      ),
       'modelV2': ns(
         position=ns(x=[model_distance] * 33),
         velocity=ns(x=[model_terminal_speed] * 33),
       ),
     }
     self.valid['carStateSP'] = frame['carStateSPValid']
-    self.valid['radarState'] = radar_valid
     self.valid['modelV2'] = model_valid
     return now_ns
 
 
 @pytest.mark.parametrize(
-  ("route_name", "expected_present", "minimum_suppressed"),
+  ("route_name", "expected_present"),
   [
-    ("00000009--72ea96171f--1", 165, 0),
-    ("00000009--72ea96171f--2", 79, 0),
-    ("00000009--72ea96171f--4", 19, 50),
+    ("00000009--72ea96171f--1", 165),
+    ("00000009--72ea96171f--2", 79),
+    ("00000009--72ea96171f--4", 72),
   ],
 )
-def test_recorded_traffic_candidates_replay_deterministically(route_name, expected_present, minimum_suppressed):
+def test_recorded_traffic_candidates_replay_deterministically(route_name, expected_present):
   routes = {route['route']: route for route in json.loads(FIXTURE.read_text())['routes']}
   source = TrafficRadarSource(
       TrafficControlConfig(
-        mode=TrafficControlMode.stopGo, adaptive_reference=False, retain_event_with_lead=True,
+        mode=TrafficControlMode.stopGo,
       ),
     go_policy=TrafficRadarGoPolicy.active,
   )
@@ -99,6 +93,6 @@ def test_recorded_traffic_candidates_replay_deterministically(route_name, expect
     if current_event == previous_event and current_distance > previous_distance
   ]
   assert len(present_targets) == expected_present
-  assert suppressed_frames >= minimum_suppressed
+  assert suppressed_frames == 0
   assert max(positive_jumps, default=0.0) <= 3.0
   assert start_requests == 0

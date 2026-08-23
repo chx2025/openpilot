@@ -12,7 +12,6 @@ from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import (
   LongitudinalTuning, TuningController, adjusted_obstacle, follow_distance_for_personality,
 )
-from openpilot.sunnypilot.selfdrive.traffic_control.target import TrafficMpcTarget
 
 if __name__ == '__main__':  # generating code
   from acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -221,16 +220,12 @@ class LongitudinalMpc:
     self.dt = dt
     self.runtime_tuning = LongitudinalTuning()
     self._tuning_controller = None
-    self._traffic_target: TrafficMpcTarget | None = None
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = LongitudinalPlanSource.cruise
 
   def configure_runtime_tuning(self, params, backend) -> None:
     self._tuning_controller = TuningController(params, backend)
-
-  def set_traffic_target(self, target: TrafficMpcTarget | None) -> None:
-    self._traffic_target = target
 
   def _refresh_runtime_tuning(self) -> None:
     if self._tuning_controller is not None:
@@ -353,16 +348,8 @@ class LongitudinalMpc:
     lead_0_obstacle = adjusted_obstacle(lead_0_obstacle, lead_xv_0[:,1], self.x0[1], self.runtime_tuning, t_follow)
     lead_1_obstacle = adjusted_obstacle(lead_1_obstacle, lead_xv_1[:,1], self.x0[1], self.runtime_tuning, t_follow)
 
-    obstacle_columns = [lead_0_obstacle, lead_1_obstacle]
-    obstacle_sources = list(MPC_SOURCES)
-    if self._traffic_target is not None:
-      obstacle_columns.append(np.full(
-        N + 1,
-        max(0.0, self._traffic_target.distance_to_stop_point) + self.runtime_tuning.stop_distance,
-      ))
-      obstacle_sources.append(LongitudinalPlanSource.lead2)
-    x_obstacles = np.column_stack(obstacle_columns)
-    self.source = obstacle_sources[np.argmin(x_obstacles[0])]
+    x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle])
+    self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
 
     self.yref[:,:] = 0.0
     for i in range(N):

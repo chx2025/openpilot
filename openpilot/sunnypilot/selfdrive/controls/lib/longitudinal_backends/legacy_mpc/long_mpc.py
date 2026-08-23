@@ -25,7 +25,6 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
 )
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_backends.tuning import LongitudinalTuning
-from openpilot.sunnypilot.selfdrive.traffic_control.target import TrafficMpcTarget
 
 
 MODEL_NAME = "sp_legacy_cruise_v1"
@@ -138,7 +137,6 @@ class LegacyCruiseLongitudinalMpc(UpstreamLongitudinalMpc):
     self.dt = dt
     self.runtime_tuning = LongitudinalTuning()
     self._tuning_controller = None
-    self._traffic_target: TrafficMpcTarget | None = None
     self._recovery_enabled = False
     self.last_solution_status = 0
     self.last_primary_solution_status = 0
@@ -238,17 +236,8 @@ class LegacyCruiseLongitudinalMpc(UpstreamLongitudinalMpc):
     cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(
       v_cruise_clipped, t_follow, tuning.comfort_brake, tuning.stop_distance,
     )
-    obstacle_columns = [lead_0_obstacle, lead_1_obstacle, cruise_obstacle]
-    obstacle_sources = list(MPC_SOURCES)
-    if self._traffic_target is not None:
-      traffic_target = np.full(
-        N + 1,
-        max(0.0, self._traffic_target.distance_to_stop_point) + tuning.stop_distance,
-      )
-      obstacle_columns.append(traffic_target)
-      obstacle_sources.append(LongitudinalPlanSource.lead2)
-    x_obstacles = np.column_stack(obstacle_columns)
-    self.source = obstacle_sources[np.argmin(x_obstacles[0])]
+    x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
+    self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
 
     self.yref[:, :] = 0.0
     for index in range(N):
@@ -273,9 +262,6 @@ class LegacyCruiseLongitudinalMpc(UpstreamLongitudinalMpc):
 
   def _legacy_cruise_accel_max(self, stock_accel_max: float) -> float:
     return stock_accel_max
-
-  def set_traffic_target(self, target: TrafficMpcTarget | None) -> None:
-    self._traffic_target = target
 
   def set_recovery_enabled(self, enabled: bool) -> None:
     self._recovery_enabled = bool(enabled)
