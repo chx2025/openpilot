@@ -10,6 +10,7 @@ from typing import Any
 
 from opendbc.sunnypilot.car.tesla.values import TeslaSafetyFlagsSP
 from openpilot.sunnypilot.selfdrive.car.tesla.validation_controller import TeslaTurnSignalRealtimeController
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
 
 from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import (
   TeslaTrafficControlObserver, publish_tesla_traffic_control,
@@ -43,7 +44,7 @@ def longitudinal_context(sm, now: float) -> tuple[int, bool, bool, float, bool, 
           bool(car_control.longActive), float(car_control.actuators.accel), car_control_valid)
 
 
-def speed_limit_context(sm, now: float) -> tuple[float, bool]:
+def speed_limit_context(sm, now: float, assist_configured: bool | None = None) -> tuple[float, bool]:
   plan = sm["longitudinalPlanSP"]
   plan_recv_time = float(sm.recv_time["longitudinalPlanSP"])
   plan_valid = (sm.seen["longitudinalPlanSP"] and sm.valid["longitudinalPlanSP"] and
@@ -51,7 +52,8 @@ def speed_limit_context(sm, now: float) -> tuple[float, bool]:
   resolver = plan.speedLimit.resolver
   limit_valid = bool(resolver.speedLimitValid or resolver.speedLimitLastValid)
   target = float(resolver.speedLimitFinalLast)
-  valid = plan_valid and bool(plan.speedLimit.assist.enabled) and limit_valid and target > 0.0
+  configured = bool(plan.speedLimit.assist.enabled) if assist_configured is None else assist_configured
+  valid = plan_valid and configured and limit_valid and target > 0.0
   return (target if valid else 0.0, valid)
 
 
@@ -65,6 +67,7 @@ class TeslaCardAdapter:
     self.sm = submaster
     self.traffic_control_observer = TeslaTrafficControlObserver() if self.enabled else None
     self.road_context_parser = self._create_road_context_parser() if self.enabled else None
+    self.speed_limit_assist_configured: bool | None = None
     configured = bool(getattr(car_interface, "CP_SP", None) and
                       car_interface.CP_SP.safetyParam & TeslaSafetyFlagsSP.TURN_SIGNAL_VALIDATION)
     self.validation = TeslaTurnSignalRealtimeController(configured) if self.enabled else None
@@ -124,6 +127,7 @@ class TeslaCardAdapter:
     return self.validation.take_can_sends(now_nanos)
 
   def service_params(self, params) -> None:
+    self.speed_limit_assist_configured = params.get("SpeedLimitMode", return_default=True) == Mode.assist
     if self.validation is not None:
       self.validation.service_params(params)
 
@@ -160,4 +164,4 @@ class TeslaCardAdapter:
 
     update_speed_limit = getattr(state, "update_speed_limit_target", None)
     if update_speed_limit is not None:
-      update_speed_limit(*speed_limit_context(self.sm, timestamp))
+      update_speed_limit(*speed_limit_context(self.sm, timestamp, self.speed_limit_assist_configured))

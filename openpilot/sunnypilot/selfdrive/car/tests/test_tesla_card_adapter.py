@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from openpilot.sunnypilot.selfdrive.car.tesla.card_adapter import CONTEXT_STALE_S, TeslaCardAdapter
+from openpilot.sunnypilot.selfdrive.car.tesla.card_adapter import CONTEXT_STALE_S, TeslaCardAdapter, speed_limit_context
 
 
 class FakeState:
@@ -73,6 +73,19 @@ def test_adapter_invalidates_stale_context():
 
   assert state.longitudinal[0][2] is False
   assert state.speed_limit == [(0.0, False)]
+
+
+def test_configured_assist_keeps_resolved_target_while_runtime_state_is_inactive():
+  sm = FakeSubMaster()
+  sm.data["longitudinalPlanSP"].speedLimit.assist.enabled = False
+
+  assert speed_limit_context(sm, 10.0, assist_configured=True) == (22.0, True)
+
+
+def test_non_assist_mode_never_exposes_automatic_speed_target():
+  sm = FakeSubMaster()
+
+  assert speed_limit_context(sm, 10.0, assist_configured=False) == (0.0, False)
 
 
 def test_non_tesla_adapter_is_inert():
