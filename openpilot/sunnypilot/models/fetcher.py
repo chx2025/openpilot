@@ -160,6 +160,10 @@ class ModelFetcher:
       self.model_url = self.MODEL_URL_USBGPU if is_usbgpu else self.MODEL_URL
       self.params.put("ModelManager_ActiveJson", self.model_url, block=True)
 
+  @property
+  def is_usbgpu(self) -> bool:
+    return bool(self._is_usbgpu)
+
   def _fetch_and_cache_models(self) -> list[custom.ModelManagerSP.ModelBundle] | None:
     """Fetches fresh model data from remote and updates cache.
     Returns None on transport errors. Raises on 404 and other fatal HTTP errors.

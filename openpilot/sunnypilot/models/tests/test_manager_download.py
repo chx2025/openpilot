@@ -103,6 +103,8 @@ class ManagerDownloadTestBase(OpenpilotTestCase):
     self.manager.selected_bundle = None
     self.manager.active_bundle = None
     self.manager.available_models = []
+    self.manager.model_fetcher = mock.MagicMock()
+    self.manager.model_fetcher.is_usbgpu = False
     self.manager._chunk_size = 1024
     self.manager._download_start_times = {}
 
@@ -253,6 +255,21 @@ class TestManagerDownload(ManagerDownloadTestBase):
 
     assert self.manager.active_bundle is None
     assert not any(call.args and call.args[0] == "ModelManager_ActiveBundle" for call in self.manager.params.put.call_args_list)
+
+  def test_activated_usbgpu_bundle_records_hardware_requirement(self):
+    bundle = custom.ModelManagerSP.ModelBundle.new_message()
+    bundle.index = 0
+    bundle.init('models', 1)
+    bundle.models[0].artifact.fileName = 'already_cached.pkl'
+    self.manager.model_fetcher.is_usbgpu = True
+
+    async def cached(*args, **kwargs):
+      return None
+
+    self.manager._process_artifact = cached
+    asyncio.run(self.manager._download_bundle(bundle, self.dest))
+
+    self.manager.params.put_bool.assert_any_call("ModelManager_ActiveBundleRequiresUsbGpu", True, block=True)
 
   def test_repeat_downloads_are_stable(self):
     """Back-to-back runs must produce identical bytes and leak no start-time state."""

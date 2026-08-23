@@ -250,6 +250,7 @@ class ModelManagerSP:
 
       self.active_bundle = self.selected_bundle
       self.active_bundle.status = custom.ModelManagerSP.DownloadStatus.downloaded
+      self.params.put_bool("ModelManager_ActiveBundleRequiresUsbGpu", self.model_fetcher.is_usbgpu, block=True)
       self.params.put("ModelManager_ActiveBundle", self.active_bundle.to_dict(), block=True)
       self.selected_bundle = None
 
