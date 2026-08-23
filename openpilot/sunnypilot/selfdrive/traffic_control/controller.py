@@ -231,6 +231,12 @@ class TeslaTrafficControlController:
     self.event_source_bus = observation.source_bus
     self.event_control_source = observation.control_source
     self.stop_reference = self.config.default_stop_reference
+    # Every confirmed event owns fresh world geometry. In particular, a red
+    # after release must never inherit the previous stop station, which is now
+    # at or behind the ego position.
+    self.station_samples.clear()
+    self.stop_station = None
+    self.remaining_distance = 0.0
     self._update_stop_station(observation)
     required = v_ego ** 2 / (2.0 * max(self.remaining_distance, 0.5))
     self.phase = (TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed) \

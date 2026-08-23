@@ -525,6 +525,7 @@ struct TeslaTrafficControlPlan {
   startBlockReason @17 :UInt8;
   eventId @18 :UInt32;
   terminalCatchActive @19 :Bool;
+  rawDistance @20 :Float32;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {

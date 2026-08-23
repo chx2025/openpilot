@@ -4,10 +4,13 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import TrafficSign
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
 
 
-def target(*, light=1, remaining=35.0, reference=5.0, phase=TrafficControlPhase.braking, quality=2):
+def target(*, light=1, raw_distance=80.0, remaining=35.0, reference=5.0,
+           phase=TrafficControlPhase.braking, quality=2, mode=4, applied=False):
   return SimpleNamespace(
     lightState=light,
-    mode=4,
+    mode=mode,
+    rawDistance=raw_distance,
+    applied=applied,
     remainingDistance=remaining,
     stopReference=reference,
     phase=int(phase),
@@ -18,8 +21,9 @@ def target(*, light=1, remaining=35.0, reference=5.0, phase=TrafficControlPhase.
 def test_view_model_displays_actual_color_and_can_distance():
   state = TrafficSignalDisplayState.from_plan(target())
   assert state.visible
+  assert state.has_signal
   assert state.light_state == 1
-  assert state.distance_m == 40.0
+  assert state.distance_m == 80.0
   assert not state.flashing
 
 
@@ -31,8 +35,20 @@ def test_view_model_marks_flashing_green_stop():
   assert state.flashing
 
 
-def test_view_model_hides_invalid_or_out_of_range_context():
+def test_view_model_stays_visible_without_a_current_signal():
   assert not TrafficSignalDisplayState.from_plan(target(), valid=False).visible
-  assert not TrafficSignalDisplayState.from_plan(target(remaining=200, reference=5)).visible
-  assert not TrafficSignalDisplayState.from_plan(target(quality=0)).visible
-  assert not TrafficSignalDisplayState.from_plan(target(phase=TrafficControlPhase.passed)).visible
+  unavailable = TrafficSignalDisplayState.from_plan(target(quality=0, raw_distance=255))
+  assert unavailable.visible
+  assert not unavailable.has_signal
+  assert not unavailable.flashing
+
+  passed = TrafficSignalDisplayState.from_plan(target(phase=TrafficControlPhase.passed, raw_distance=254))
+  assert passed.visible
+  assert not passed.has_signal
+
+  assert not TrafficSignalDisplayState.from_plan(target(mode=1)).visible
+
+
+def test_view_model_never_replaces_far_raw_can_distance_with_five_meter_reference():
+  state = TrafficSignalDisplayState.from_plan(target(raw_distance=153, remaining=0, reference=5))
+  assert state.distance_m == 153

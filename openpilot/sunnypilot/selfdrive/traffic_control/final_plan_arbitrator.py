@@ -65,6 +65,7 @@ class TrafficPlanDiagnostics:
   phase: int = int(TrafficControlPhase.off)
   light_state: int = 0
   remaining_distance: float = 0.0
+  raw_distance: float = 255.0
   stop_reference: float = 0.0
   source_bus: int = 0
   quality: int = 0
@@ -111,6 +112,7 @@ class FinalPlanArbitrator:
     self._hold_latched_should_stop = False
     self._lead_release_event_id = 0
     self._lead_release_cycles = 0
+    self._armed_stop_event_id = 0
     self.diagnostics = TrafficPlanDiagnostics()
 
   def publisher(self, pm, sm, now_ns: int | None = None):
@@ -190,6 +192,7 @@ class FinalPlanArbitrator:
     self.diagnostics.phase = int(traffic.phase)
     self.diagnostics.light_state = int(traffic.lightState)
     self.diagnostics.remaining_distance = max(0.0, float(traffic.distanceToStopPoint))
+    self.diagnostics.raw_distance = float(traffic.rawDistance)
     self.diagnostics.stop_reference = max(
       0.0, float(traffic.oemTargetDistance) - float(traffic.distanceToStopPoint),
     )
@@ -235,6 +238,20 @@ class FinalPlanArbitrator:
       jerk_limit = max(jerk_limit, 1.0)
       decel_margin = max(decel_margin, 1.10)
     return _TrafficStopStyle(comfort_brake, jerk_limit, decel_margin)
+
+  def _traffic_activation_distance(self, sm) -> float:
+    """Speed/personality-aware horizon that separates tracking from braking."""
+    personality = sm["selfdriveState"].personality
+    if personality == log.LongitudinalPersonality.relaxed:
+      activation_brake = 1.8
+    elif personality == log.LongitudinalPersonality.aggressive:
+      activation_brake = 2.6
+    else:
+      activation_brake = 2.2
+    v_ego = max(0.0, float(sm["carState"].vEgo))
+    delay_distance = v_ego * (self._actuator_delay + 0.8)
+    braking_distance = v_ego ** 2 / (2.0 * activation_brake)
+    return float(np.clip(braking_distance + delay_distance + 8.0, 20.0, 120.0))
 
   def _apply_stop_constraint(self, plan, sm, *, remaining_distance: float,
                              hold: bool, terminal: bool) -> float:
@@ -454,18 +471,34 @@ class FinalPlanArbitrator:
       if self._active_start_event_id != 0:
         self._finish_start(self._active_start_event_id)
       self._was_stopping = False
+      self._armed_stop_event_id = 0
       self._profile.reset()
       self.diagnostics.final_a_target = float(plan.aTarget)
       self.diagnostics.should_stop = bool(plan.shouldStop)
       return
-    active_stop = bool(
-      traffic is not None and traffic.targetPresent and traffic.controlAllowed
-      and float(traffic.confidence) >= 0.9
-      and int(traffic.phase) in (
-        int(TrafficControlPhase.approachRed), int(TrafficControlPhase.braking), int(TrafficControlPhase.hold),
-        int(TrafficControlPhase.flashingGreenStop), int(TrafficControlPhase.yellowStop),
+    stop_phases = (
+      int(TrafficControlPhase.approachRed), int(TrafficControlPhase.braking), int(TrafficControlPhase.hold),
+      int(TrafficControlPhase.flashingGreenStop), int(TrafficControlPhase.yellowStop),
+    )
+    trackable_stop = bool(
+      traffic is not None and traffic.targetPresent and float(traffic.confidence) >= 0.9
+      and int(traffic.phase) in stop_phases
+    )
+    if trackable_stop:
+      event_id = int(traffic.eventId)
+      inside_horizon = bool(
+        int(traffic.phase) == int(TrafficControlPhase.hold)
+        or float(traffic.distanceToStopPoint) <= self._traffic_activation_distance(sm)
       )
-      and physical_clear and driver_allows_stop
+      if event_id != self._armed_stop_event_id:
+        self._armed_stop_event_id = event_id if inside_horizon else 0
+      elif inside_horizon:
+        self._armed_stop_event_id = event_id
+    else:
+      self._armed_stop_event_id = 0
+    active_stop = bool(
+      trackable_stop and int(traffic.eventId) == self._armed_stop_event_id
+      and traffic.controlAllowed and physical_clear and driver_allows_stop
     )
     if active_stop:
       self._apply_stop(plan, sm, traffic)
@@ -485,7 +518,11 @@ class FinalPlanArbitrator:
           and physical_clear and driver_allows_stop):
       self._apply_latched_hold(plan, sm)
     else:
-      if self._active_start_event_id != 0:
+      same_release_start = bool(
+        signal_release and traffic is not None
+        and int(traffic.eventId) == self._active_start_event_id
+      )
+      if self._active_start_event_id != 0 and not same_release_start:
         self._finish_start(self._active_start_event_id)
       self._apply_release(plan, sm)
 
@@ -503,6 +540,7 @@ class FinalPlanArbitrator:
     target.applied = diagnostics.applied
     target.shouldStop = diagnostics.should_stop
     target.remainingDistance = diagnostics.remaining_distance
+    target.rawDistance = diagnostics.raw_distance
     target.stopReference = diagnostics.stop_reference
     target.lightState = diagnostics.light_state
     target.sourceBus = diagnostics.source_bus

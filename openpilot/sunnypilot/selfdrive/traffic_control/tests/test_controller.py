@@ -126,6 +126,20 @@ def test_green_requires_two_real_frames_and_releases_same_event():
   assert two.phase == TrafficControlPhase.release
 
 
+def test_far_red_after_release_gets_a_fresh_stop_station():
+  c = controller()
+  establish_red(c, distance=5.0, speed=0.0)
+  update(c, 2.0, observation(5.0, 2, 2.0), v_ego=0.0)
+  released = update(c, 2.5, observation(5.0, 2, 2.5), v_ego=0.0)
+  assert released.phase == TrafficControlPhase.release
+
+  update(c, 3.0, observation(150.0, 1, 3.0), v_ego=15.0)
+  new_red = update(c, 3.5, observation(142.5, 1, 3.5), v_ego=15.0)
+
+  assert new_red.phase in c.ACTIVE_PHASES
+  assert math.isclose(new_red.remaining_distance, 137.5, abs_tol=0.1)
+
+
 def test_stop_only_mode_does_not_auto_release_on_green():
   c = controller(TrafficControlMode.stopOnly)
   establish_red(c, distance=30.0, speed=5.0)

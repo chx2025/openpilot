@@ -24,6 +24,8 @@ MUTED = rl.Color(190, 197, 205, 255)
 @dataclass(frozen=True)
 class TrafficSignalDisplayState:
   visible: bool = False
+  has_signal: bool = False
+  control_active: bool = False
   light_state: int = 0
   distance_m: float = 0.0
   phase: int = int(TrafficControlPhase.off)
@@ -36,24 +38,21 @@ class TrafficSignalDisplayState:
     phase = int(target.phase)
     mode = int(target.mode)
     light = int(target.lightState)
-    distance = max(0.0, float(target.remainingDistance) + float(target.stopReference))
-    has_context = bool(
-      mode == 4
-      and int(target.quality) > 0
+    raw_distance = float(target.rawDistance)
+    has_signal = bool(
+      int(target.quality) > 0
+      and 0.0 <= raw_distance <= 200.0
       and 0 <= light <= 3
-      and distance <= 200.0
-      and phase not in (int(TrafficControlPhase.bypass), int(TrafficControlPhase.passed))
-      and (light in (1, 2, 3) or phase in (
-        int(TrafficControlPhase.greenFlashCandidate),
-        int(TrafficControlPhase.flashingGreenStop),
-      ))
+      and phase != int(TrafficControlPhase.passed)
     )
     return cls(
-      visible=has_context,
+      visible=mode == 4,
+      has_signal=has_signal,
+      control_active=bool(target.applied),
       light_state=light,
-      distance_m=distance,
+      distance_m=raw_distance if has_signal else 0.0,
       phase=phase,
-      flashing=phase in (
+      flashing=has_signal and phase in (
         int(TrafficControlPhase.greenFlashCandidate),
         int(TrafficControlPhase.flashingGreenStop),
       ),
@@ -97,23 +96,26 @@ class TrafficControlRenderer(Widget):
     states = (1, 3, 2)
     for index, (color, state) in enumerate(zip(colors, states, strict=True)):
       center = rl.Vector2(housing.x + housing.width / 2, housing.y + 17 + index * 26)
-      active = self.state.light_state == state
-      if self.state.flashing and state == 2:
+      active = self.state.has_signal and self.state.light_state == state
+      if self.state.has_signal and self.state.flashing and state == 2:
         active = int(gui_app.frame / max(1, gui_app.target_fps // 2)) % 2 == 0
       if active:
         glow = 3.0 + 2.0 * math.sin(gui_app.frame / max(1, gui_app.target_fps) * math.pi)
         rl.draw_circle_v(center, 10.0 + glow, rl.Color(color.r, color.g, color.b, 42))
       rl.draw_circle_v(center, 9.0, color if active else LAMP_OFF)
 
-    distance_text = f"{self.state.distance_m:.0f} m"
+    distance_text = f"{self.state.distance_m:.0f} m" if self.state.has_signal else "-- m"
     distance_size = 46
     distance_pos = rl.Vector2(x + 70, y + 19)
     rl.draw_text_ex(self.font, distance_text, distance_pos, distance_size, 0, TEXT)
 
-    if self.state.flashing:
+    if not self.state.has_signal:
+      detail = "NO SIGNAL"
+      detail_color = MUTED
+    elif self.state.flashing:
       detail = "FLASH · STOP"
       detail_color = AMBER
-    elif self.state.phase in (
+    elif self.state.control_active and self.state.phase in (
       int(TrafficControlPhase.approachRed), int(TrafficControlPhase.braking),
       int(TrafficControlPhase.hold), int(TrafficControlPhase.yellowStop),
     ):
@@ -122,6 +124,9 @@ class TrafficControlRenderer(Widget):
     elif self.state.light_state == 2:
       detail = "GO"
       detail_color = GREEN
+    elif self.state.light_state == 1:
+      detail = "RED · TRACKING"
+      detail_color = RED
     elif self.state.light_state == 3:
       detail = "YELLOW"
       detail_color = AMBER
