@@ -61,7 +61,7 @@ def test_go_constants_and_first_cycle_numerics_are_frozen():
   ])
 
 
-def test_rolling_release_numerics_are_frozen():
+def test_moving_green_release_leaves_the_base_plan_unchanged():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   red = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
@@ -73,19 +73,12 @@ def test_rolling_release_numerics_are_frozen():
     event_id=103, session_id=102, distance=0.0, v_ego=8.0,
   )
   plan = base_plan(a_target=-0.8, should_stop=True)
+  original = plan_output(plan)
   arbitrator.apply(plan, green, NOW_NS + 50_000_000)
-  assert plan.aTarget == pytest.approx(0.0)
-  assert not plan.shouldStop
-  assert plan.allowThrottle
-  np.testing.assert_allclose(plan.speeds, [8.0] * 17)
-  np.testing.assert_allclose(plan.accels, [
-    -0.033760000000000005, -0.023994375000000005, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-  ])
-  np.testing.assert_allclose(plan.jerks, [
-    1.0, 0.8190080000000002, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-  ])
+  assert plan_output(plan) == original
+  assert arbitrator.diagnostics.start_requested
+  assert not arbitrator.diagnostics.start_applied
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
 
 
 class FakeSubMaster:
@@ -205,9 +198,11 @@ def test_stop_and_start_do_not_require_a_radar_state_subscription():
   rolling_plan = base_plan(a_target=-0.8, should_stop=True)
   rolling.apply(rolling_plan, moving_green, NOW_NS + 50_000_000)
 
-  assert rolling.diagnostics.action == TrafficPlanAction.rollingRelease
-  assert rolling.diagnostics.start_applied
-  assert rolling_plan.aTarget == pytest.approx(0.0)
+  assert rolling.diagnostics.action == TrafficPlanAction.none
+  assert rolling.diagnostics.start_requested
+  assert not rolling.diagnostics.start_applied
+  assert rolling_plan.aTarget == pytest.approx(-0.8)
+  assert rolling_plan.shouldStop
 
 
 def test_far_red_is_tracked_without_constraining_before_the_dynamic_braking_horizon():
@@ -241,6 +236,21 @@ def test_dynamic_braking_horizon_tracks_speed_and_longitudinal_personality():
   low_speed = arbitrator._traffic_activation_distance(fake_sm(v_ego=5.0))
 
   assert relaxed > standard > aggressive > low_speed
+
+
+def test_standard_style_arms_before_route5a_high_speed_stop_becomes_harsh():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  sm = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=75, session_id=75, distance=115.0, v_ego=17.3,
+    personality=log.LongitudinalPersonality.standard,
+  )
+  plan = base_plan(a_target=-0.3)
+
+  arbitrator.apply(plan, sm, NOW_NS)
+
+  assert arbitrator.diagnostics.action == TrafficPlanAction.stop
+  assert arbitrator.diagnostics.traffic_a_target < 0.0
 
 
 def test_dynamic_braking_horizon_latches_until_the_stop_event_ends():
@@ -349,7 +359,7 @@ def test_stale_grace_never_bypasses_a_stop_safety_gate():
   assert plan.aTarget > 0.0
 
 
-def test_missing_raw_frame_never_looks_like_a_zero_age_dropout():
+def test_new_off_frame_at_zero_age_keeps_an_armed_stop_continuous():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   stopping = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
@@ -362,6 +372,24 @@ def test_missing_raw_frame_never_looks_like_a_zero_age_dropout():
   stopping["trafficRadarState"].stopSafetyAllowed = True
   stopping["trafficRadarState"].rawObservationFresh = False
   stopping["trafficRadarState"].observationAgeMs = 0.0
+  stopping["trafficRadarState"].rawDistance = 254.0
+  arbitrator.apply(base_plan(), stopping, NOW_NS + 50_000_000)
+
+  assert arbitrator.diagnostics.action == TrafficPlanAction.stop
+
+
+def test_missing_raw_frame_still_cannot_use_zero_age_dropout_grace():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  stopping = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=116, session_id=116, distance=30.0, v_ego=10.0,
+  )
+  arbitrator.apply(base_plan(), stopping, NOW_NS)
+  stopping["trafficRadarState"].stopControlAllowed = False
+  stopping["trafficRadarState"].rawObservationFresh = False
+  stopping["trafficRadarState"].observationAgeMs = 0.0
+  stopping["trafficRadarState"].rawDistance = 255.0
+
   arbitrator.apply(base_plan(), stopping, NOW_NS + 50_000_000)
 
   assert arbitrator.diagnostics.action != TrafficPlanAction.stop
@@ -436,7 +464,7 @@ def test_green_release_uses_stable_stop_session_across_target_event_replacement(
   assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.none
 
 
-def test_seen_only_session_go_behavior_is_frozen_for_low_and_rolling_release():
+def test_seen_only_session_keeps_low_speed_go_but_moving_release_is_transparent():
   rolling = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   far_red = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
@@ -449,11 +477,11 @@ def test_seen_only_session_go_behavior_is_frozen_for_low_and_rolling_release():
     allowed=True, start=True, event_id=88, session_id=26, distance=0.0, v_ego=8.0,
   )
   plan = base_plan(a_target=-0.8, should_stop=True)
+  original = plan_output(plan)
   rolling.apply(plan, green, NOW_NS + 50_000_000)
-  assert rolling.diagnostics.action == TrafficPlanAction.rollingRelease
-  assert rolling.diagnostics.start_applied
-  assert plan.aTarget == pytest.approx(0.0)
-  assert not plan.shouldStop
+  assert rolling.diagnostics.action == TrafficPlanAction.none
+  assert not rolling.diagnostics.start_applied
+  assert plan_output(plan) == original
 
   low = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   low_red = fake_sm(
@@ -471,7 +499,7 @@ def test_seen_only_session_go_behavior_is_frozen_for_low_and_rolling_release():
   assert low_plan.aTarget == pytest.approx(0.25)
 
 
-def test_owned_green_while_moving_applies_bounded_rolling_release():
+def test_owned_green_while_moving_clears_traffic_state_without_overriding_model():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   red = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True, allowed=True,
@@ -483,10 +511,11 @@ def test_owned_green_while_moving_applies_bounded_rolling_release():
     event_id=73, session_id=10, distance=0.0, v_ego=8.0,
   )
   plan = base_plan(a_target=-0.8, should_stop=True)
+  original = plan_output(plan)
   arbitrator.apply(plan, green, NOW_NS + 50_000_000)
-  assert arbitrator.diagnostics.action == TrafficPlanAction.rollingRelease
-  assert plan.aTarget >= 0.0
-  assert not plan.shouldStop
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
+  assert not arbitrator.diagnostics.start_applied
+  assert plan_output(plan) == original
 
 
 def test_unowned_generic_green_never_overrides_base_e2e_stop():

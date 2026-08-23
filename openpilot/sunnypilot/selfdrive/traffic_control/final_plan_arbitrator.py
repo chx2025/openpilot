@@ -20,6 +20,7 @@ START_MAX_ACCEL = 1.6
 START_MAX_SPEED = 2.5
 START_MAX_DURATION_NS = 3_000_000_000
 START_JERK_LIMIT = 1.0
+MOVING_GREEN_SPEED = 0.3
 TERMINAL_MAX_SPEED = 1.5
 TERMINAL_LOOKAHEAD_S = 0.05
 PLANNER_TRAFFIC_STALE_NS = 350_000_000
@@ -238,11 +239,11 @@ class FinalPlanArbitrator:
     """Speed/personality-aware horizon that separates tracking from braking."""
     personality = sm["selfdriveState"].personality
     if personality == log.LongitudinalPersonality.relaxed:
-      activation_brake = 1.8
+      activation_brake = 1.3
     elif personality == log.LongitudinalPersonality.aggressive:
-      activation_brake = 2.6
+      activation_brake = 1.9
     else:
-      activation_brake = 2.2
+      activation_brake = 1.6
     v_ego = max(0.0, float(sm["carState"].vEgo))
     delay_distance = v_ego * (self._actuator_delay + 0.8)
     braking_distance = v_ego ** 2 / (2.0 * activation_brake)
@@ -402,46 +403,6 @@ class FinalPlanArbitrator:
     self.diagnostics.traffic_a_target = start_a_target
     return True
 
-  def _apply_rolling_release(self, plan, sm, traffic, now_ns: int) -> bool:
-    self.diagnostics.start_requested = True
-    block_reason = self._start_block_reason(plan, sm, traffic)
-    self.diagnostics.start_block_reason = block_reason
-    if block_reason != TrafficStartBlockReason.none:
-      return False
-    session_id = int(traffic.stopSessionId)
-    if self._active_start_session_id == 0:
-      self._active_start_session_id = session_id
-      self._start_started_ns = now_ns
-    elif self._active_start_session_id != session_id:
-      return False
-    if now_ns - self._start_started_ns > START_MAX_DURATION_NS:
-      self._finish_start(session_id)
-      return False
-
-    base_speeds = np.asarray(plan.speeds, dtype=float)
-    base_accels = np.asarray(plan.accels, dtype=float)
-    times = self._times(len(base_speeds))
-    release_speeds, release_accels, _ = self._profile.build_release(
-      v_ego=float(sm["carState"].vEgo), base_accel=max(0.0, float(plan.aTarget)),
-      times=times, preserve_positive_accel=True,
-    )
-    final_speeds = np.maximum(base_speeds, release_speeds)
-    final_accels = np.maximum(base_accels, release_accels)
-    release_a_target = float(np.interp(self._actuator_delay + 0.05, times, release_accels))
-    plan.speeds = final_speeds.tolist()
-    plan.accels = final_accels.tolist()
-    plan.jerks = self._padded_jerks(final_accels, times, len(plan.jerks)).tolist()
-    plan.aTarget = float(np.clip(max(float(plan.aTarget), release_a_target, 0.0), 0.0, START_MAX_ACCEL))
-    plan.shouldStop = False
-    self._hold_latched = False
-    self._hold_latched_should_stop = False
-    self._was_stopping = False
-    self.diagnostics.action = TrafficPlanAction.rollingRelease
-    self.diagnostics.applied = True
-    self.diagnostics.start_applied = True
-    self.diagnostics.traffic_a_target = release_a_target
-    return True
-
   def _apply_latched_hold(self, plan, sm) -> None:
     v_ego = float(sm["carState"].vEgo)
     should_stop = self._hold_latched_should_stop or v_ego <= 0.3
@@ -561,7 +522,8 @@ class FinalPlanArbitrator:
     stale_armed_grace = bool(
       trackable_stop and int(traffic.stopSessionId) == self._armed_stop_session_id
       and traffic.stopSafetyAllowed and not traffic.rawObservationFresh
-      and 0.0 < float(traffic.observationAgeMs) <= 2000.0
+      and 0.0 <= float(traffic.observationAgeMs) <= 2000.0
+      and float(traffic.rawDistance) < 255.0
     )
     active_stop = bool(
       trackable_stop and int(traffic.stopSessionId) == self._armed_stop_session_id
@@ -573,10 +535,16 @@ class FinalPlanArbitrator:
       if bool(traffic.directionUnknown):
         self.diagnostics.start_requested = True
         self.diagnostics.start_block_reason = TrafficStartBlockReason.driverOverride
-      elif float(sm["carState"].vEgo) > START_MAX_SPEED:
-        if not self._apply_rolling_release(plan, sm, traffic, now_ns):
-          self._profile.reset()
-          self._was_stopping = False
+      elif float(sm["carState"].vEgo) > MOVING_GREEN_SPEED:
+        self.diagnostics.start_requested = True
+        if bool(plan.hasLead):
+          self.diagnostics.start_block_reason = TrafficStartBlockReason.physicalLead
+        self._finish_start(int(traffic.stopSessionId))
+        self._hold_latched = False
+        self._hold_latched_should_stop = False
+        self._was_stopping = False
+        self._armed_stop_session_id = 0
+        self._profile.reset()
       elif not self._apply_start(plan, sm, traffic, now_ns):
         self._profile.reset()
         self._was_stopping = False

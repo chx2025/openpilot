@@ -289,6 +289,37 @@ def test_green_off_green_off_pattern_latches_flashing_green_stop():
   assert c.flash_latched
 
 
+def test_route5a_far_green_off_cadence_arms_at_first_trusted_green_distance():
+  c = controller()
+  # Tesla publishes OFF as 254 m while a distant green lamp is flashing.
+  # Colors above 200 m may establish cadence, but cannot establish geometry.
+  for now_s, distance, light in (
+    (1.0, 210.0, 2), (1.9, 254.0, 0),
+    (2.5, 238.0, 2), (3.0, 254.0, 0),
+    (3.5, 223.0, 2), (4.0, 254.0, 0),
+  ):
+    decision = update(c, now_s, observation(distance, light, now_s), v_ego=13.0)
+    assert decision.phase == TrafficControlPhase.off
+    assert c.event_id == 0
+
+  trusted = update(c, 4.5, observation(200.0, 2, 4.5), v_ego=13.0)
+  assert trusted.phase == TrafficControlPhase.flashingGreenStop
+  assert trusted.remaining_distance == 195.0
+  assert trusted.apply_constraint
+  assert c.flash_latched
+
+
+def test_single_far_green_off_dropout_cannot_create_a_flashing_green_stop():
+  c = controller()
+  update(c, 1.0, observation(210.0, 2, 1.0), v_ego=13.0)
+  update(c, 1.9, observation(254.0, 0, 1.9), v_ego=13.0)
+  trusted = update(c, 2.5, observation(200.0, 2, 2.5), v_ego=13.0)
+
+  assert trusted.phase == TrafficControlPhase.off
+  assert not c.flash_latched
+  assert c.event_id == 0
+
+
 def test_full_flash_pattern_reconfirms_stop_after_direction_shadow():
   c = controller()
   for now_s, distance, light in ((1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
@@ -402,7 +433,11 @@ def test_active_event_replacement_requires_two_continuous_stop_color_frames():
   assert first.remaining_distance > 80.0
   second = update(c, 2.5, observation(30.0, 1, 2.5), v_ego=10.0)
   assert c.event_id == original_event + 1
-  assert second.remaining_distance == 25.0
+  # A same-session replacement may update identity immediately, but its
+  # geometry must enter through bounded station fusion instead of teleporting.
+  naturally_predicted = max(0.0, first.remaining_distance - 5.0)
+  assert second.remaining_distance > 25.0
+  assert second.remaining_distance >= naturally_predicted - 10.0
 
 
 def test_target_replacement_preserves_the_stop_session():
