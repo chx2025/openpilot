@@ -1,4 +1,6 @@
+import json
 import math
+from pathlib import Path
 
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import (
   TeslaTrafficControlController,
@@ -28,13 +30,13 @@ def observation(distance=80.0, light=1, now_s=1.0, *, available=True, bus=2,
 
 
 def update(controller, now_s, obs, *, v_ego=10.0, lead=False, radar=True,
-           brake=False, gas=False, enabled=True, long_active=True,
+           brake=False, gas=False, blinker=False, enabled=True, long_active=True,
            model_distance=None, model_candidate=False):
   return controller.update(
     obs, int(now_s * 1e9), v_ego=v_ego, a_ego=0.0,
     model_stop_distance=model_distance, model_stop_candidate=model_candidate,
     lead_present=lead, radar_valid=radar, enabled=enabled, long_active=long_active,
-    gas_pressed=gas, brake_pressed=brake, turn_signal_active=False,
+    gas_pressed=gas, brake_pressed=brake, turn_signal_active=blinker,
   )
 
 
@@ -94,15 +96,16 @@ def test_default_reference_is_five_meters_and_model_cannot_replace_can_geometry(
   assert math.isclose(decision.remaining_distance, 40.0, abs_tol=0.1)
 
 
-def test_stop_station_tracks_in_world_coordinates_then_freezes_inside_ten_meters():
+def test_stop_station_keeps_converging_to_fresh_can_inside_ten_meters():
   c = controller()
   establish_red(c, distance=20.0, speed=5.0)
   update(c, 2.2, observation(11.5, 1, 2.2), v_ego=5.0)
-  frozen_station = c.stop_station
+  previous_station = c.stop_station
   assert c.remaining_distance <= 10.0
-  # A noisy CAN correction inside the final zone cannot move the stop point.
+  # Fresh, continuous CAN remains authoritative in the final approach.
   update(c, 2.4, observation(8.0, 1, 2.4), v_ego=5.0)
-  assert c.stop_station == frozen_station
+  assert c.stop_station != previous_station
+  assert abs(c.remaining_distance - 3.0) <= 1.5
   assert c.remaining_distance < 10.0
 
 
@@ -235,10 +238,58 @@ def test_active_event_replacement_requires_two_continuous_stop_color_frames():
   assert second.remaining_distance == 25.0
 
 
-def test_driver_gas_bypasses_and_disabled_longitudinal_resets():
+def test_target_replacement_preserves_the_stop_session():
+  c = controller()
+  establish_red(c, distance=100.0, speed=10.0)
+  session_id = c.stop_session_id
+  event_id = c.event_id
+  update(c, 2.0, observation(35.0, 1, 2.0), v_ego=10.0)
+  update(c, 2.5, observation(30.0, 1, 2.5), v_ego=10.0)
+  assert c.event_id == event_id + 1
+  assert c.stop_session_id == session_id
+
+
+def test_route63_style_can_fusion_does_not_hold_ten_meters_early():
+  c = controller()
+  fixture = json.loads((Path(__file__).parent / "fixtures/route63_regressions.json").read_text())
+  sequence = fixture["event6Fusion"]
+  t0 = sequence[0]["t"] - 1.0
+  update(c, 0.5, observation(66.0, 1, 0.5), v_ego=11.5)
+  for sample in sequence:
+    now_s = sample["t"] - t0
+    distance, speed = sample["rawDistance"], sample["vEgo"]
+    decision = update(c, now_s, observation(distance, 1, now_s), v_ego=speed)
+  assert decision.phase != TrafficControlPhase.hold
+  assert decision.remaining_distance >= 8.0
+  assert abs(decision.remaining_distance - (16.0 - decision.stop_reference)) <= 2.0
+
+
+def test_driver_override_keeps_observing_and_rearms_after_short_cooldown():
+  c = controller()
+  update(c, 1.0, observation(40.0, 1, 1.0), gas=True)
+  update(c, 1.5, observation(35.0, 1, 1.5), gas=False)
+  decision = update(c, 2.0, observation(30.0, 1, 2.0), gas=False)
+  assert decision.phase in c.ACTIVE_PHASES
+  assert not decision.driver_override_active
+  assert not decision.apply_constraint
+  rearmed = update(c, 2.5, observation(25.0, 1, 2.5), gas=False)
+  assert rearmed.apply_constraint
+
+
+def test_turning_marks_generic_signal_direction_unknown_and_disables_control():
+  c = controller()
+  update(c, 1.0, observation(40.0, 1, 1.0), blinker=True)
+  decision = update(c, 1.5, observation(35.0, 1, 1.5), blinker=True)
+  assert decision.direction_unknown
+  assert decision.active
+  assert not decision.apply_constraint
+
+
+def test_driver_gas_temporarily_suppresses_control_and_disabled_longitudinal_resets():
   c = controller()
   establish_red(c)
-  bypass = update(c, 2.0, observation(70, 1, 2.0), gas=True)
-  assert bypass.phase == TrafficControlPhase.bypass
+  override = update(c, 2.0, observation(70, 1, 2.0), gas=True)
+  assert override.driver_override_active
+  assert not override.apply_constraint
   reset = update(c, 20.0, observation(60, 1, 20.0), enabled=False)
   assert reset.phase == TrafficControlPhase.off

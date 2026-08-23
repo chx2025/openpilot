@@ -26,6 +26,8 @@ class TrafficSignalDisplayState:
   visible: bool = False
   has_signal: bool = False
   control_active: bool = False
+  direction_unknown: bool = False
+  driver_override_active: bool = False
   light_state: int = 0
   distance_m: float = 0.0
   phase: int = int(TrafficControlPhase.off)
@@ -49,6 +51,8 @@ class TrafficSignalDisplayState:
       visible=mode == 4,
       has_signal=has_signal,
       control_active=bool(target.applied),
+      direction_unknown=bool(target.directionUnknown),
+      driver_override_active=bool(target.driverOverrideActive),
       light_state=light,
       distance_m=raw_distance if has_signal else 0.0,
       phase=phase,
@@ -109,7 +113,13 @@ class TrafficControlRenderer(Widget):
     distance_pos = rl.Vector2(x + 70, y + 19)
     rl.draw_text_ex(self.font, distance_text, distance_pos, distance_size, 0, TEXT)
 
-    if not self.state.has_signal:
+    if self.state.driver_override_active:
+      detail = "DRIVER OVERRIDE"
+      detail_color = MUTED
+    elif self.state.direction_unknown:
+      detail = "DIRECTION · SHADOW"
+      detail_color = AMBER
+    elif not self.state.has_signal:
       detail = "NO SIGNAL"
       detail_color = MUTED
     elif self.state.flashing:

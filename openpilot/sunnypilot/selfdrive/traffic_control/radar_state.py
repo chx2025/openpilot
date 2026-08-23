@@ -76,13 +76,18 @@ class TrafficRadarSource:
     leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo) if radar_valid else ()
     present_leads = [lead for lead in leads if lead.present]
     lead_present = bool(present_leads)
+    model_direction_unknown = bool(
+      'modelDataV2SP' in sm.seen and sm.seen['modelDataV2SP']
+      and sm.alive['modelDataV2SP'] and sm.valid['modelDataV2SP']
+      and int(sm['modelDataV2SP'].laneTurnDirection) != 0
+    )
     decision = self.controller.update(
       observation, now_ns, v_ego=float(car_state.vEgo), a_ego=float(car_state.aEgo),
       model_stop_distance=None, model_stop_candidate=False,
       lead_present=lead_present, radar_valid=radar_valid, enabled=bool(car_control.enabled),
       long_active=bool(car_control.longActive), gas_pressed=bool(car_state.gasPressed),
       brake_pressed=bool(car_state.brakePressed),
-      turn_signal_active=bool(car_control.leftBlinker or car_control.rightBlinker),
+      turn_signal_active=bool(car_control.leftBlinker or car_control.rightBlinker or model_direction_unknown),
     )
 
     active_stop = decision.phase in (
@@ -113,6 +118,11 @@ class TrafficRadarSource:
     target.quality = int(decision.quality)
     target.confidence = 1.0 if active_stop else 0.0
     target.eventId = int(self.controller.event_id)
+    target.stopSessionId = int(decision.stop_session_id)
+    target.directionUnknown = decision.direction_unknown
+    target.driverOverrideActive = decision.driver_override_active
+    target.canRemaining = float(decision.can_remaining)
+    target.stationInnovation = float(decision.station_innovation)
     target.publishMonoTime = int(now_ns)
     target.controlAllowed = valid_for_control
     target.suppressedByPhysicalLead = suppressed_by_physical_lead

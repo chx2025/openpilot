@@ -51,6 +51,7 @@ class TrafficControlConfig:
   yellow_green_confirm_s: float = 0.6
   release_s: float = 3.0
   bypass_s: float = 10.0
+  driver_override_cooldown_s: float = 0.75
   observation_dropout_s: float = 0.75
   candidate_dropout_s: float = 2.5
   event_distance_tolerance: float = 12.0
@@ -83,6 +84,11 @@ class TrafficControlDecision:
   light_state: int
   source_bus: int
   quality: int
+  stop_session_id: int = 0
+  driver_override_active: bool = False
+  direction_unknown: bool = False
+  can_remaining: float = 0.0
+  station_innovation: float = 0.0
 
 
 class TeslaTrafficControlController:
@@ -102,6 +108,8 @@ class TeslaTrafficControlController:
     self.transition_reason = ""
     self.event_seq = 0
     self.event_id = 0
+    self.stop_session_seq = 0
+    self.stop_session_id = 0
     self.phase = TrafficControlPhase.off
     self.last_update_ns: int | None = None
     self.last_real_frame_ns = 0
@@ -134,6 +142,12 @@ class TeslaTrafficControlController:
     self.yellow_latched: bool | None = None
     self.release_since_ns: int | None = None
     self.bypass_until_ns = 0
+    self.driver_override_until_ns = 0
+    self.driver_override_active = False
+    self.override_reconfirm_required = False
+    self.override_reconfirm_count = 0
+    self.direction_unknown = False
+    self.can_remaining = 0.0
     self.last_distance_innovation = 0.0
 
   def _mark_transition(self, reason: str) -> None:
@@ -151,6 +165,7 @@ class TeslaTrafficControlController:
   def reset(self) -> None:
     self.phase = TrafficControlPhase.off
     self.event_id = 0
+    self.stop_session_id = 0
     self.last_real_frame_ns = 0
     self.last_real_color = 0
     self.last_raw_distance = None
@@ -180,6 +195,12 @@ class TeslaTrafficControlController:
     self.yellow_latched = None
     self.release_since_ns = None
     self.last_distance_innovation = 0.0
+    self.driver_override_until_ns = 0
+    self.driver_override_active = False
+    self.override_reconfirm_required = False
+    self.override_reconfirm_count = 0
+    self.direction_unknown = False
+    self.can_remaining = 0.0
     self.last_update_ns = None
 
   def _decision(self) -> TrafficControlDecision:
@@ -188,7 +209,9 @@ class TeslaTrafficControlController:
       mode=self.config.mode,
       phase=self.phase,
       active=active,
-      apply_constraint=self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and active,
+      apply_constraint=(self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and active
+                        and not self.driver_override_active and not self.override_reconfirm_required
+                        and not self.direction_unknown),
       shadow=self.config.mode == TrafficControlMode.shadow and active,
       should_stop=self.phase == TrafficControlPhase.hold,
       remaining_distance=max(0.0, self.remaining_distance),
@@ -196,6 +219,11 @@ class TeslaTrafficControlController:
       light_state=self.light_state,
       source_bus=self.source_bus,
       quality=self.quality,
+      stop_session_id=self.stop_session_id,
+      driver_override_active=self.driver_override_active,
+      direction_unknown=self.direction_unknown,
+      can_remaining=self.can_remaining,
+      station_innovation=self.last_distance_innovation,
     )
 
   def _distance_tolerance(self, a: float, b: float) -> float:
@@ -212,22 +240,35 @@ class TeslaTrafficControlController:
                 abs(innovation) <= self._distance_tolerance(observation.distance, expected))
 
   def _update_stop_station(self, observation: TeslaTrafficControlObservation) -> None:
-    sample = self.ego_station + observation.distance - self.stop_reference
+    self.can_remaining = max(0.0, observation.distance - self.stop_reference)
+    sample = self.ego_station + self.can_remaining
     self.station_samples.append(sample)
-    filtered = float(np.median(np.asarray(self.station_samples, dtype=float)))
     if self.stop_station is None:
-      self.stop_station = filtered
-    elif self.remaining_distance > self.config.final_distance_freeze_m:
-      # Distance quantization must not move a committed stop target away from
-      # the car by meters at a time. Closing corrections are accepted; outward
-      # corrections are bounded to five centimetres per real CAN sample.
-      self.stop_station = min(filtered, self.stop_station + 0.05)
+      self.stop_station = sample
+      self.remaining_distance = self.can_remaining
+    else:
+      predicted = max(0.0, self.stop_station - self.ego_station)
+      innovation = self.can_remaining - predicted
+      self.last_distance_innovation = innovation
+      gain = float(np.interp(self.can_remaining, [0.0, 20.0, 50.0, 200.0], [0.90, 0.80, 0.55, 0.30]))
+      ego_travel = max(0.0, self.ego_station - self.last_distance_ego_station)
+      minimum_correction = 3.0 if self.can_remaining <= 20.0 else 1.0
+      max_correction = max(minimum_correction, 0.8 * ego_travel + 0.5)
+      correction = float(np.clip(gain * innovation, -max_correction, max_correction))
+      self.remaining_distance = max(0.0, predicted + correction)
+      self.stop_station = self.ego_station + self.remaining_distance
     self.remaining_distance = max(0.0, (self.stop_station or self.ego_station) - self.ego_station)
 
+  def _hold_distance_consistent(self) -> bool:
+    return self.remaining_distance <= 1.5 and self.can_remaining <= 2.0
+
   def _start_stop(self, observation: TeslaTrafficControlObservation, v_ego: float,
-                  phase: TrafficControlPhase, reason: str) -> None:
+                  phase: TrafficControlPhase, reason: str, *, preserve_session: bool = False) -> None:
     self.event_seq += 1
     self.event_id = self.event_seq
+    if not preserve_session or self.stop_session_id == 0:
+      self.stop_session_seq += 1
+      self.stop_session_id = self.stop_session_seq
     self.event_source_bus = observation.source_bus
     self.event_control_source = observation.control_source
     self.stop_reference = self.config.default_stop_reference
@@ -306,7 +347,7 @@ class TeslaTrafficControlController:
              model_stop_distance: float | None, model_stop_candidate: bool, lead_present: bool,
              radar_valid: bool, enabled: bool, long_active: bool, gas_pressed: bool,
              brake_pressed: bool, turn_signal_active: bool) -> TrafficControlDecision:
-    del a_ego, model_stop_distance, model_stop_candidate, lead_present, turn_signal_active
+    del a_ego, model_stop_distance, model_stop_candidate, lead_present
     dt = 0.0 if self.last_update_ns is None else max(0.0, min((now_ns - self.last_update_ns) / 1e9, 0.5))
     self.last_update_ns = now_ns
     self.ego_station += max(0.0, v_ego) * dt
@@ -317,18 +358,17 @@ class TeslaTrafficControlController:
     if self.config.mode == TrafficControlMode.off:
       self.reset()
       return self._decision()
+    was_override_active = self.driver_override_active
     if gas_pressed:
-      entering = self.phase != TrafficControlPhase.bypass
-      self.phase = TrafficControlPhase.bypass
-      self.bypass_until_ns = now_ns + int(self.config.bypass_s * 1e9)
-      if entering:
-        self._mark_transition("driver_bypass")
-      return self._decision()
-    if self.phase == TrafficControlPhase.bypass:
-      if now_ns < self.bypass_until_ns:
-        return self._decision()
-      self.reset()
-      self.last_update_ns = now_ns
+      self.driver_override_until_ns = now_ns + int(self.config.driver_override_cooldown_s * 1e9)
+    self.driver_override_active = gas_pressed or now_ns < self.driver_override_until_ns
+    if self.driver_override_active:
+      self.override_reconfirm_required = True
+      self.override_reconfirm_count = 0
+    elif was_override_active:
+      self.override_reconfirm_required = True
+      self.override_reconfirm_count = 0
+    self.direction_unknown = turn_signal_active
     if not enabled or (self.config.mode in (TrafficControlMode.stopOnly, TrafficControlMode.stopGo) and not long_active):
       self.reset()
       return self._decision()
@@ -349,7 +389,7 @@ class TeslaTrafficControlController:
         if self.candidate_last_ns and now_ns - self.candidate_last_ns > int(self.config.candidate_dropout_s * 1e9):
           self.phase = TrafficControlPhase.off
           self.candidate_count = 0
-      if v_ego < 0.3 and self.phase in self.ACTIVE_PHASES and self.remaining_distance <= 1.5:
+      if v_ego < 0.3 and self.phase in self.ACTIVE_PHASES and self._hold_distance_consistent():
         self.phase = TrafficControlPhase.hold
       return self._decision()
 
@@ -359,10 +399,19 @@ class TeslaTrafficControlController:
     self.source_bus = observation.source_bus
     self.quality = observation.quality
 
+    if self.override_reconfirm_required and not self.driver_override_active:
+      if observation.light_state in (1, 3) and observation.distance <= self.config.max_control_distance:
+        self.override_reconfirm_count += 1
+        if self.override_reconfirm_count >= 2:
+          self.override_reconfirm_required = False
+      else:
+        self.override_reconfirm_count = 0
+
     if observation.distance > self.config.max_control_distance:
       wrapped = bool(self.last_raw_distance is not None and self.last_raw_distance <= 2.0 and observation.distance >= 250.0)
       if wrapped:
         self.phase = TrafficControlPhase.passed
+        self.stop_session_id = 0
         self.remaining_distance = 0.0
         self._mark_transition("distance_wrap_passed")
       self.last_real_color = observation.light_state
@@ -384,16 +433,16 @@ class TeslaTrafficControlController:
       self.last_distance_ego_station = self.ego_station
       replacement_phase = (TrafficControlPhase.yellowStop if observation.light_state == 3
                            else TrafficControlPhase.approachRed)
-      self._start_stop(observation, v_ego, replacement_phase, "candidate_replaced")
+      self._start_stop(observation, v_ego, replacement_phase, "candidate_replaced", preserve_session=True)
       self.pending_count = 0
       self.last_real_color = observation.light_state
       return self._decision()
     if same_track:
       self.pending_count = 0
 
+    self._update_stop_station(observation)
     self.last_raw_distance = observation.distance
     self.last_distance_ego_station = self.ego_station
-    self._update_stop_station(observation)
 
     self.last_real_color = previous_color
     if self._handle_flash(observation, now_ns, v_ego):
@@ -418,7 +467,7 @@ class TeslaTrafficControlController:
         elif color == 1 and self.phase != TrafficControlPhase.hold:
           required = v_ego ** 2 / (2.0 * max(self.remaining_distance, 0.5))
           self.phase = TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed
-      if v_ego < 0.3 and self.remaining_distance <= 1.5 and self.phase != TrafficControlPhase.release:
+      if v_ego < 0.3 and self._hold_distance_consistent() and self.phase != TrafficControlPhase.release:
         self.phase = TrafficControlPhase.hold
         self._mark_transition("stationary_hold")
       self.last_real_color = observation.light_state
@@ -426,7 +475,7 @@ class TeslaTrafficControlController:
 
     if self.phase == TrafficControlPhase.release:
       if color == 1 and confirmed:
-        self._start_stop(observation, v_ego, TrafficControlPhase.approachRed, "red_after_release")
+        self._start_stop(observation, v_ego, TrafficControlPhase.approachRed, "red_after_release", preserve_session=True)
       elif self.release_since_ns is not None and now_ns - self.release_since_ns >= int(self.config.release_s * 1e9):
         self.reset()
         self.last_update_ns = now_ns

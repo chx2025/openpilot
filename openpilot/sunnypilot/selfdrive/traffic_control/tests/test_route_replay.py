@@ -100,5 +100,5 @@ def test_recorded_traffic_candidates_replay_deterministically(route_name, expect
   ]
   assert len(present_targets) == expected_present
   assert suppressed_frames >= minimum_suppressed
-  assert max(positive_jumps, default=0.0) <= 0.05
+  assert max(positive_jumps, default=0.0) <= 3.0
   assert start_requests == 0

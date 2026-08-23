@@ -526,6 +526,11 @@ struct TeslaTrafficControlPlan {
   eventId @18 :UInt32;
   terminalCatchActive @19 :Bool;
   rawDistance @20 :Float32;
+  stopSessionId @21 :UInt32;
+  directionUnknown @22 :Bool;
+  driverOverrideActive @23 :Bool;
+  canRemaining @24 :Float32;
+  stationInnovation @25 :Float32;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {
@@ -576,6 +581,11 @@ struct TrafficRadarState @0xcb9fd56c7057593a {
   eventTransitionSeq @21 :UInt32;
   rawDistance @22 :Float32;
   observationAgeMs @23 :Float32;
+  stopSessionId @24 :UInt32;
+  directionUnknown @25 :Bool;
+  driverOverrideActive @26 :Bool;
+  canRemaining @27 :Float32;
+  stationInnovation @28 :Float32;
 }
 
 struct CustomReserved11 @0xc2243c65e0340384 {

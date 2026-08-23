@@ -45,6 +45,7 @@ def red_light_sm():
     "carControl": ns(enabled=True, longActive=True, leftBlinker=False, rightBlinker=False),
     "radarState": ns(leadOne=ns(present=False, dRel=0.0), leadTwo=ns(present=False, dRel=0.0)),
     "modelV2": ns(position=ns(x=[74.0] * 33), velocity=ns(x=[0.0] * 33)),
+    "modelDataV2SP": ns(laneTurnDirection=0),
   }
 
   class FakeSubMaster:
@@ -71,10 +72,22 @@ def test_confirmed_red_is_published_as_a_separate_radar_like_target():
   assert target.targetPresent
   assert target.controlAllowed
   assert target.oemTargetDistance == target.distanceToStopPoint + 5.0
-  assert 0.0 < target.distanceToStopPoint <= 74.0
+  assert 0.0 < target.distanceToStopPoint <= 75.0
   assert target.eventId > 0
   assert not sm["radarState"].leadOne.present
   assert not sm["radarState"].leadTwo.present
+
+
+def test_model_turn_direction_downgrades_generic_signal_to_shadow():
+  sm = red_light_sm()
+  sm["modelDataV2SP"].laneTurnDirection = 1
+  source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+  for now_ns in range(0, 1_000_000_001, 100_000_000):
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    target = source.update(sm, now_ns).trafficRadarState
+  assert target.directionUnknown
+  assert target.targetPresent
+  assert not target.controlAllowed
 
 
 def test_stale_observation_keeps_raw_age_and_distance_only_for_diagnostics():

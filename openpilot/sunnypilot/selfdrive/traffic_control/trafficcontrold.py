@@ -56,7 +56,7 @@ def main() -> None:
   params = Params()
   source = build_source(params)
   model_updates = 0
-  services = ['carControl', 'carState', 'radarState', 'modelV2', 'carStateSP']
+  services = ['carControl', 'carState', 'radarState', 'modelV2', 'modelDataV2SP', 'carStateSP']
   sm = messaging.SubMaster(services, poll='modelV2', ignore_alive=['carStateSP'],
                            ignore_avg_freq=['carStateSP'], ignore_valid=['carStateSP'])
   pm = messaging.PubMaster(['trafficRadarState'])

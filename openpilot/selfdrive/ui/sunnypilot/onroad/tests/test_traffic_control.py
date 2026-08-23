@@ -5,12 +5,15 @@ from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficCon
 
 
 def target(*, light=1, raw_distance=80.0, remaining=35.0, reference=5.0,
-           phase=TrafficControlPhase.braking, quality=2, mode=4, applied=False):
+           phase=TrafficControlPhase.braking, quality=2, mode=4, applied=False,
+           direction_unknown=False, driver_override=False):
   return SimpleNamespace(
     lightState=light,
     mode=mode,
     rawDistance=raw_distance,
     applied=applied,
+    directionUnknown=direction_unknown,
+    driverOverrideActive=driver_override,
     remainingDistance=remaining,
     stopReference=reference,
     phase=int(phase),
@@ -52,3 +55,10 @@ def test_view_model_stays_visible_without_a_current_signal():
 def test_view_model_never_replaces_far_raw_can_distance_with_five_meter_reference():
   state = TrafficSignalDisplayState.from_plan(target(raw_distance=153, remaining=0, reference=5))
   assert state.distance_m == 153
+
+
+def test_view_model_exposes_direction_shadow_and_driver_override():
+  direction = TrafficSignalDisplayState.from_plan(target(direction_unknown=True))
+  override = TrafficSignalDisplayState.from_plan(target(driver_override=True))
+  assert direction.direction_unknown
+  assert override.driver_override_active
