@@ -76,6 +76,14 @@ def open_file_chunked(path):
   return io.BufferedReader(ChunkStream(paths))
 
 
+def get_chunked_file_size(path) -> int:
+  manifest_path = get_manifest_path(path)
+  if os.path.isfile(manifest_path):
+    num_chunks = int(Path(manifest_path).read_text().strip())
+    return sum(os.path.getsize(get_chunk_name(path, i, num_chunks)) for i in range(num_chunks))
+  return os.path.getsize(path)
+
+
 if __name__ == "__main__":
   path = sys.argv[1]
   chunk_paths = get_chunk_targets(path, os.path.getsize(path))

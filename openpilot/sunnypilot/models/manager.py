@@ -17,7 +17,8 @@ from openpilot.common.hardware.hw import Paths
 
 from openpilot.cereal import messaging, custom
 from openpilot.sunnypilot.models.fetcher import ModelFetcher
-from openpilot.sunnypilot.models.helpers import get_active_bundle, validate_active_bundle, verify_file
+from openpilot.sunnypilot.models.helpers import (bundle_requires_usbgpu, get_active_bundle,
+                                                  migrate_active_bundle_metadata, validate_active_bundle, verify_file)
 
 # (connect, read) seconds. read is per-request inactivity, not a total cap
 DOWNLOAD_TIMEOUT = (30, 30)
@@ -171,6 +172,10 @@ class ModelManagerSP:
           is_cached = True
 
       if is_cached:
+        if len(artifact.chunks) > 0:
+          from openpilot.common.file_chunker import get_manifest_path
+          with open(get_manifest_path(full_path), 'w') as f:  # noqa: ASYNC230
+            f.write(str(len(artifact.chunks)))
         artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.cached
         artifact.downloadProgress.progress = 100
         artifact.downloadProgress.eta = 0
@@ -257,7 +262,7 @@ class ModelManagerSP:
 
       self.active_bundle = self.selected_bundle
       self.active_bundle.status = custom.ModelManagerSP.DownloadStatus.downloaded
-      self.params.put_bool("ModelManager_ActiveBundleRequiresUsbGpu", self.model_fetcher.is_usbgpu, block=True)
+      self.params.put_bool("ModelManager_ActiveBundleRequiresUsbGpu", bundle_requires_usbgpu(self.active_bundle), block=True)
       self.params.put("ModelManager_ActiveBundle", self.active_bundle.to_dict(), block=True)
       self.selected_bundle = None
 
@@ -280,6 +285,7 @@ class ModelManagerSP:
     while True:
       try:
         self.available_models = self.model_fetcher.get_available_bundles()
+        migrate_active_bundle_metadata(self.params, self.available_models)
         validate_active_bundle(self.params, self.available_models)
         self.active_bundle = get_active_bundle(self.params)
 

@@ -2,7 +2,7 @@ import hashlib
 
 from openpilot.cereal import custom
 from openpilot.common.hardware.hw import Paths
-from openpilot.sunnypilot.models.default_model import get_default_model
+from openpilot.sunnypilot.models.default_model import get_default_model, get_stock_default_model
 from openpilot.sunnypilot.models.helpers import get_active_model_runner, select_default_model, usbgpu_model_ready, validate_active_bundle
 
 
@@ -45,6 +45,7 @@ def test_select_default_is_atomic_from_ui_perspective():
 def test_default_model_name_matches_connected_hardware():
   assert get_default_model(connected=False) == "CD210"
   assert get_default_model(connected=True) == "Lebowski"
+  assert get_stock_default_model() == "CD210"
 
 
 def test_valid_active_model_survives_temporary_catalog_switch(monkeypatch, tmp_path):
@@ -134,6 +135,7 @@ def test_downloaded_usbgpu_bundle_satisfies_model_readiness(monkeypatch, tmp_pat
   params = FakeParams({
     "ModelManager_ActiveBundle": {
       "internalName": "LM",
+      "overrides": [{"key": "model_platform", "value": "usbgpu"}],
       "models": [{
         "artifact": {
           "fileName": model_name,

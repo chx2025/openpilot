@@ -87,6 +87,7 @@ class SidebarSP:
       eject_status=eject_status,
       loading=ui_state.usbgpu_loading,
       active=ui_state.usbgpu_active,
+      loading_progress=ui_state.usbgpu_loading_progress,
     )
     color = {
       "good": Colors.GOOD,

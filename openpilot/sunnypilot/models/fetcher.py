@@ -6,16 +6,14 @@ See the LICENSE.md file in the root directory for more details.
 """
 
 import time
-import os
 import requests
 from requests.exceptions import (SSLError, RequestException, HTTPError)
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.common.hardware.hw import Paths
 from openpilot.sunnypilot.models.helpers import is_bundle_version_compatible
-from openpilot.selfdrive.modeld.helpers import usbgpu_present
-
 from openpilot.cereal import custom
+
+USBGPU_INDEX_OFFSET = 1000
 
 
 class ModelParser:
@@ -44,19 +42,6 @@ class ModelParser:
     if "chunks" in artifact_data:
       artifact.chunks = [ModelParser._parse_chunk(chunk_data) for chunk_data in artifact_data["chunks"]]
 
-      try:
-        model_dir = Paths.model_root()
-        os.makedirs(model_dir, exist_ok=True)
-        manifest_path = os.path.join(model_dir, f"{artifact.fileName}.chunkmanifest")
-        num_chunks = str(len(artifact.chunks))
-
-        if not os.path.exists(manifest_path) or open(manifest_path).read().strip() != num_chunks:
-          with open(manifest_path, "w") as f:
-            f.write(num_chunks)
-          cloudlog.info(f"Wrote chunk manifest for {artifact.fileName}: {num_chunks} chunks")
-      except Exception as e:
-        cloudlog.warning(f"Failed to write chunk manifest for {artifact.fileName}: {e}")
-
     return artifact
 
   @staticmethod
@@ -78,9 +63,9 @@ class ModelParser:
     return overrides
 
   @staticmethod
-  def _parse_bundle(bundle) -> custom.ModelManagerSP.ModelBundle:
+  def _parse_bundle(bundle, *, index_offset: int = 0, platform: str | None = None) -> custom.ModelManagerSP.ModelBundle:
     model_bundle = custom.ModelManagerSP.ModelBundle()
-    model_bundle.index = int(bundle["index"])
+    model_bundle.index = int(bundle["index"]) + index_offset
     model_bundle.internalName = bundle["short_name"]
     model_bundle.displayName = bundle["display_name"]
     model_bundle.models = [ModelParser._parse_model(model) for model in bundle.get("models",[])]
@@ -90,14 +75,18 @@ class ModelParser:
     model_bundle.runner = bundle.get("runner", custom.ModelManagerSP.Runner.snpe)
     model_bundle.is20hz = bundle.get("is_20hz", False)
     model_bundle.minimumSelectorVersion = int(bundle["minimum_selector_version"])
-    model_bundle.overrides = ModelParser._parse_overrides(bundle.get("overrides", {}))
+    overrides = dict(bundle.get("overrides", {}))
+    if platform is not None:
+      overrides["model_platform"] = platform
+    model_bundle.overrides = ModelParser._parse_overrides(overrides)
     model_bundle.ref = bundle.get("ref")
 
     return model_bundle
 
   @staticmethod
-  def parse_models(json_data: dict) -> list[custom.ModelManagerSP.ModelBundle]:
-    found_bundles = [ModelParser._parse_bundle(bundle) for bundle in json_data.get("bundles", [])]
+  def parse_models(json_data: dict, *, index_offset: int = 0, platform: str | None = None) -> list[custom.ModelManagerSP.ModelBundle]:
+    found_bundles = [ModelParser._parse_bundle(bundle, index_offset=index_offset, platform=platform)
+                     for bundle in json_data.get("bundles", [])]
     return [bundle for bundle in found_bundles if is_bundle_version_compatible(bundle.to_dict())]
 
 
@@ -140,36 +129,24 @@ class ModelCache:
 
 class ModelFetcher:
   """Handles fetching and caching of model data from remote source"""
-  MODEL_URL = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_v20.json"
+  MODEL_URL = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_v21.json"
   MODEL_URL_USBGPU = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_usbgpu_v22.json"
 
   def __init__(self, params: Params):
     self.params = params
     self.model_parser = ModelParser()
-    self._is_usbgpu: bool | None = None
     self.model_cache = ModelCache(params)
+    self.usbgpu_model_cache = ModelCache(params, suffix="_USBGPU")
     self.model_url = self.MODEL_URL
-    self._update_model_source()
+    self.params.put("ModelManager_ActiveJson", f"{self.MODEL_URL};{self.MODEL_URL_USBGPU}", block=True)
 
-  def _update_model_source(self) -> None:
-    """Updates what json to use based on usbgpu availability"""
-    is_usbgpu = usbgpu_present()
-    if is_usbgpu != self._is_usbgpu:
-      self._is_usbgpu = is_usbgpu
-      self.model_cache = ModelCache(self.params, suffix="_USBGPU" if is_usbgpu else "")
-      self.model_url = self.MODEL_URL_USBGPU if is_usbgpu else self.MODEL_URL
-      self.params.put("ModelManager_ActiveJson", self.model_url, block=True)
-
-  @property
-  def is_usbgpu(self) -> bool:
-    return bool(self._is_usbgpu)
-
-  def _fetch_and_cache_models(self) -> list[custom.ModelManagerSP.ModelBundle] | None:
+  def _fetch_and_cache_models(self, model_url: str, model_cache: ModelCache, *,
+                              index_offset: int, platform: str) -> list[custom.ModelManagerSP.ModelBundle] | None:
     """Fetches fresh model data from remote and updates cache.
     Returns None on transport errors. Raises on 404 and other fatal HTTP errors.
     """
     try:
-      response = requests.get(self.model_url, timeout=10)
+      response = requests.get(model_url, timeout=10)
 
       # Explicitly handle 404 differently
       if response.status_code == 404:
@@ -180,9 +157,9 @@ class ModelFetcher:
       response.raise_for_status()
 
       json_data = response.json()
-      self.model_cache.set(json_data)
+      model_cache.set(json_data)
       cloudlog.debug("Successfully updated models cache")
-      return self.model_parser.parse_models(json_data)
+      return self.model_parser.parse_models(json_data, index_offset=index_offset, platform=platform)
 
     except ConnectionError as e:
       cloudlog.warning(f"DNS/connection error while fetching models: {e}")
@@ -195,16 +172,15 @@ class ModelFetcher:
 
     return None
 
-  def get_available_bundles(self) -> list[custom.ModelManagerSP.ModelBundle]:
-    """Gets the list of available models, with smart cache handling"""
-    self._update_model_source()
-    cached_data, is_expired = self.model_cache.get()
+  def _get_catalog(self, model_url: str, model_cache: ModelCache, *,
+                   index_offset: int, platform: str) -> list[custom.ModelManagerSP.ModelBundle]:
+    cached_data, is_expired = model_cache.get()
 
     if cached_data and not is_expired:
       cloudlog.debug("Using valid cached models data")
-      return self.model_parser.parse_models(cached_data)
+      return self.model_parser.parse_models(cached_data, index_offset=index_offset, platform=platform)
 
-    fetched_bundles = self._fetch_and_cache_models()
+    fetched_bundles = self._fetch_and_cache_models(model_url, model_cache, index_offset=index_offset, platform=platform)
     if fetched_bundles is not None:
       return fetched_bundles
 
@@ -212,7 +188,14 @@ class ModelFetcher:
       cloudlog.warning("Failed to fetch fresh data and no cache available")
 
     cloudlog.warning("Failed to fetch fresh data. Using expired cache as fallback")
-    return self.model_parser.parse_models(cached_data)
+    return self.model_parser.parse_models(cached_data, index_offset=index_offset, platform=platform)
+
+  def get_available_bundles(self) -> list[custom.ModelManagerSP.ModelBundle]:
+    """Return QCOM and USBGPU catalogs together with stable, non-overlapping indices."""
+    small = self._get_catalog(self.MODEL_URL, self.model_cache, index_offset=0, platform="qcom")
+    big = self._get_catalog(self.MODEL_URL_USBGPU, self.usbgpu_model_cache,
+                            index_offset=USBGPU_INDEX_OFFSET, platform="usbgpu")
+    return [*small, *big]
 
 if __name__ == "__main__":
   params = Params()

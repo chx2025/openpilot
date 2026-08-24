@@ -68,6 +68,21 @@ def test_absent_egpu_has_no_panel():
   assert not status.visible
 
 
+def test_loading_status_exposes_real_progress_percentage():
+  panel = build_egpu_status(
+    connected=True, compiled=True, loading=True, active=None,
+    model_alive=False, model_big=False, telemetry_valid=False, loading_progress=64,
+  )
+  sidebar = build_egpu_sidebar_status(
+    present=True, compiled=True, link_state="ready", usb_speed_mbps=5000,
+    pcie_ltssm=0x78, eject_status=None, loading=True, active=None, loading_progress=64,
+  )
+
+  assert "64%" in panel.headline
+  assert sidebar.value == "LOAD 64%"
+  assert "64%" in sidebar.detail
+
+
 def test_optional_egpu_absence_stays_quiet_even_when_big_model_is_compiled():
   status = build_egpu_status(
     connected=False, compiled=True, loading=False, active=None,

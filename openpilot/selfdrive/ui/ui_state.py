@@ -6,7 +6,7 @@ from enum import Enum
 from openpilot.cereal import messaging, log
 from opendbc.car.structs import car
 from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.realtime import drop_realtime
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.prime_state import PrimeState
@@ -88,6 +88,10 @@ class UIState(UIStateSP):
     self.usbgpu_compiled: bool = usbgpu_model_ready(self.params)
     self.usbgpu_active: bool | None = self.params.get("UsbGpuActive")
     self.usbgpu_loading: bool = self.params.get_bool("UsbGpuLoading")
+    try:
+      self.usbgpu_loading_progress = int(self.params.get("UsbGpuLoadingProgress", return_default=True) or 0)
+    except UnknownKeyName:
+      self.usbgpu_loading_progress = 0
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
@@ -223,6 +227,10 @@ class UIState(UIStateSP):
       self.usbgpu_compiled = usbgpu_model_ready(self.params)
     self.usbgpu_active = self.params.get("UsbGpuActive")
     self.usbgpu_loading = self.params.get_bool("UsbGpuLoading")
+    try:
+      self.usbgpu_loading_progress = int(self.params.get("UsbGpuLoadingProgress", return_default=True) or 0)
+    except UnknownKeyName:
+      self.usbgpu_loading_progress = 0
 
     UIStateSP.update_params(self)
 

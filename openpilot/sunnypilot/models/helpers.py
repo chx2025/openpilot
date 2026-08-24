@@ -5,6 +5,8 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+from __future__ import annotations
+
 import hashlib
 import os
 import pickle
@@ -20,7 +22,8 @@ from openpilot.selfdrive.modeld.helpers import usbgpu_compiled
 from openpilot.sunnypilot.models.artifact_status import bundle_artifacts_ready
 
 # SET ME TO THE EXACT JSON VERSION WE SET IN SUNNYPILOT_MODELS REPO
-REQUIRED_JSON_VERSION = 17
+REQUIRED_JSON_VERSION = 18
+MIGRATION_JSON_VERSIONS = frozenset((17, REQUIRED_JSON_VERSION))
 
 CUSTOM_MODEL_PATH = Paths.model_root()
 METADATA_PATH = Path(__file__).parent / '../models/supercombo_metadata.pkl'
@@ -53,7 +56,21 @@ def is_bundle_version_compatible(bundle: dict) -> bool:
   required to load the model. This function ensures that:
     the bundle MUST match the `REQUIRED_JSON_VERSION` set here in helpers.
   """
-  return bundle.get("minimumSelectorVersion", 0) == REQUIRED_JSON_VERSION
+  return bundle.get("minimumSelectorVersion", 0) in MIGRATION_JSON_VERSIONS
+
+
+def bundle_requires_usbgpu(bundle: custom.ModelManagerSP.ModelBundle | None) -> bool:
+  if bundle is None:
+    return False
+  overrides = {override.key: override.value for override in getattr(bundle, "overrides", [])}
+  return overrides.get("model_platform") == "usbgpu"
+
+
+def bundle_catalog_folder(bundle: custom.ModelManagerSP.ModelBundle) -> str:
+  overrides = {override.key: override.value for override in getattr(bundle, "overrides", [])}
+  folder = overrides.get("folder") or "Models"
+  platform = "eGPU" if bundle_requires_usbgpu(bundle) else "QCOM"
+  return f"{platform} · {folder}"
 
 
 def _bundle_artifacts(bundle: custom.ModelManagerSP.ModelBundle) -> list[tuple[str, str]]:
@@ -81,6 +98,33 @@ def _bundle_is_valid_locally(bundle: custom.ModelManagerSP.ModelBundle) -> bool:
              for file_name, expected_hash in _bundle_artifacts(bundle))
 
 
+def migrate_active_bundle_metadata(params: Params, available_bundles: list[custom.ModelManagerSP.ModelBundle]) -> bool:
+  global _LAST_VALIDATED_RAW
+
+  raw_bundle = params.get("ModelManager_ActiveBundle")
+  if not isinstance(raw_bundle, dict) or not raw_bundle:
+    return False
+  try:
+    active_bundle = custom.ModelManagerSP.ModelBundle(**raw_bundle)
+  except Exception:
+    return False
+  if active_bundle.minimumSelectorVersion >= REQUIRED_JSON_VERSION:
+    return False
+
+  matching_bundle = next((bundle for bundle in available_bundles if bundle.ref == active_bundle.ref), None)
+  if matching_bundle is None:
+    return False
+  if set(_bundle_artifacts(active_bundle)) != set(_bundle_artifacts(matching_bundle)):
+    return False
+  if not _bundle_is_valid_locally(active_bundle):
+    return False
+
+  params.put("ModelManager_ActiveBundle", matching_bundle.to_dict(), block=True)
+  params.put_bool("ModelManager_ActiveBundleRequiresUsbGpu", bundle_requires_usbgpu(matching_bundle), block=True)
+  _LAST_VALIDATED_RAW = None
+  return True
+
+
 def _bundle_needs_reset(active_bundle: custom.ModelManagerSP.ModelBundle, available_bundles: list[custom.ModelManagerSP.ModelBundle] | None) -> bool:
   if active_bundle is None:
     return False
@@ -98,7 +142,8 @@ def _bundle_needs_reset(active_bundle: custom.ModelManagerSP.ModelBundle, availa
 
     if matching_bundle is not None:
       if active_bundle.minimumSelectorVersion != matching_bundle.minimumSelectorVersion:
-        return True
+        return not (active_bundle.minimumSelectorVersion < matching_bundle.minimumSelectorVersion
+                    and _bundle_is_valid_locally(active_bundle))
 
       active_runner = getattr(active_bundle, 'runner', None)
       matching_runner = getattr(matching_bundle, 'runner', None)
@@ -106,7 +151,8 @@ def _bundle_needs_reset(active_bundle: custom.ModelManagerSP.ModelBundle, availa
         if getattr(active_runner, 'raw', active_runner) != getattr(matching_runner, 'raw', matching_runner):
           return True
       if set(_bundle_artifacts(active_bundle)) != set(_bundle_artifacts(matching_bundle)):
-        return True
+        return not (active_bundle.minimumSelectorVersion < matching_bundle.minimumSelectorVersion
+                    and _bundle_is_valid_locally(active_bundle))
 
   return not _bundle_is_valid_locally(active_bundle)
 
@@ -132,7 +178,7 @@ def validate_active_bundle(params: Params, available_bundles: list[custom.ModelM
     _LAST_VALIDATED_RAW = raw_bundle
 
 
-def get_active_bundle(params: Params | None = None, raw_bundle_dict: dict | bytes | None = None) -> "custom.ModelManagerSP.ModelBundle | None":
+def get_active_bundle(params: Params | None = None, raw_bundle_dict: dict | bytes | None = None) -> custom.ModelManagerSP.ModelBundle | None:
   params = params or Params()
   try:
     active_bundle_dict = raw_bundle_dict if raw_bundle_dict is not None else (params.get("ModelManager_ActiveBundle") or {})
@@ -148,7 +194,7 @@ def usbgpu_model_ready(params: Params | None = None) -> bool:
     return True
   params = params or Params()
   bundle = get_active_bundle(params)
-  return bool(bundle is not None and bundle.runner == custom.ModelManagerSP.Runner.tinygrad and
+  return bool(bundle is not None and bundle_requires_usbgpu(bundle) and bundle.runner == custom.ModelManagerSP.Runner.tinygrad and
               bundle_artifacts_ready(bundle, Paths.model_root()))
 
 

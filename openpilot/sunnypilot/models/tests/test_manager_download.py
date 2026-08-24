@@ -204,6 +204,8 @@ class TestManagerDownload(ManagerDownloadTestBase):
       assert self.reported[-1] == 100.0
       assert artifact.downloadProgress.status == custom.ModelManagerSP.DownloadStatus.cached
       assert DownloadHandler.request_paths == []
+      with open(get_manifest_path(base_path)) as f:
+        assert f.read() == str(len(CHUNK_BODIES))
 
     self.run_with_server(body)
 
@@ -277,8 +279,10 @@ class TestManagerDownload(ManagerDownloadTestBase):
     bundle = custom.ModelManagerSP.ModelBundle.new_message()
     bundle.index = 0
     bundle.init('models', 1)
+    bundle.init('overrides', 1)
+    bundle.overrides[0].key = "model_platform"
+    bundle.overrides[0].value = "usbgpu"
     bundle.models[0].artifact.fileName = 'already_cached.pkl'
-    self.manager.model_fetcher.is_usbgpu = True
 
     async def cached(*args, **kwargs):
       return None

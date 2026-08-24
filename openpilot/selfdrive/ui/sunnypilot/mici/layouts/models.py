@@ -7,8 +7,8 @@ See the LICENSE.md file in the root directory for more details.
 import pyray as rl
 
 from openpilot.cereal import custom
-from openpilot.sunnypilot.models.default_model import get_default_model
-from openpilot.sunnypilot.models.helpers import select_default_model
+from openpilot.sunnypilot.models.default_model import get_stock_default_model
+from openpilot.sunnypilot.models.helpers import bundle_catalog_folder, select_default_model
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.models import ModelsLayout
 from openpilot.selfdrive.ui.ui_state import ui_state, device
@@ -28,7 +28,7 @@ class CurrentModelInfo(Widget):
     subheader_color = rl.Color(255, 255, 255, int(255 * 0.9 * 0.65))
     max_width = int(self._rect.width - 20)
     self.current_model_header = UnifiedLabel(tr("active model"), 48, max_width=max_width, text_color=header_color, font_weight=FontWeight.DISPLAY)
-    default_text = f"{get_default_model(connected=bool(ui_state.sm['deviceState'].chestnutPresent))} (Default)".lower()
+    default_text = f"{get_stock_default_model()} (Stock Default)".lower()
     self.current_model_text = UnifiedLabel(default_text, 32, max_width=max_width, text_color=subheader_color, font_weight=FontWeight.ROMAN, scroll=True)
 
     self.info_header = UnifiedLabel("cache size", 48, max_width=max_width, text_color=header_color, font_weight=FontWeight.DISPLAY)
@@ -74,7 +74,7 @@ class ModelsLayoutMici(NavScroller):
     bundles = self.model_manager.availableBundles
     folders = {}
     for bundle in bundles:
-      folder = next((override.value for override in bundle.overrides if override.key == "folder"), "")
+      folder = bundle_catalog_folder(bundle)
       folders.setdefault(folder, []).append(bundle)
 
     if favorites:
@@ -96,19 +96,18 @@ class ModelsLayoutMici(NavScroller):
 
     folders = self._get_grouped_bundles(favorites)
     folder_buttons = []
-    default_model = get_default_model(connected=bool(ui_state.sm["deviceState"].chestnutPresent))
-    default_btn = BigButton(f"{default_model} (Default)".lower())
+    default_model = get_stock_default_model()
+    default_btn = BigButton(f"{default_model} (Stock Default)".lower())
     default_btn.set_click_callback(self._select_default)
     folder_buttons.append(default_btn)
 
     for folder in sorted(folders.keys(), key=lambda f: max((bundle.index for bundle in folders[f]), default=-1), reverse=True):
-      if folder.lower() in ["release models", "master models", "favorites"]:
-        btn = BigButton(folder.lower())
-        btn.set_click_callback(lambda f=folder: self._select_folder(f))
-        if folder.lower() == "favorites":
-          folder_buttons.insert(0, btn)
-        else:
-          folder_buttons.append(btn)
+      btn = BigButton(folder.lower())
+      btn.set_click_callback(lambda f=folder: self._select_folder(f))
+      if folder.lower() == "favorites":
+        folder_buttons.insert(0, btn)
+      else:
+        folder_buttons.append(btn)
     self._push_selection_view(folder_buttons)
 
   def _pop_to_main(self):
@@ -164,8 +163,8 @@ class ModelsLayoutMici(NavScroller):
     self._was_downloading = is_downloading
 
     self.current_model_info.current_model_header.set_text(tr("active model"))
-    default_model = get_default_model(connected=bool(ui_state.sm["deviceState"].chestnutPresent))
-    model_text = manager.activeBundle.displayName.lower() if manager.activeBundle.ref else f"{default_model} (Default)".lower()
+    default_model = get_stock_default_model()
+    model_text = manager.activeBundle.displayName.lower() if manager.activeBundle.ref else f"{default_model} (Stock Default)".lower()
     self.current_model_info.current_model_text.set_text(model_text)
     self.current_model_info.info_header.set_text(tr("cache size"))
     self.current_model_info.info_text.set_text(f"{ModelsLayout.calculate_cache_size():.2f} MB")

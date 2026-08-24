@@ -35,7 +35,7 @@ class EgpuSidebarStatus:
 def build_egpu_sidebar_status(*, present: bool, compiled: bool, link_state: str | None,
                               usb_speed_mbps: int, pcie_ltssm: int | None,
                               eject_status: str | None, loading: bool,
-                              active: bool | None) -> EgpuSidebarStatus:
+                              active: bool | None, loading_progress: int = 0) -> EgpuSidebarStatus:
   if eject_status == "ejecting":
     return EgpuSidebarStatus("REMOVE...", "progress", "正在安全卸载 eGPU")
   if eject_status == "safe":
@@ -56,7 +56,7 @@ def build_egpu_sidebar_status(*, present: bool, compiled: bool, link_state: str 
   if not compiled:
     return EgpuSidebarStatus("NO MODEL", "warning", "USB/PCIe 正常，但默认大模型尚未编译")
   if loading:
-    return EgpuSidebarStatus("LOADING", "progress", "USB/PCIe 正常，正在加载默认大模型")
+    return EgpuSidebarStatus(f"LOAD {loading_progress}%", "progress", f"USB/PCIe 正常，大模型加载 {loading_progress}%")
   if active is False:
     return EgpuSidebarStatus("MODEL ERR", "danger", "链路正常，但默认大模型加载或运行失败")
   if active is True:
@@ -101,6 +101,7 @@ def egpu_panel_style(*, compact: bool) -> EgpuPanelStyle:
 
 def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active: bool | None,
                       model_alive: bool, model_big: bool, telemetry_valid: bool,
+                      loading_progress: int = 0,
                       usb_speed_mbps: int = 0, model_fps: float = 0.0,
                       power_w: float = 0.0, temp_c: float = 0.0, memory_temp_c: float = 0.0,
                       memory_used_mb: int = 0, memory_total_mb: int = 0,
@@ -113,7 +114,7 @@ def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active:
   if not compiled:
     return EgpuStatus(True, False, "eGPU 已连接 · 大模型未编译", (f"AMD eGPU · {link}",))
   if loading:
-    return EgpuStatus(True, False, "eGPU 正在加载大模型", (f"AMD eGPU · {link}",))
+    return EgpuStatus(True, False, f"eGPU 正在加载大模型 · {loading_progress}%", (f"AMD eGPU · {link}",))
   if active is False:
     return EgpuStatus(True, False, "eGPU 大模型失败 · 已回退小模型", (f"AMD eGPU · {link}",))
   if active is not True:
@@ -156,6 +157,7 @@ def draw_egpu_status_panel(rect: rl.Rectangle, font: rl.Font, *, compact: bool) 
   status = build_egpu_status(
     connected=connected, compiled=ui_state.usbgpu_compiled, loading=ui_state.usbgpu_loading,
     active=ui_state.usbgpu_active, model_alive=model_alive, model_big=model_big,
+    loading_progress=ui_state.usbgpu_loading_progress,
     telemetry_valid=telemetry_valid, usb_speed_mbps=chestnut_usb_speed_mbps(sm["deviceState"]),
     model_fps=float(telemetry.modelFps), power_w=float(telemetry.powerDrawW),
     temp_c=float(telemetry.tempC), memory_temp_c=float(telemetry.memoryTempC),

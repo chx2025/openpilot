@@ -14,6 +14,11 @@ def get_default_model(connected: bool | None = None) -> str:
   return DEFAULT_BIG_MODEL if connected else DEFAULT_MODEL
 
 
+def get_stock_default_model() -> str:
+  """The Default selection always clears ActiveBundle and uses the stock runner."""
+  return DEFAULT_MODEL
+
+
 DEFAULT_MODEL_NAME_PATH = os.path.join(BASEDIR, "openpilot", "sunnypilot", "models", "model_name.py")
 MODEL_HASH_PATH = os.path.join(BASEDIR, "openpilot", "sunnypilot", "models", "tests", "model_hash")
 SUPERCOMBO_ONNX_PATH = os.path.join(BASEDIR, "openpilot", "selfdrive", "modeld", "models", "driving_supercombo.onnx")

@@ -36,14 +36,43 @@ def dump_oob(obj, f):
     tmp.seek(0)
     shutil.copyfileobj(tmp, f)
 
-def load_oob(f):
-  opcodes = f.read(struct.unpack('<q', f.read(8))[0])
+def load_oob(f, *, total_size: int | None = None, progress_callback=None):
+  bytes_read = 0
+
+  def read(size: int):
+    nonlocal bytes_read
+    data = f.read(size)
+    bytes_read += len(data)
+    if progress_callback is not None and total_size:
+      progress_callback(min(1.0, bytes_read / total_size))
+    return data
+
+  def readinto(view) -> int:
+    nonlocal bytes_read
+    count = f.readinto(view)
+    if count is None:
+      count = 0
+    bytes_read += count
+    if progress_callback is not None and total_size:
+      progress_callback(min(1.0, bytes_read / total_size))
+    return count
+
+  opcodes = read(struct.unpack('<q', read(8))[0])
   def buffers():
-    while (h := f.read(8)):
+    while (h := read(8)):
       pb = pickle.PickleBuffer(bytearray(struct.unpack('<q', h)[0]))
-      f.readinto(pb)
+      view = pb.raw()
+      offset = 0
+      while offset < len(view):
+        count = readinto(view[offset:])
+        if not count:
+          raise EOFError("truncated out-of-band pickle buffer")
+        offset += count
       yield pb
-  return pickle.load(io.BytesIO(opcodes), buffers=buffers())
+  result = pickle.load(io.BytesIO(opcodes), buffers=buffers())
+  if progress_callback is not None:
+    progress_callback(1.0)
+  return result
 
 def usbgpu_present() -> bool:
   for d in USB_DEVICES_PATH.glob("*"):
