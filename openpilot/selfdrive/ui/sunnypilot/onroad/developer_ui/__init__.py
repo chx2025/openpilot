@@ -8,12 +8,13 @@ from enum import IntEnum
 
 import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.selfdrive.ui.egpu_status import build_compact_egpu_status, resolve_egpu_connection
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement, RelDistElement, RelSpeedElement, SteeringAngleElement,
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
-  build_device_resource_elements,
+  build_bottom_status_elements,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -135,12 +136,35 @@ class DeveloperUiRenderer(Widget):
     rl.draw_rectangle(int(rect.x), y, int(rect.width), bar_height,
                       rl.Color(0, 0, 0, 100))
 
-    elements = build_device_resource_elements(sm['deviceState'])
+    model_seen = sm.recv_frame['modelV2'] > ui_state.started_frame
+    model_alive = bool(model_seen and sm.alive['modelV2'])
+    model_big = bool(model_alive and sm['modelV2'].big)
+    telemetry_valid = bool(sm.alive['chestnutState'] and sm.valid['chestnutState'])
+    telemetry = sm['chestnutState']
+    active_bundle = ui_state.active_bundle
+    model_name = ""
+    if isinstance(active_bundle, dict):
+      model_name = str(active_bundle.get('internalName') or active_bundle.get('displayName') or '')
+    elif active_bundle is not None:
+      model_name = str(getattr(active_bundle, 'internalName', '') or getattr(active_bundle, 'displayName', ''))
+
+    egpu = build_compact_egpu_status(
+      connected=resolve_egpu_connection(sm['deviceState']), compiled=ui_state.usbgpu_compiled,
+      loading=ui_state.usbgpu_loading, active=ui_state.usbgpu_active,
+      model_alive=model_alive, model_big=model_big, telemetry_valid=telemetry_valid,
+      model_name=model_name, loading_progress=ui_state.usbgpu_loading_progress,
+      model_fps=float(telemetry.modelFps), power_w=float(telemetry.powerDrawW),
+      temp_c=float(telemetry.tempC), memory_temp_c=float(telemetry.memoryTempC),
+      memory_used_mb=int(telemetry.memoryUsedMb), memory_total_mb=int(telemetry.memoryTotalMb),
+      gpu_usage_percent=int(telemetry.gpuUsagePercent),
+    )
+    egpu_color = rl.Color(80, 220, 120, 255) if egpu.healthy else rl.Color(255, 180, 60, 255)
+    elements = build_bottom_status_elements(sm['deviceState'], egpu.text if egpu.visible else "", egpu_color)
 
     if not elements:
       return
 
-    font_size = 38
+    font_size = 34
     element_widths = []
     for element in elements:
       element.measure(self._font_bold, font_size)
@@ -160,7 +184,7 @@ class DeveloperUiRenderer(Widget):
       current_x += element_widths[i] + gap_width
 
   def _draw_bottom_dev_ui_element(self, center_x: int, y: int, element: UiElement) -> None:
-    font_size = 38
+    font_size = 34
     start_x = center_x - element.total_width / 2
 
     rl.draw_text_ex(self._font_bold, element.label_text, rl.Vector2(start_x, y - font_size // 2), font_size, 0, rl.WHITE)

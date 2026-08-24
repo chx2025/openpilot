@@ -17,6 +17,13 @@ class EgpuStatus:
 
 
 @dataclass(frozen=True)
+class CompactEgpuStatus:
+  visible: bool
+  healthy: bool
+  text: str
+
+
+@dataclass(frozen=True)
 class EgpuPanelStyle:
   font_size: int
   line_height: int
@@ -135,6 +142,40 @@ def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active:
     f"GPU {temp_c:.0f}°C · 显存 {memory_temp_c:.0f}°C · {used_gb:.1f}/{total_gb:.1f} GB",
     f"负载 {gpu_usage_percent}% · {gpu_clock_mhz} MHz · 风扇 {fan_speed_rpm} RPM",
   ))
+
+
+def build_compact_egpu_status(*, connected: bool, compiled: bool, loading: bool, active: bool | None,
+                              model_alive: bool, model_big: bool, telemetry_valid: bool,
+                              model_name: str = "", loading_progress: int = 0,
+                              model_fps: float = 0.0, power_w: float = 0.0,
+                              temp_c: float = 0.0, memory_temp_c: float = 0.0,
+                              memory_used_mb: int = 0, memory_total_mb: int = 0,
+                              gpu_usage_percent: int = 0) -> CompactEgpuStatus:
+  """Compact model/GPU status for the left side of the bottom onroad strip."""
+  if not connected:
+    return CompactEgpuStatus(False, False, "")
+
+  model_label = model_name.strip() or "MODEL"
+  if not compiled:
+    return CompactEgpuStatus(True, False, f"{model_label}: NO MODEL")
+  if loading:
+    return CompactEgpuStatus(True, False, f"{model_label}: LOAD {loading_progress}%")
+  if active is False:
+    return CompactEgpuStatus(True, False, f"{model_label}: ERR")
+  if active is not True:
+    return CompactEgpuStatus(True, False, f"{model_label}: WAIT")
+  if not model_alive or not model_big:
+    return CompactEgpuStatus(True, False, f"{model_label}: STREAM ERR")
+  if not telemetry_valid:
+    return CompactEgpuStatus(True, False, f"{model_label}: RUN")
+
+  used_gb = memory_used_mb / 1024.0
+  total_gb = memory_total_mb / 1024.0
+  text = "".join((
+    f"{model_label}: {model_fps:.1f}FPS  GPU {power_w:.0f}W ",
+    f"{temp_c:.0f}°/{memory_temp_c:.0f}° {used_gb:.1f}/{total_gb:.1f}G {gpu_usage_percent}%",
+  ))
+  return CompactEgpuStatus(True, True, text)
 
 
 def chestnut_usb_speed_mbps(device_state) -> int:

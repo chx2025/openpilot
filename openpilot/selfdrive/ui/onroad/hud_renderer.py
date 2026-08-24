@@ -2,7 +2,7 @@ import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
-from openpilot.selfdrive.ui.egpu_status import draw_egpu_status_panel, egpu_icon_visible, resolve_egpu_connection
+from openpilot.selfdrive.ui.egpu_status import egpu_icon_visible, resolve_egpu_connection
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
@@ -119,7 +119,6 @@ class HudRenderer(Widget):
       self._draw_set_speed(rect)
 
     self._draw_current_speed(rect)
-    draw_egpu_status_panel(rect, self._font_medium, compact=False)
     self._draw_egpu_icon(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size

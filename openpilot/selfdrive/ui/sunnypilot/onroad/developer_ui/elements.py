@@ -52,6 +52,13 @@ def build_device_resource_elements(device_state) -> list[UiElement]:
   ]
 
 
+def build_bottom_status_elements(device_state, egpu_text: str = "", egpu_color: rl.Color = rl.WHITE) -> list[UiElement]:
+  resources = build_device_resource_elements(device_state)
+  if not egpu_text:
+    return resources
+  return [UiElement(egpu_text, "", "", egpu_color), *resources]
+
+
 class LeadInfoElement:
   @staticmethod
   def get_lead_status(sm):
