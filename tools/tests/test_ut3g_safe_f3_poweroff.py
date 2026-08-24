@@ -30,3 +30,18 @@ def test_already_off_is_idempotent_and_sends_no_f3():
 def test_f3_must_actually_leave_l0():
   with pytest.raises(SafePowerOffError, match="returned to L0"):
     safe_power_off(FakeUSB(PCIE_L0, PCIE_L0), sleeper=lambda _: None)
+
+
+def test_dual_product_uses_same_volatile_f3_only_path():
+  usb = FakeUSB(PCIE_L0, 0)
+  usb.product = "custom d1377a01-UT3G-DUAL"
+  report = safe_power_off(usb, sleeper=lambda _: None)
+  assert usb.writes == [(0xF3, {"value": 0, "timeout": 10_000})]
+  assert report["persistent_writes"] == 0
+
+
+def test_dirty_or_malformed_dual_product_is_rejected():
+  usb = FakeUSB(PCIE_L0, 0)
+  usb.product = "custom d1377a01-UT3G-DUAL-DIRTY"
+  with pytest.raises(SafePowerOffError, match="unexpected product"):
+    safe_power_off(usb, sleeper=lambda _: None)

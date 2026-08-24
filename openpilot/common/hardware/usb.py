@@ -1,12 +1,36 @@
 import os
+import re
 from pathlib import Path
 
 CHESTNUT_FW_VERSION = "ed4e39b7"
-CHESTNUT_USB_IDS = ((0xADD1, 0x0001), (0x3801, 0x0001))
+CHESTNUT_OFFICIAL_USB_IDS = ((0xADD1, 0x0001), (0x3801, 0x0001))
+UT3G_DUAL_USB_IDS = ((0xADD1, 0x0002),)
+CHESTNUT_USB_IDS = CHESTNUT_OFFICIAL_USB_IDS + UT3G_DUAL_USB_IDS
 CHESTNUT_ROM_USB_IDS = ((0x174C, 0x2464), (0x174C, 0x2463))
+UT3G_DUAL_PRODUCT_RE = re.compile(r"custom [0-9a-f]{8}-UT3G-DUAL")
 USB_DEVICES_PATH = Path("/sys/bus/usb/devices")
 TYPEC_CC_ORIENTATION_PATH = Path("/sys/class/power_supply/usb/typec_cc_orientation")
 PRIMARY_USB_CONTROLLER = "a600000.ssusb"
+
+
+def is_chestnut_runtime_device(device: dict) -> bool:
+  usb_id = (int(device.get("vendorId", 0)), int(device.get("productId", 0)))
+  product = str(device.get("product", ""))
+  if usb_id in CHESTNUT_OFFICIAL_USB_IDS:
+    return product == f"custom {CHESTNUT_FW_VERSION}-CLEAN"
+  if usb_id in UT3G_DUAL_USB_IDS:
+    return str(device.get("manufacturer", "")) == "tiny" and UT3G_DUAL_PRODUCT_RE.fullmatch(product) is not None
+  return False
+
+
+def chestnut_official_flash_mismatch(devices: list[dict]) -> bool:
+  """Return whether comma's updater owns and needs to update a device.
+
+  UT3G dual has a separate PID and is deliberately outside this persistent
+  write domain. Factory 2065 devices remain outside it as before.
+  """
+  return any((int(d.get("vendorId", 0)), int(d.get("productId", 0))) in CHESTNUT_OFFICIAL_USB_IDS + CHESTNUT_ROM_USB_IDS and
+             str(d.get("product", "")) != f"custom {CHESTNUT_FW_VERSION}-CLEAN" for d in devices)
 
 
 def get_usb_topology() -> set[str]:

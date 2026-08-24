@@ -32,7 +32,7 @@ def chestnut_path(tmp_path, monkeypatch):
   path.mkdir()
   (path / "remove").write_text("")
   monkeypatch.setattr(eject, "VBUS_PATH", str(tmp_path / "missing-vbus"))
-  monkeypatch.setattr(eject, "find_chestnut", lambda: (str(path), ("3801", "0001"), "custom test-CLEAN"))
+  monkeypatch.setattr(eject, "find_runtime_chestnut", lambda: (str(path), ("3801", "0001"), "custom test-CLEAN"))
   monkeypatch.setattr(eject, "_wait_disconnected", lambda timeout=eject.DETACH_TIMEOUT: True)
   return path
 

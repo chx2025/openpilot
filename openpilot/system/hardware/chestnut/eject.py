@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from openpilot.system.hardware.chestnut.flash import VBUS_PATH, claim_interface, find_chestnut
+from openpilot.system.hardware.chestnut.flash import VBUS_PATH, claim_interface, find_runtime_chestnut
 
 
 DETACH_TIMEOUT = 20.0
@@ -20,7 +20,7 @@ class DetachPendingError(RuntimeError):
 def _wait_disconnected(timeout: float = DETACH_TIMEOUT) -> bool:
   deadline = time.monotonic() + timeout
   while time.monotonic() < deadline:
-    path, _, _ = find_chestnut()
+    path, _, _ = find_runtime_chestnut()
     if path is None:
       return True
     time.sleep(0.1)
@@ -36,7 +36,7 @@ def safe_eject() -> bool:
   powered may not re-enumerate after that host-only detach until its power is
   physically cycled.
   """
-  path, _, _ = find_chestnut()
+  path, _, _ = find_runtime_chestnut()
   if path is None:
     raise RuntimeError("eGPU is not connected")
 
