@@ -106,12 +106,12 @@ def test_view_model_exposes_direction_shadow_and_driver_override():
   assert override.driver_override_active
 
 
-def test_card_is_below_max_speed_and_speed_limit_stack():
+def test_card_is_raised_above_legacy_position_without_overlapping_egpu_panel():
   card = traffic_card_rect(rl.Rectangle(0, 0, 2160, 1080))
   assert card.x == 46
-  assert card.y == 427
+  assert card.y == 347
   assert card.width == 520
-  assert card.y > 425  # optional speed-limit-ahead panel bottom
+  assert card.y == 427 - 80
   egpu_style = egpu_panel_style(compact=False)
   egpu_top = 1080 - egpu_style.bottom_gap - 4 * egpu_style.line_height
   assert card.y + card.height <= egpu_top - 4

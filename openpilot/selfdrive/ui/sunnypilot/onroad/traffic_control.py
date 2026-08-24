@@ -23,12 +23,13 @@ TEXT = rl.Color(245, 247, 250, 255)
 MUTED = rl.Color(190, 197, 205, 255)
 TRAFFIC_CARD_WIDTH = 520.0
 TRAFFIC_CARD_HEIGHT = 124.0
+TRAFFIC_CARD_TOP_OFFSET = 47.0
 
 
 def traffic_card_rect(rect: rl.Rectangle) -> rl.Rectangle:
   return rl.Rectangle(
     rect.x + 46.0,
-    rect.y + UI_CONFIG.header_height + 127.0,
+    rect.y + UI_CONFIG.header_height + TRAFFIC_CARD_TOP_OFFSET,
     TRAFFIC_CARD_WIDTH,
     TRAFFIC_CARD_HEIGHT,
   )
@@ -151,8 +152,8 @@ class TrafficControlRenderer(Widget):
     if not self.state.visible:
       return
 
-    # Stack below the MAX and speed-limit signs, including the optional
-    # speed-limit-ahead card which can extend to roughly y=425.
+    # Keep the signal card close to the header so it remains visible above the
+    # expanded eGPU diagnostics on the left side.
     card = traffic_card_rect(rect)
     x, y = card.x, card.y
     rl.draw_rectangle_rounded(card, 0.28, 12, CARD)
