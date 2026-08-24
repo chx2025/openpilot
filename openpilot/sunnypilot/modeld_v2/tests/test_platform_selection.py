@@ -18,4 +18,3 @@ def test_big_bundle_does_not_request_amd_when_hardware_is_absent():
   params = FakeParams({"ModelManager_ActiveBundleRequiresUsbGpu": True})
 
   assert not should_use_usbgpu(params, hardware_present=False)
-

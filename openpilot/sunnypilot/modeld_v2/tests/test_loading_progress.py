@@ -18,4 +18,3 @@ def test_load_oob_reports_monotonic_byte_progress(tmp_path):
   assert progress
   assert progress == sorted(progress)
   assert progress[-1] == 1.0
-
