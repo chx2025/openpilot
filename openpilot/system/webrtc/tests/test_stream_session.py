@@ -1,13 +1,14 @@
 import asyncio
 import json
 import time
+from unittest.mock import AsyncMock
 
 import capnp
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.cereal import messaging, log
 from teleoprtc.tracks import VIDEO_CLOCK_RATE
 
-from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy, ServerState, handle_get_stream
+from openpilot.system.webrtc.webrtcd import CerealOutgoingMessageProxy, CerealIncomingMessageProxy, ServerState, StreamSession, handle_get_stream
 from openpilot.system.webrtc.device.video import LiveStreamVideoStreamTrack
 
 
@@ -85,3 +86,28 @@ class TestStreamSession(OpenpilotTestCase):
     response = self.loop.run_until_complete(handle_get_stream(ServerState(), b"{}", "text/plain"))
 
     assert response == (415, b'{"error": "unsupported media type"}', "application/json; charset=utf-8")
+
+  def test_message_handler_is_installed_before_waiting_for_connection(self, mocker):
+    events = []
+    session = StreamSession.__new__(StreamSession)
+    session.identifier = "test-session"
+    session.params = mocker.Mock()
+    session.logger = mocker.Mock()
+    session.stream = mocker.Mock()
+    session.stream.set_message_handler.side_effect = lambda handler: events.append("handler")
+
+    async def wait_for_connection():
+      events.append("wait")
+
+    session.stream.wait_for_connection = wait_for_connection
+    session.stream.has_messaging_channel.return_value = False
+    session.incoming_bridge = None
+    session.outgoing_bridge = None
+    session.bitrate_controller = None
+    session.is_body = False
+    session.run_normal_session = AsyncMock()
+    session.post_run_cleanup = AsyncMock()
+
+    self.loop.run_until_complete(session.run())
+
+    assert events == ["handler", "wait"]

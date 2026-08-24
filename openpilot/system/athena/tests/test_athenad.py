@@ -117,6 +117,16 @@ class TestAthenadMethods(OpenpilotTestCase):
   def test_echo(self):
     assert dispatcher["echo"]("bob") == "bob"
 
+  def test_start_stream_without_persistent_car_params(self, mocker):
+    self.params.remove("CarParamsPersistent")
+    self.params.put_bool("IsOffroad", False, block=True)
+    post_stream_request = mocker.patch("openpilot.system.webrtc.helpers.post_stream_request", return_value={"answer": "ok"})
+
+    result = dispatcher["startStream"]("offer", True)
+
+    assert result == {"answer": "ok"}
+    post_stream_request.assert_called_once()
+
   def test_get_message(self):
     with self.assertRaises(TimeoutError) as _:
       dispatcher["getMessage"]("controlsState")
