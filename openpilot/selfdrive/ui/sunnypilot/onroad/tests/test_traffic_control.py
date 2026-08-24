@@ -8,6 +8,8 @@ import pytest
 import openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control as traffic_control_module
 from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import (
   TrafficSignalDisplayState,
+  TRAFFIC_DETAIL_FONT_SIZE,
+  TRAFFIC_DISTANCE_FONT_SIZE,
   TRAFFIC_CARD_WIDTH,
   traffic_action_text,
   traffic_card_rect,
@@ -110,11 +112,16 @@ def test_card_is_raised_above_legacy_position_without_overlapping_egpu_panel():
   card = traffic_card_rect(rl.Rectangle(0, 0, 2160, 1080))
   assert card.x == 46
   assert card.y == 347
-  assert card.width == 520
+  assert card.width >= 600
   assert card.y == 427 - 80
   egpu_style = egpu_panel_style(compact=False)
   egpu_top = 1080 - egpu_style.bottom_gap - 4 * egpu_style.line_height
   assert card.y + card.height <= egpu_top - 4
+
+
+def test_traffic_text_is_large_enough_for_onroad_readability():
+  assert TRAFFIC_DISTANCE_FONT_SIZE >= 58
+  assert TRAFFIC_DETAIL_FONT_SIZE >= 38
 
 
 @pytest.mark.parametrize(("kwargs", "expected"), ACTION_CASES)
@@ -146,5 +153,5 @@ def test_all_english_action_labels_fit_the_card_at_render_size():
   }
   available_width = TRAFFIC_CARD_WIDTH - 92.0
   for label in labels:
-    width = sum(metrics[cmap.get(ord(char), ".notdef")][0] for char in label) / units_per_em * 30.0
+    width = sum(metrics[cmap.get(ord(char), ".notdef")][0] for char in label) / units_per_em * TRAFFIC_DETAIL_FONT_SIZE
     assert width <= available_width, f"{label!r} is {width:.1f}px wide; available width is {available_width:.1f}px"

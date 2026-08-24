@@ -21,9 +21,11 @@ CARD = rl.Color(12, 15, 19, 210)
 BORDER = rl.Color(255, 255, 255, 38)
 TEXT = rl.Color(245, 247, 250, 255)
 MUTED = rl.Color(190, 197, 205, 255)
-TRAFFIC_CARD_WIDTH = 520.0
-TRAFFIC_CARD_HEIGHT = 124.0
+TRAFFIC_CARD_WIDTH = 640.0
+TRAFFIC_CARD_HEIGHT = 132.0
 TRAFFIC_CARD_TOP_OFFSET = 47.0
+TRAFFIC_DISTANCE_FONT_SIZE = 58
+TRAFFIC_DETAIL_FONT_SIZE = 38
 
 
 def traffic_card_rect(rect: rl.Rectangle) -> rl.Rectangle:
@@ -174,10 +176,10 @@ class TrafficControlRenderer(Widget):
       rl.draw_circle_v(center, 11.0, color if active else LAMP_OFF)
 
     distance_text = f"{self.state.distance_m:.0f} m" if self.state.has_signal else "-- m"
-    distance_size = 50
+    distance_size = TRAFFIC_DISTANCE_FONT_SIZE
     distance_pos = rl.Vector2(x + 78, y + 10)
     rl.draw_text_ex(self.font, distance_text, distance_pos, distance_size, 0, TEXT)
 
     detail, detail_color = traffic_action_text(self.state)
-    detail_size = 30
+    detail_size = TRAFFIC_DETAIL_FONT_SIZE
     rl.draw_text_ex(self.font_regular, detail, rl.Vector2(x + 78, y + 76), detail_size, 0, detail_color)

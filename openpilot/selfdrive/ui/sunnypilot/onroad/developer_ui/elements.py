@@ -38,6 +38,20 @@ class UiElement:
     self.total_width = self.label_width + self.val_width + self.unit_width
 
 
+def build_device_resource_elements(device_state) -> list[UiElement]:
+  """Build the compact device-health strip shown at the bottom of onroad UI."""
+  cpu_temps = list(device_state.cpuTempC)
+  cpu_temp = max(cpu_temps) if cpu_temps else None
+  cpu_value = f"{cpu_temp:.0f}" if cpu_temp is not None else "-"
+  memory_used = int(device_state.memoryUsagePercent)
+  disk_free = int(round(float(device_state.freeSpacePercent)))
+  return [
+    UiElement(cpu_value, "CPU", "°", rl.WHITE),
+    UiElement(str(memory_used), "MEM", "%", rl.WHITE),
+    UiElement(str(disk_free), "DSK", "%", rl.WHITE),
+  ]
+
+
 class LeadInfoElement:
   @staticmethod
   def get_lead_status(sm):

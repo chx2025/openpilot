@@ -12,7 +12,8 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement, RelDistElement, RelSpeedElement, SteeringAngleElement,
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
-  SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement
+  SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
+  build_device_resource_elements,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -134,29 +135,7 @@ class DeveloperUiRenderer(Widget):
     rl.draw_rectangle(int(rect.x), y, int(rect.width), bar_height,
                       rl.Color(0, 0, 0, 100))
 
-    elements = [
-      self.a_ego_elem.update(sm, ui_state.is_metric),
-      self.lead_speed_elem.update(sm, ui_state.is_metric),
-    ]
-
-    # Add torque-specific elements if using torque control
-    if sm['controlsState'].lateralControlState.which() == 'torqueState':
-      override_active = ui_state.enforce_torque_control and ui_state.custom_torque_params and ui_state.torque_override_enabled
-      if sm.valid['lateralTorqueParameters'] or override_active:
-        elements.extend([
-          self.friction_elem.update(sm, ui_state.is_metric),
-          self.lat_accel_factor_elem.update(sm, ui_state.is_metric),
-        ])
-    else:
-      # Non-torque: show steering torque and GPS data
-      elements.append(self.steering_torque_elem.update(sm, ui_state.is_metric))
-
-      if sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']:
-        elements.append(self.bearing_elem.update(sm, ui_state.is_metric))
-
-    # Add altitude if GPS available
-    if sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']:
-      elements.append(self.altitude_elem.update(sm, ui_state.is_metric))
+    elements = build_device_resource_elements(sm['deviceState'])
 
     if not elements:
       return
