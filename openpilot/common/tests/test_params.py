@@ -35,6 +35,13 @@ class TestParams(OpenpilotTestCase):
     assert self.params.get("DongleId") is not None
     assert not os.path.isfile(undefined_param)
 
+  def test_livestream_is_cleared_on_ignition(self):
+    self.params.put_bool("IsLiveStreaming", True, block=True)
+
+    self.params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
+
+    assert self.params.get("IsLiveStreaming") is None
+
   def test_params_two_things(self):
     self.params.put("DongleId", "bob", block=True)
     self.params.put("AthenadPid", 123, block=True)
