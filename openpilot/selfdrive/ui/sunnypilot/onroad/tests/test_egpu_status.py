@@ -37,27 +37,34 @@ def test_egpu_status_explains_fallback_reason():
   status = build_egpu_status(
     connected=True, compiled=True, loading=False, active=False,
     model_alive=True, model_big=False, telemetry_valid=False, usb_speed_mbps=5000,
+    model_name="IDM",
   )
   assert status.visible
   assert not status.healthy
+  assert status.headline.startswith("IDM · ")
   assert "回退小模型" in status.headline
-  assert "5000" in status.details[0]
+  assert "USB" not in " ".join((status.headline, *status.details))
 
 
 def test_egpu_status_reports_live_model_and_gpu_metrics():
   status = build_egpu_status(
     connected=True, compiled=True, loading=False, active=True,
     model_alive=True, model_big=True, telemetry_valid=True,
+    model_name="IDM",
     usb_speed_mbps=5000, model_fps=19.8, power_w=72.0,
     temp_c=61.0, memory_temp_c=70.0, memory_used_mb=6144,
     memory_total_mb=8192, gpu_usage_percent=88, gpu_clock_mhz=2200,
     fan_speed_rpm=1450,
   )
   assert status.healthy
+  assert status.headline.startswith("IDM · ")
   assert "19.8 FPS" in status.headline
+  assert status.details[0] == "功耗 72 W"
   assert "6.0/8.0 GB" in status.details[1]
   assert "88%" in status.details[2]
   assert "2200 MHz" in status.details[2]
+  assert "AMD" not in " ".join((status.headline, *status.details))
+  assert "USB 5000" not in " ".join((status.headline, *status.details))
 
 
 def test_absent_egpu_has_no_panel():
@@ -72,12 +79,14 @@ def test_loading_status_exposes_real_progress_percentage():
   panel = build_egpu_status(
     connected=True, compiled=True, loading=True, active=None,
     model_alive=False, model_big=False, telemetry_valid=False, loading_progress=64,
+    model_name="IDM",
   )
   sidebar = build_egpu_sidebar_status(
     present=True, compiled=True, link_state="ready", usb_speed_mbps=5000,
     pcie_ltssm=0x78, eject_status=None, loading=True, active=None, loading_progress=64,
   )
 
+  assert panel.headline.startswith("IDM · ")
   assert "64%" in panel.headline
   assert sidebar.value == "LOAD 64%"
   assert "64%" in sidebar.detail

@@ -101,6 +101,7 @@ def egpu_panel_style(*, compact: bool) -> EgpuPanelStyle:
 
 def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active: bool | None,
                       model_alive: bool, model_big: bool, telemetry_valid: bool,
+                      model_name: str = "",
                       loading_progress: int = 0,
                       usb_speed_mbps: int = 0, model_fps: float = 0.0,
                       power_w: float = 0.0, temp_c: float = 0.0, memory_temp_c: float = 0.0,
@@ -110,27 +111,27 @@ def build_egpu_status(*, connected: bool, compiled: bool, loading: bool, active:
   if not connected:
     return EgpuStatus(False, False, "", ())
 
-  link = f"USB {usb_speed_mbps} Mbps" if usb_speed_mbps else "USB 已连接"
+  model_label = model_name.strip() or "大模型"
   if not compiled:
-    return EgpuStatus(True, False, "eGPU 已连接 · 大模型未编译", (f"AMD eGPU · {link}",))
+    return EgpuStatus(True, False, f"{model_label} · 大模型未编译", ())
   if loading:
-    return EgpuStatus(True, False, f"eGPU 正在加载大模型 · {loading_progress}%", (f"AMD eGPU · {link}",))
+    return EgpuStatus(True, False, f"{model_label} · 正在加载大模型 · {loading_progress}%", ())
   if active is False:
-    return EgpuStatus(True, False, "eGPU 大模型失败 · 已回退小模型", (f"AMD eGPU · {link}",))
+    return EgpuStatus(True, False, f"{model_label} · 大模型失败 · 已回退小模型", ())
   if active is not True:
-    return EgpuStatus(True, False, "eGPU 等待模型启动", (f"AMD eGPU · {link}",))
+    return EgpuStatus(True, False, f"{model_label} · 等待模型启动", ())
   if not model_alive or not model_big:
-    return EgpuStatus(True, False, "eGPU 模型流中断 · 已回退/等待", (f"AMD eGPU · {link}",))
+    return EgpuStatus(True, False, f"{model_label} · 模型流中断 · 已回退/等待", ())
   if not telemetry_valid:
-    return EgpuStatus(True, False, "eGPU 大模型运行中 · 遥测暂不可用", (f"AMD eGPU · {link}",))
+    return EgpuStatus(True, False, f"{model_label} · 大模型运行中 · 遥测暂不可用", ())
 
   used_gb = memory_used_mb / 1024.0
   total_gb = memory_total_mb / 1024.0
   degraded_link = 0 < usb_speed_mbps < 5000
-  headline = (f"eGPU 大模型运行中 · USB 链路降速 · {model_fps:.1f} FPS" if degraded_link else
-              f"eGPU 大模型运行中 · {model_fps:.1f} FPS")
+  headline = (f"{model_label} · 大模型运行中 · USB 链路降速 · {model_fps:.1f} FPS" if degraded_link else
+              f"{model_label} · 大模型运行中 · {model_fps:.1f} FPS")
   return EgpuStatus(True, not degraded_link, headline, (
-    f"AMD eGPU · {link} · {power_w:.0f} W",
+    f"功耗 {power_w:.0f} W",
     f"GPU {temp_c:.0f}°C · 显存 {memory_temp_c:.0f}°C · {used_gb:.1f}/{total_gb:.1f} GB",
     f"负载 {gpu_usage_percent}% · {gpu_clock_mhz} MHz · 风扇 {fan_speed_rpm} RPM",
   ))
@@ -154,9 +155,16 @@ def draw_egpu_status_panel(rect: rl.Rectangle, font: rl.Font, *, compact: bool) 
   model_big = bool(model_alive and sm["modelV2"].big)
   telemetry_valid = bool(sm.alive["chestnutState"] and sm.valid["chestnutState"])
   telemetry = sm["chestnutState"]
+  active_bundle = ui_state.active_bundle
+  model_name = ""
+  if isinstance(active_bundle, dict):
+    model_name = str(active_bundle.get("internalName") or active_bundle.get("displayName") or "")
+  elif active_bundle is not None:
+    model_name = str(getattr(active_bundle, "internalName", "") or getattr(active_bundle, "displayName", ""))
   status = build_egpu_status(
     connected=connected, compiled=ui_state.usbgpu_compiled, loading=ui_state.usbgpu_loading,
     active=ui_state.usbgpu_active, model_alive=model_alive, model_big=model_big,
+    model_name=model_name,
     loading_progress=ui_state.usbgpu_loading_progress,
     telemetry_valid=telemetry_valid, usb_speed_mbps=chestnut_usb_speed_mbps(sm["deviceState"]),
     model_fps=float(telemetry.modelFps), power_w=float(telemetry.powerDrawW),
