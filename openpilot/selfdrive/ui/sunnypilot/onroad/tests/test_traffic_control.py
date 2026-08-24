@@ -7,14 +7,19 @@ import pytest
 
 import openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control as traffic_control_module
 from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import (
+  CARD,
   TrafficSignalDisplayState,
   TRAFFIC_DETAIL_FONT_SIZE,
   TRAFFIC_DISTANCE_FONT_SIZE,
   TRAFFIC_CARD_WIDTH,
+  TRAFFIC_CARD_HEIGHT,
+  TRAFFIC_LIGHT_HOUSING_HEIGHT,
+  TRAFFIC_LIGHT_HOUSING_WIDTH,
+  TRAFFIC_LIGHT_RADIUS,
+  TRAFFIC_TEXT_X_OFFSET,
   traffic_action_text,
   traffic_card_rect,
 )
-from openpilot.selfdrive.ui.egpu_status import egpu_panel_style
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
 
 
@@ -112,16 +117,25 @@ def test_card_is_raised_above_legacy_position_without_overlapping_egpu_panel():
   card = traffic_card_rect(rl.Rectangle(0, 0, 2160, 1080))
   assert card.x == 46
   assert card.y == 347
-  assert card.width >= 600
+  assert card.width >= 940
+  assert card.height >= 240
   assert card.y == 427 - 80
-  egpu_style = egpu_panel_style(compact=False)
-  egpu_top = 1080 - egpu_style.bottom_gap - 4 * egpu_style.line_height
-  assert card.y + card.height <= egpu_top - 4
+  bottom_status_top = 1080 - 61
+  assert card.y + card.height <= bottom_status_top - 40
 
 
 def test_traffic_text_is_large_enough_for_onroad_readability():
-  assert TRAFFIC_DISTANCE_FONT_SIZE >= 58
-  assert TRAFFIC_DETAIL_FONT_SIZE >= 38
+  assert TRAFFIC_DISTANCE_FONT_SIZE >= 82
+  assert TRAFFIC_DETAIL_FONT_SIZE >= 52
+
+
+def test_traffic_light_and_background_match_large_translucent_layout():
+  assert TRAFFIC_LIGHT_HOUSING_WIDTH >= 92
+  assert TRAFFIC_LIGHT_HOUSING_HEIGHT >= 192
+  assert TRAFFIC_LIGHT_RADIUS >= 22
+  assert CARD.a <= 160
+  assert TRAFFIC_CARD_WIDTH >= 940
+  assert TRAFFIC_CARD_HEIGHT >= 240
 
 
 @pytest.mark.parametrize(("kwargs", "expected"), ACTION_CASES)
@@ -151,7 +165,7 @@ def test_all_english_action_labels_fit_the_card_at_render_size():
     "Signal detected · monitoring",
     "Traffic signals · monitoring",
   }
-  available_width = TRAFFIC_CARD_WIDTH - 92.0
+  available_width = TRAFFIC_CARD_WIDTH - TRAFFIC_TEXT_X_OFFSET - 14.0
   for label in labels:
     width = sum(metrics[cmap.get(ord(char), ".notdef")][0] for char in label) / units_per_em * TRAFFIC_DETAIL_FONT_SIZE
     assert width <= available_width, f"{label!r} is {width:.1f}px wide; available width is {available_width:.1f}px"

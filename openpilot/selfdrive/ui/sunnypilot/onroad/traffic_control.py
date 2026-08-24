@@ -17,15 +17,19 @@ RED = rl.Color(255, 72, 72, 255)
 AMBER = rl.Color(255, 190, 50, 255)
 GREEN = rl.Color(53, 220, 118, 255)
 LAMP_OFF = rl.Color(65, 69, 76, 220)
-CARD = rl.Color(12, 15, 19, 210)
+CARD = rl.Color(12, 15, 19, 160)
 BORDER = rl.Color(255, 255, 255, 38)
 TEXT = rl.Color(245, 247, 250, 255)
 MUTED = rl.Color(190, 197, 205, 255)
-TRAFFIC_CARD_WIDTH = 640.0
-TRAFFIC_CARD_HEIGHT = 132.0
+TRAFFIC_CARD_WIDTH = 940.0
+TRAFFIC_CARD_HEIGHT = 240.0
 TRAFFIC_CARD_TOP_OFFSET = 47.0
-TRAFFIC_DISTANCE_FONT_SIZE = 58
-TRAFFIC_DETAIL_FONT_SIZE = 38
+TRAFFIC_DISTANCE_FONT_SIZE = 82
+TRAFFIC_DETAIL_FONT_SIZE = 52
+TRAFFIC_LIGHT_HOUSING_WIDTH = 92.0
+TRAFFIC_LIGHT_HOUSING_HEIGHT = 192.0
+TRAFFIC_LIGHT_RADIUS = 22.0
+TRAFFIC_TEXT_X_OFFSET = 140.0
 
 
 def traffic_card_rect(rect: rl.Rectangle) -> rl.Rectangle:
@@ -161,25 +165,25 @@ class TrafficControlRenderer(Widget):
     rl.draw_rectangle_rounded(card, 0.28, 12, CARD)
     rl.draw_rectangle_rounded_lines_ex(card, 0.28, 12, 2, BORDER)
 
-    housing = rl.Rectangle(x + 14, y + 14, 46, 96)
-    rl.draw_rectangle_rounded(housing, 0.45, 10, rl.Color(0, 0, 0, 210))
+    housing = rl.Rectangle(x + 22, y + 24, TRAFFIC_LIGHT_HOUSING_WIDTH, TRAFFIC_LIGHT_HOUSING_HEIGHT)
+    rl.draw_rectangle_rounded(housing, 0.45, 10, rl.Color(0, 0, 0, 190))
     colors = (RED, AMBER, GREEN)
     states = (1, 3, 2)
     for index, (color, state) in enumerate(zip(colors, states, strict=True)):
-      center = rl.Vector2(housing.x + housing.width / 2, housing.y + 20 + index * 28)
+      center = rl.Vector2(housing.x + housing.width / 2, housing.y + 40 + index * 56)
       active = self.state.has_signal and self.state.light_state == state
       if self.state.has_signal and self.state.flashing and state == 2:
         active = int(gui_app.frame / max(1, gui_app.target_fps // 2)) % 2 == 0
       if active:
-        glow = 3.0 + 2.0 * math.sin(gui_app.frame / max(1, gui_app.target_fps) * math.pi)
-        rl.draw_circle_v(center, 10.0 + glow, rl.Color(color.r, color.g, color.b, 42))
-      rl.draw_circle_v(center, 11.0, color if active else LAMP_OFF)
+        glow = 6.0 + 4.0 * math.sin(gui_app.frame / max(1, gui_app.target_fps) * math.pi)
+        rl.draw_circle_v(center, 20.0 + glow, rl.Color(color.r, color.g, color.b, 42))
+      rl.draw_circle_v(center, TRAFFIC_LIGHT_RADIUS, color if active else LAMP_OFF)
 
     distance_text = f"{self.state.distance_m:.0f} m" if self.state.has_signal else "-- m"
     distance_size = TRAFFIC_DISTANCE_FONT_SIZE
-    distance_pos = rl.Vector2(x + 78, y + 10)
+    distance_pos = rl.Vector2(x + TRAFFIC_TEXT_X_OFFSET, y + 22)
     rl.draw_text_ex(self.font, distance_text, distance_pos, distance_size, 0, TEXT)
 
     detail, detail_color = traffic_action_text(self.state)
     detail_size = TRAFFIC_DETAIL_FONT_SIZE
-    rl.draw_text_ex(self.font_regular, detail, rl.Vector2(x + 78, y + 76), detail_size, 0, detail_color)
+    rl.draw_text_ex(self.font_regular, detail, rl.Vector2(x + TRAFFIC_TEXT_X_OFFSET, y + 154), detail_size, 0, detail_color)
