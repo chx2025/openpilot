@@ -2704,6 +2704,22 @@ msgid "Green · planner control"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · lead blocks auto start"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · planner holding"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · confirming release"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal unclear · planner holding"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
 msgid "Signal detected · monitoring"
 msgstr ""
 

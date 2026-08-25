@@ -21,6 +21,7 @@ CARD = rl.Color(12, 15, 19, 160)
 BORDER = rl.Color(255, 255, 255, 38)
 TEXT = rl.Color(245, 247, 250, 255)
 MUTED = rl.Color(190, 197, 205, 255)
+PHYSICAL_LEAD_BLOCK_REASON = 6
 TRAFFIC_CARD_WIDTH = 940.0
 TRAFFIC_CARD_HEIGHT = 240.0
 TRAFFIC_CARD_TOP_OFFSET = 47.0
@@ -57,6 +58,7 @@ class TrafficSignalDisplayState:
   flashing: bool = False
   action: int = 0
   should_stop: bool = False
+  start_block_reason: int = 0
 
   @classmethod
   def from_plan(cls, target, *, valid: bool = True) -> TrafficSignalDisplayState:
@@ -90,6 +92,7 @@ class TrafficSignalDisplayState:
       ),
       action=int(target.action),
       should_stop=bool(target.shouldStop),
+      start_block_reason=int(target.startBlockReason),
     )
 
 
@@ -110,14 +113,36 @@ def traffic_action_text(state: TrafficSignalDisplayState) -> tuple[str, rl.Color
     return tr("Driver override · paused"), MUTED
   if not state.has_signal:
     return tr("No traffic signal"), MUTED
+  if state.flashing and state.action == 1:
+    return tr("Signal changing · stopping"), AMBER
+  if state.light_state == 2:
+    if state.action == 3:
+      return tr("Green · auto start"), GREEN
+    if state.start_block_reason == PHYSICAL_LEAD_BLOCK_REASON:
+      return tr("Green · lead blocks auto start"), AMBER
+    if state.action == 4:
+      return tr("Green · releasing brakes"), GREEN
+    if state.action == 5:
+      return tr("Green · continuing"), GREEN
+    if state.stop_direction_unknown:
+      return tr("Direction unclear · monitoring"), AMBER
+    if state.action in (1, 2) or state.phase == int(TrafficControlPhase.hold):
+      return tr("Green · confirming release"), AMBER
+    if state.should_stop:
+      return tr("Green · planner holding"), AMBER
+    return tr("Green · planner control"), GREEN
   if state.action == 1:
     if state.flashing or state.light_state == 3:
       return tr("Signal changing · stopping"), AMBER
-    return tr("Red · slowing to stop"), RED
+    if state.light_state == 1:
+      return tr("Red · slowing to stop"), RED
+    return tr("Signal unclear · planner holding"), AMBER
   if state.action == 2 or state.should_stop:
-    return tr("Red · holding"), RED
-  if state.action == 3:
-    return tr("Green · auto start"), GREEN
+    if state.light_state == 1:
+      return tr("Red · holding"), RED
+    if state.light_state == 3:
+      return tr("Signal changing · stopping"), AMBER
+    return tr("Signal unclear · planner holding"), AMBER
   if state.action == 4:
     return tr("Green · releasing brakes"), GREEN
   if state.action == 5:
@@ -127,8 +152,6 @@ def traffic_action_text(state: TrafficSignalDisplayState) -> tuple[str, rl.Color
   if state.light_state == 1:
     return (tr("Red detected · waiting") if state.stop_control_allowed
             else tr("Red detected · brake pending")), RED
-  if state.light_state == 2:
-    return tr("Green · planner control"), GREEN
   if state.light_state == 3:
     return tr("Signal detected · monitoring"), AMBER
   return tr("Traffic signals · monitoring"), MUTED

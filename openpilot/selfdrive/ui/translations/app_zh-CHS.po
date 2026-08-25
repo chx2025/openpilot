@@ -2707,6 +2707,22 @@ msgid "Green · planner control"
 msgstr "检测绿灯 · 由纵向规划控制"
 
 #: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · lead blocks auto start"
+msgstr "检测绿灯 · 前车或障碍物阻止起步"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · planner holding"
+msgstr "检测绿灯 · 纵向规划暂时保持"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · confirming release"
+msgstr "检测绿灯 · 正在确认安全放行"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal unclear · planner holding"
+msgstr "灯色不明确 · 纵向规划暂时保持"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
 msgid "Signal detected · monitoring"
 msgstr "检测灯色 · 正在监测"
 

@@ -77,17 +77,20 @@ class TrafficRadarSource:
       and sm.alive['modelDataV2SP'] and sm.valid['modelDataV2SP']
       and int(sm['modelDataV2SP'].laneTurnDirection) != 0
     )
+    vehicle_turn_signal_active = bool(
+      getattr(car_state, 'leftBlinker', False) or getattr(car_state, 'rightBlinker', False)
+    )
+    direction_unknown = bool(
+      vehicle_turn_signal_active or car_control.leftBlinker or car_control.rightBlinker or model_direction_unknown
+    )
     decision = self.controller.update(
       observation, now_ns, v_ego=float(car_state.vEgo), a_ego=float(car_state.aEgo),
       model_stop_distance=None, model_stop_candidate=False,
       enabled=bool(vehicle_inputs_valid and car_control.enabled),
       long_active=bool(vehicle_inputs_valid and car_control.longActive), gas_pressed=bool(car_state.gasPressed),
       brake_pressed=bool(car_state.brakePressed),
-      turn_signal_active=bool(car_control.leftBlinker or car_control.rightBlinker or model_direction_unknown),
-      stop_direction_unknown=bool(
-        getattr(car_state, 'leftBlinker', False) or getattr(car_state, 'rightBlinker', False)
-        or car_control.leftBlinker or car_control.rightBlinker or model_direction_unknown
-      ),
+      turn_signal_active=direction_unknown,
+      stop_direction_unknown=direction_unknown,
     )
 
     active_stop = decision.phase in (
@@ -128,14 +131,16 @@ class TrafficRadarSource:
     target.stopDirectionUnknown = decision.stop_direction_unknown
     target.suppressedByPhysicalLead = False
     target.shouldStop = bool(decision.should_stop)
+    raw_green_seen = bool(raw_traffic is not None and raw_traffic.available and raw_traffic.lightState == 2)
     target.plannerStartRequested = bool(
       self.go_policy == TrafficRadarGoPolicy.active and
       decision.mode == TrafficControlMode.stopGo and
       decision.phase == TrafficControlPhase.release and
+      decision.raw_observation_fresh and raw_green_seen and
       valid_for_control
     )
     target.mode = int(decision.mode)
-    target.rawGreenSeen = bool(raw_traffic is not None and raw_traffic.available and raw_traffic.lightState == 2)
+    target.rawGreenSeen = raw_green_seen
     target.releaseEligible = bool(
       target.rawGreenSeen and decision.phase == TrafficControlPhase.release and valid_for_control
     )

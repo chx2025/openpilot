@@ -42,6 +42,7 @@ class TrafficControlConfig:
   default_stop_reference: float = 5.0
   comfort_brake: float = 2.4
   release_s: float = 3.0
+  stationary_release_s: float = 10.0
   driver_override_cooldown_s: float = 0.75
   critical_observation_dropout_s: float = 2.0
   candidate_dropout_s: float = 2.5
@@ -451,6 +452,12 @@ class TeslaTrafficControlController:
       if long_dropout and self.phase in self.ACTIVE_PHASES:
         self.stop_reconfirm_required = True
         self.stop_reconfirm_count = 0
+      if long_dropout and self.phase == TrafficControlPhase.release:
+        # A release is only valid while the confirming green observation is
+        # continuous. Do not let one recovery frame revive an old GO session.
+        self.reset()
+        self.last_update_ns = now_ns
+        return self._decision()
       self.raw_stale_since_ns = None
     elif self.raw_stale_since_ns is None:
       self.raw_stale_since_ns = self.last_real_frame_ns if self.last_real_frame_ns > 0 else now_ns
@@ -599,9 +606,14 @@ class TeslaTrafficControlController:
             preserve_session=bool(self.release_red_preserve_session),
           )
           self.release_red_preserve_session = None
-      elif self.release_since_ns is not None and now_ns - self.release_since_ns >= int(self.config.release_s * 1e9):
-        self.reset()
-        self.last_update_ns = now_ns
+      elif self.release_since_ns is not None:
+        release_timeout_s = (
+          self.config.stationary_release_s if color == 2 and v_ego < 0.3
+          else self.config.release_s
+        )
+        if now_ns - self.release_since_ns >= int(release_timeout_s * 1e9):
+          self.reset()
+          self.last_update_ns = now_ns
       self.last_real_color = observation.light_state
       return self._decision()
 

@@ -254,6 +254,53 @@ def test_green_requires_two_real_frames_and_releases_same_event():
   assert two.phase == TrafficControlPhase.release
 
 
+def test_stationary_green_release_survives_the_normal_three_second_timeout():
+  c = controller(stationary_release_s=10.0)
+  establish_red(c, distance=5.0, speed=0.0)
+  update(c, 2.0, observation(5.0, 2, 2.0), v_ego=0.0)
+  released = update(c, 2.5, observation(5.0, 2, 2.5), v_ego=0.0)
+  assert released.phase == TrafficControlPhase.release
+
+  still_waiting = released
+  for step in range(30, 121, 5):
+    now_s = step / 10.0
+    still_waiting = update(c, now_s, observation(5.0, 2, now_s), v_ego=0.0)
+  assert still_waiting.phase == TrafficControlPhase.release
+  assert still_waiting.stop_session_id == released.stop_session_id
+
+  expired = update(c, 12.5, observation(5.0, 2, 12.5), v_ego=0.0)
+  assert expired.phase == TrafficControlPhase.off
+  assert expired.stop_session_id == 0
+
+
+def test_moving_green_release_keeps_the_existing_three_second_timeout():
+  c = controller(stationary_release_s=10.0)
+  establish_red(c, distance=5.0, speed=0.0)
+  update(c, 2.0, observation(5.0, 2, 2.0), v_ego=0.0)
+  update(c, 2.5, observation(5.0, 2, 2.5), v_ego=0.0)
+
+  expired = None
+  for step in range(30, 61, 5):
+    now_s = step / 10.0
+    expired = update(c, now_s, observation(max(0.0, 5.0 - (now_s - 2.5)), 2, now_s), v_ego=1.0)
+  assert expired.phase == TrafficControlPhase.off
+  assert expired.stop_session_id == 0
+
+
+def test_long_green_can_dropout_clears_stationary_release_before_recovery():
+  c = controller(stationary_release_s=10.0, critical_observation_dropout_s=2.0)
+  establish_red(c, distance=5.0, speed=0.0)
+  update(c, 2.0, observation(5.0, 2, 2.0), v_ego=0.0)
+  released = update(c, 2.5, observation(5.0, 2, 2.5), v_ego=0.0)
+  assert released.phase == TrafficControlPhase.release
+
+  stale = update(c, 4.8, observation(5.0, 2, 2.5, available=False), v_ego=0.0)
+  assert stale.phase == TrafficControlPhase.release
+  recovered = update(c, 5.0, observation(5.0, 2, 5.0), v_ego=0.0)
+  assert recovered.phase == TrafficControlPhase.off
+  assert recovered.stop_session_id == 0
+
+
 def test_far_red_after_release_gets_a_fresh_stop_station():
   c = controller()
   establish_red(c, distance=5.0, speed=0.0)

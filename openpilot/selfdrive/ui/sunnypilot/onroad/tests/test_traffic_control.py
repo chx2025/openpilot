@@ -32,7 +32,17 @@ ACTION_CASES = [
   ({"light": 2, "applied": True, "action": 3}, "Green · auto start"),
   ({"light": 2, "applied": True, "action": 4}, "Green · releasing brakes"),
   ({"light": 2, "applied": True, "action": 5}, "Green · continuing"),
+  ({"light": 2, "phase": TrafficControlPhase.release, "should_stop": True,
+    "start_block_reason": 6}, "Green · lead blocks auto start"),
+  ({"light": 2, "phase": TrafficControlPhase.release, "should_stop": True}, "Green · planner holding"),
+  ({"light": 2, "phase": TrafficControlPhase.hold, "applied": True,
+    "action": 2, "should_stop": True}, "Green · confirming release"),
+  ({"light": 2, "phase": TrafficControlPhase.flashingGreenStop,
+    "applied": True, "action": 1}, "Signal changing · stopping"),
+  ({"light": 2, "direction_unknown": True, "should_stop": True}, "Direction unclear · monitoring"),
   ({"light": 2}, "Green · planner control"),
+  ({"light": 0, "should_stop": True}, "Signal unclear · planner holding"),
+  ({"light": 3, "should_stop": True}, "Signal changing · stopping"),
   ({"light": 1, "raw_fresh": False}, "Signal expired · control idle"),
   ({"light": 1, "raw_fresh": False, "applied": True, "action": 1}, "Signal lost · slowing continues"),
   ({"light": 1, "raw_fresh": False, "applied": True, "action": 2, "should_stop": True}, "Signal lost · holding stop"),
@@ -50,7 +60,8 @@ def identity_translation(monkeypatch):
 def target(*, light=1, raw_distance=80.0, remaining=35.0, reference=5.0,
            phase=TrafficControlPhase.braking, quality=2, mode=4, applied=False,
            direction_unknown=False, driver_override=False, action=0, should_stop=False,
-           raw_fresh=True, stop_allowed=None, stop_direction_unknown=None):
+           raw_fresh=True, stop_allowed=None, stop_direction_unknown=None,
+           start_block_reason=0):
   return SimpleNamespace(
     lightState=light,
     mode=mode,
@@ -67,6 +78,7 @@ def target(*, light=1, raw_distance=80.0, remaining=35.0, reference=5.0,
     quality=quality,
     action=action,
     shouldStop=should_stop,
+    startBlockReason=start_block_reason,
   )
 
 
@@ -164,6 +176,10 @@ def test_all_english_action_labels_fit_the_card_at_render_size():
     "Driver override · paused",
     "Signal detected · monitoring",
     "Traffic signals · monitoring",
+    "Green · lead blocks auto start",
+    "Green · planner holding",
+    "Green · confirming release",
+    "Signal unclear · planner holding",
   }
   available_width = TRAFFIC_CARD_WIDTH - TRAFFIC_TEXT_X_OFFSET - 14.0
   for label in labels:
