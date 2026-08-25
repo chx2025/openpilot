@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from openpilot.common.hardware.usb import CHESTNUT_USB_IDS
-from openpilot.system.hardware.chestnut.flash import Ctrl, USBDEVFS_CONTROL, find_chestnut, open_device
+from openpilot.system.hardware.chestnut.flash import Ctrl, USBDEVFS_CONTROL, find_runtime_chestnut, open_device
 
 
 MIN_USB_SPEED_MBPS = 5000
@@ -54,7 +54,7 @@ def classify_chestnut_link(usb_state: list[dict], pcie_ltssm: int | None, *, rea
 
 def read_pcie_ltssm() -> int:
   """Read LTSSM over EP0 without changing PCIe power or link state."""
-  path, _, _ = find_chestnut()
+  path, _, _ = find_runtime_chestnut()
   if path is None:
     raise RuntimeError("eGPU is not connected")
 

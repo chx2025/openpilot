@@ -6,11 +6,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import time
 
 
-VID, PID = 0x3801, 0x0001
 PRODUCT = "custom ed4e39b7-CLEAN"
+OFFICIAL_USB_IDS = ((0xADD1, 0x0001), (0x3801, 0x0001))
+DUAL_USB_IDS = ((0xADD1, 0x0002),)
+DUAL_PRODUCT_RE = re.compile(r"custom [0-9a-f]{8}-UT3G-DUAL")
 LTSSM = 0xB450
 PCIE_L0 = 0x78
 IS_OFFROAD = Path("/data/params/d/IsOffroad")
@@ -35,7 +38,7 @@ def conflicting_processes(proc_root: Path = Path("/proc")) -> list[dict]:
 
 
 def safe_power_off(usb, sleeper=time.sleep) -> dict:
-  if usb.product != PRODUCT:
+  if usb.product != PRODUCT and DUAL_PRODUCT_RE.fullmatch(usb.product) is None:
     raise SafePowerOffError(f"unexpected product {usb.product!r}")
   before = bytes(usb.control_read(0xE4, 1, value=LTSSM, timeout=2000))[0]
   if before != PCIE_L0:
@@ -80,10 +83,16 @@ def main() -> int:
     raise SafePowerOffError(f"GPU users are still running: {conflicts!r}")
 
   from tinygrad.runtime.support.usb import USB3
-  devices = USB3.list_devices(VID, PID)
+  devices = [(device, usb_id) for usb_id in OFFICIAL_USB_IDS + DUAL_USB_IDS
+             for device in USB3.list_devices(*usb_id)]
   if len(devices) != 1:
-    raise SafePowerOffError(f"expected one {VID:04x}:{PID:04x} device, found {len(devices)}")
-  usb = USB3(devices[0][0])
+    raise SafePowerOffError(f"expected one supported USBGPU device, found {len(devices)}")
+  device, usb_id = devices[0]
+  usb = USB3(device[0])
+  if usb_id in DUAL_USB_IDS and DUAL_PRODUCT_RE.fullmatch(usb.product) is None:
+    raise SafePowerOffError(f"unexpected dual product {usb.product!r}")
+  if usb_id in OFFICIAL_USB_IDS and usb.product != PRODUCT:
+    raise SafePowerOffError(f"unexpected official product {usb.product!r}")
   print(json.dumps(safe_power_off(usb), sort_keys=True))
   return 0
 
