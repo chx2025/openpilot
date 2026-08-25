@@ -574,6 +574,11 @@ class TeslaTrafficControlController:
     confirmed = self._update_candidate(observation, v_ego)
 
     if self.phase in self.ACTIVE_PHASES:
+      # A confirmed red/yellow ends the flashing-green interpretation without
+      # ending the stop session. The ordinary stop state can then release on a
+      # later stable green instead of keeping flash_latched forever.
+      if self.flash_latched and color in (1, 3) and confirmed:
+        self.flash_latched = False
       if self.flash_latched:
         self.phase = (TrafficControlPhase.hold if v_ego < 0.3 and self._hold_distance_consistent()
                       else TrafficControlPhase.flashingGreenStop)

@@ -20,8 +20,7 @@ START_MAX_ACCEL = 1.6
 START_MAX_SPEED = 2.5
 START_MAX_DURATION_NS = 3_000_000_000
 START_JERK_LIMIT = 1.0
-START_LEAD_CLEAR_NS = 400_000_000
-START_LEAD_CLEAR_MAX_GAP_NS = 150_000_000
+START_NEAR_LEAD_DISTANCE = 20.0
 MOVING_GREEN_SPEED = 0.3
 TERMINAL_MAX_SPEED = 1.5
 TERMINAL_LOOKAHEAD_S = 0.05
@@ -124,9 +123,7 @@ class FinalPlanArbitrator:
     self._active_start_session_id = 0
     self._completed_start_session_id = 0
     self._start_started_ns = 0
-    self._lead_blocked_session_id = 0
-    self._lead_clear_since_ns = 0
-    self._lead_clear_last_ns = 0
+    self._lead_delegated_session_id = 0
     self._was_stopping = False
     self._hold_latched = False
     self._hold_latched_should_stop = False
@@ -313,15 +310,18 @@ class FinalPlanArbitrator:
       terminal=hold or terminal_stop,
     )
 
+    session_id = int(traffic.stopSessionId)
+    if self._lead_delegated_session_id not in (0, session_id):
+      self._lead_delegated_session_id = 0
+    if self._lead_requires_delegation(plan, sm):
+      self._lead_delegated_session_id = session_id
+
     if hold or terminal_stop:
       self._held_event_id = int(traffic.eventId)
       self._held_session_id = int(traffic.stopSessionId)
       self._active_start_session_id = 0
       self._completed_start_session_id = 0
       self._start_started_ns = 0
-      self._lead_blocked_session_id = 0
-      self._lead_clear_since_ns = 0
-      self._lead_clear_last_ns = 0
       self._hold_latched = True
       self._hold_latched_should_stop = self._hold_latched_should_stop or hold
     self._was_stopping = True
@@ -331,7 +331,45 @@ class FinalPlanArbitrator:
     self.diagnostics.traffic_a_target = traffic_a_target
     self.diagnostics.terminal_catch_active = bool(terminal_stop or (hold and v_ego > 0.01))
 
-  def _start_block_reason(self, plan, sm, traffic, now_ns: int) -> TrafficStartBlockReason:
+  @staticmethod
+  def _base_plan_lead_source(plan) -> int | None:
+    source = getattr(
+      plan, "longitudinalPlanSource", log.LongitudinalPlan.LongitudinalPlanSource.cruise,
+    )
+    source = int(getattr(source, "raw", source))
+    return source if source in (
+      int(log.LongitudinalPlan.LongitudinalPlanSource.lead0),
+      int(log.LongitudinalPlan.LongitudinalPlanSource.lead1),
+      int(log.LongitudinalPlan.LongitudinalPlanSource.lead2),
+    ) else None
+
+  @staticmethod
+  def _near_visual_lead(radar_state) -> bool:
+    for lead in (radar_state.leadOne, radar_state.leadTwo):
+      if not bool(getattr(lead, "present", False)):
+        continue
+      d_rel = float(getattr(lead, "dRel", 0.0))
+      if not np.isfinite(d_rel) or d_rel <= START_NEAR_LEAD_DISTANCE:
+        return True
+    return False
+
+  @classmethod
+  def _lead_requires_delegation(cls, plan, sm) -> bool:
+    lead_source = cls._base_plan_lead_source(plan)
+    if "radarState" not in sm.seen or not cls._healthy(sm, "radarState"):
+      return bool(getattr(plan, "hasLead", False) or lead_source is not None)
+    radar_state = sm["radarState"]
+    selected_lead_present = bool(
+      (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead0)
+       and radar_state.leadOne.present)
+      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead1)
+          and radar_state.leadTwo.present)
+      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead2)
+          and (radar_state.leadOne.present or radar_state.leadTwo.present))
+    )
+    return selected_lead_present or cls._near_visual_lead(radar_state)
+
+  def _start_block_reason(self, plan, sm, traffic) -> TrafficStartBlockReason:
     session_id = int(traffic.stopSessionId)
     if session_id == 0:
       return TrafficStartBlockReason.noPreviousHold
@@ -340,30 +378,16 @@ class FinalPlanArbitrator:
     if self._completed_start_session_id == session_id:
       return TrafficStartBlockReason.alreadyStarted
     if not self._driver_allows_start(sm):
-      if self._lead_blocked_session_id == session_id:
-        self._lead_clear_since_ns = 0
-        self._lead_clear_last_ns = 0
       return TrafficStartBlockReason.driverOverride
-    # All longitudinal backends publish this common planner result. A lead
-    # blocks Traffic GO, and a session that was lead-blocked must observe a
-    # continuous clear interval before it may start. This prevents brief
-    # vision-lead dropouts from emitting one-cycle acceleration pulses while
-    # preserving immediate starts for sessions that never had a lead.
-    if bool(plan.hasLead):
-      self._lead_blocked_session_id = session_id
-      self._lead_clear_since_ns = 0
-      self._lead_clear_last_ns = 0
+    # Traffic GO never manages a queue lead. Delegate the entire stop session
+    # to the selected base planner when it is following a lead, or when a
+    # visual lead is inside the low-speed safety envelope. A distant,
+    # unselected visual target (for example across the intersection) does not
+    # suppress an otherwise valid same-session CAN green start.
+    if self._lead_requires_delegation(plan, sm):
+      self._lead_delegated_session_id = session_id
+    if self._lead_delegated_session_id == session_id:
       return TrafficStartBlockReason.physicalLead
-    if self._lead_blocked_session_id == session_id:
-      if (self._lead_clear_since_ns == 0 or self._lead_clear_last_ns == 0
-          or now_ns - self._lead_clear_last_ns > START_LEAD_CLEAR_MAX_GAP_NS):
-        self._lead_clear_since_ns = now_ns
-      self._lead_clear_last_ns = now_ns
-      if now_ns - self._lead_clear_since_ns < START_LEAD_CLEAR_NS:
-        return TrafficStartBlockReason.physicalLead
-      self._lead_blocked_session_id = 0
-      self._lead_clear_since_ns = 0
-      self._lead_clear_last_ns = 0
     # A same-event OEM CAN green is authoritative over a model/base-plan
     # traffic-stop residue, matching CP's e2eStopped -> e2eCruise transition.
     # Session, driver, direction, cruise, speed, and duration gates remain.
@@ -376,15 +400,11 @@ class FinalPlanArbitrator:
     self._completed_start_session_id = session_id
     self._active_start_session_id = 0
     self._start_started_ns = 0
-    if self._lead_blocked_session_id == session_id:
-      self._lead_blocked_session_id = 0
-      self._lead_clear_since_ns = 0
-      self._lead_clear_last_ns = 0
 
   def _apply_start(self, plan, sm, traffic, now_ns: int) -> bool:
     self.diagnostics.start_requested = True
     session_id = int(traffic.stopSessionId)
-    block_reason = self._start_block_reason(plan, sm, traffic, now_ns)
+    block_reason = self._start_block_reason(plan, sm, traffic)
     self.diagnostics.start_block_reason = block_reason
     if block_reason != TrafficStartBlockReason.none:
       if (block_reason != TrafficStartBlockReason.physicalLead
@@ -499,9 +519,7 @@ class FinalPlanArbitrator:
       self._active_start_session_id = 0
       self._completed_start_session_id = 0
       self._start_started_ns = 0
-      self._lead_blocked_session_id = 0
-      self._lead_clear_since_ns = 0
-      self._lead_clear_last_ns = 0
+      self._lead_delegated_session_id = 0
       self._was_stopping = False
       self._hold_latched = False
       self._hold_latched_should_stop = False
@@ -516,16 +534,6 @@ class FinalPlanArbitrator:
       traffic is not None and int(traffic.stopSessionId) > 0
       and int(traffic.phase) == int(TrafficControlPhase.release) and int(traffic.lightState) == 2
     )
-    valid_start_context = bool(
-      traffic is not None and bool(traffic.plannerStartRequested)
-      and int(traffic.lightState) == 2 and not bool(traffic.directionUnknown)
-    )
-    if not valid_start_context:
-      # Keep the knowledge that this session was lead-blocked, but require a
-      # new continuous clear interval after any message, direction, or GO
-      # eligibility interruption.
-      self._lead_clear_since_ns = 0
-      self._lead_clear_last_ns = 0
     confirmed_release = bool(signal_release and int(traffic.stopSessionId) == self._held_session_id)
     if confirmed_release:
       self._hold_latched = False
@@ -581,7 +589,9 @@ class FinalPlanArbitrator:
         self.diagnostics.start_block_reason = TrafficStartBlockReason.driverOverride
       elif float(sm["carState"].vEgo) > MOVING_GREEN_SPEED:
         self.diagnostics.start_requested = True
-        if bool(plan.hasLead):
+        if self._lead_requires_delegation(plan, sm):
+          self._lead_delegated_session_id = int(traffic.stopSessionId)
+        if self._lead_delegated_session_id == int(traffic.stopSessionId):
           self.diagnostics.start_block_reason = TrafficStartBlockReason.physicalLead
         self._finish_start(int(traffic.stopSessionId))
         self._hold_latched = False

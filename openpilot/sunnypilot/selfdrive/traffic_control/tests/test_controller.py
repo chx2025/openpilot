@@ -407,6 +407,43 @@ def test_flashing_green_stop_is_not_released_by_later_green_pulse():
   assert decision.phase == TrafficControlPhase.flashingGreenStop
 
 
+def test_red_after_flashing_green_returns_to_ordinary_stop_and_can_release():
+  c = controller()
+  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 0)):
+    update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
+  assert c.flash_latched
+
+  first_red = update(c, 2.7, observation(66.4, 1, 2.7), v_ego=8.0)
+  assert c.flash_latched
+  assert first_red.phase == TrafficControlPhase.flashingGreenStop
+  confirmed_red = update(c, 3.2, observation(62.4, 1, 3.2), v_ego=8.0)
+  assert not c.flash_latched
+  assert confirmed_red.phase in c.ACTIVE_PHASES
+  update(c, 3.7, observation(58.4, 2, 3.7), v_ego=8.0)
+  released = update(c, 4.2, observation(54.4, 2, 4.2), v_ego=8.0)
+
+  assert released.phase == TrafficControlPhase.release
+
+
+def test_yellow_after_flashing_green_returns_to_ordinary_stop_and_can_release():
+  c = controller()
+  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 0)):
+    update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
+
+  first_yellow = update(c, 2.7, observation(66.4, 3, 2.7), v_ego=8.0)
+  assert c.flash_latched
+  assert first_yellow.phase == TrafficControlPhase.flashingGreenStop
+  confirmed_yellow = update(c, 3.2, observation(62.4, 3, 3.2), v_ego=8.0)
+  assert not c.flash_latched
+  assert confirmed_yellow.phase == TrafficControlPhase.yellowStop
+  update(c, 3.7, observation(58.4, 2, 3.7), v_ego=8.0)
+  released = update(c, 4.2, observation(54.4, 2, 4.2), v_ego=8.0)
+
+  assert released.phase == TrafficControlPhase.release
+
+
 def test_early_yellow_stops_and_late_yellow_passes_once():
   early = controller()
   update(early, 1.0, observation(80, 3, 1.0), v_ego=10.0)
