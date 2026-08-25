@@ -77,7 +77,13 @@ for usbgpu in [False, True] if USBGPU else [False]:
   target_pkl_path = File(modeld_pkl_path(usbgpu)).abspath
   # BIG_INTO_SMALL=1 builds the default target from the big model, e.g. to test it without a USB GPU
   file_prefix, cmd_flags = ('big_', usbgpu_tg_flags) if usbgpu else ('big_' if os.getenv('BIG_INTO_SMALL') else '', tg_flags)
-  driving_onnx_deps = get_existing_chunks(File(f"models/{file_prefix}driving_supercombo.onnx").abspath)
+  try:
+    driving_onnx_deps = get_existing_chunks(File(f"models/{file_prefix}driving_supercombo.onnx").abspath)
+  except FileNotFoundError:
+    if usbgpu:
+      print("USBGPU default ONNX source is absent; downloaded compiled bundles remain usable")
+      continue
+    raise
   camera_res_args = ' '.join(f'{cw}x{ch}' for cw, ch in CAMERA_CONFIGS)
   # CPU 7 is isolated with isolcpus on AGNOS, so explicitly pin the compiler to it.
   taskset = 'taskset -c 7 ' if arch == 'comma_arm64' else ''
