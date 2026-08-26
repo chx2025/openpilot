@@ -29,3 +29,26 @@ def test_release_profile_limits_initial_acceleration_and_ramps():
   assert accels[1] < 0.0
   assert accels[-1] > accels[1]
   assert np.max(jerks) <= 0.5 + 1e-6
+
+
+def test_required_stop_distance_uses_delay_jerk_and_brake_consistently():
+  gentle = StopProfileGenerator.required_stop_distance(
+    v_ego=15.0, a_ego=0.0, actuator_delay=0.2, max_brake=2.2, jerk_limit=0.55,
+  )
+  standard = StopProfileGenerator.required_stop_distance(
+    v_ego=15.0, a_ego=0.0, actuator_delay=0.2, max_brake=2.5, jerk_limit=0.8,
+  )
+  maximum = StopProfileGenerator.required_stop_distance(
+    v_ego=15.0, a_ego=0.0, actuator_delay=0.2, max_brake=3.0, jerk_limit=1.1,
+  )
+  assert gentle > standard > maximum > 0.0
+
+
+def test_positive_acceleration_and_longer_delay_increase_required_stop_distance():
+  baseline = StopProfileGenerator.required_stop_distance(
+    v_ego=10.0, a_ego=0.0, actuator_delay=0.2, max_brake=3.0, jerk_limit=1.0,
+  )
+  delayed = StopProfileGenerator.required_stop_distance(
+    v_ego=10.0, a_ego=0.5, actuator_delay=0.5, max_brake=3.0, jerk_limit=1.0,
+  )
+  assert delayed > baseline

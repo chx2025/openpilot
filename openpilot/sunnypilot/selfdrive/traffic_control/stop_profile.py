@@ -18,6 +18,38 @@ class StopProfileGenerator:
     self.previous_accel = None
 
   @staticmethod
+  def required_stop_distance(*, v_ego: float, a_ego: float,
+                             actuator_delay: float, max_brake: float,
+                             jerk_limit: float, dt: float = 0.05) -> float:
+    """Numerically predict the distance of the same delayed, jerk-limited stop."""
+    velocity = max(float(v_ego), 0.0)
+    acceleration = float(np.clip(a_ego, -max_brake, max_brake))
+    distance = 0.0
+    delay_remaining = max(float(actuator_delay), 0.0)
+    step = max(float(dt), 1e-3)
+
+    while velocity > 0.0 and delay_remaining > 1e-9:
+      cycle = min(step, delay_remaining)
+      next_velocity = max(0.0, velocity + acceleration * cycle)
+      distance += max(0.0, (velocity + next_velocity) * 0.5 * cycle)
+      velocity = next_velocity
+      delay_remaining -= cycle
+
+    for _ in range(60_000):
+      if velocity <= 0.0:
+        break
+      acceleration += float(np.clip(
+        -max_brake - acceleration,
+        -max(jerk_limit, 0.1) * step,
+        max(jerk_limit, 0.1) * step,
+      ))
+      acceleration = float(np.clip(acceleration, -max_brake, max_brake))
+      next_velocity = max(0.0, velocity + acceleration * step)
+      distance += max(0.0, (velocity + next_velocity) * 0.5 * step)
+      velocity = next_velocity
+    return distance
+
+  @staticmethod
   def _dt(times: np.ndarray, index: int) -> float:
     return max(float(times[index] - times[index - 1]), 1e-3)
 

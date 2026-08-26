@@ -30,17 +30,28 @@ plan. `FinalPlanArbitrator` then consumes `trafficRadarState` at the common
 post-planner publish boundary. No planner or MPC contains a Traffic target,
 adapter, or `lead2` injection path.
 
-Traffic control does not subscribe to or gate its state on `radarState`.
-Physical and vision leads remain inputs of the selected base planner, not inputs
-of the traffic-light state machine. A STOP is merged as a more conservative
-post-plan constraint. A confirmed same-session GREEN may apply the bounded,
-time-limited START or rolling-release profile; it does not represent obstacle
-clearance and does not use lead presence as a veto. This is an explicit product
-choice, not an inference that the path is clear.
+Tesla bus-2 `0x25D` is the authoritative color and distance selected by the
+vehicle for its current lane. Turn indicators, model turn intent, navigation,
+Tesla continuation state, and physical/vision leads do not veto or create a
+Traffic STOP. Frames beyond 200 metres remain diagnostic-only. A STOP is merged
+as a more conservative post-plan constraint.
+
+The traffic-light state machine remains independent of `radarState`, but the
+post-plan bounded START uses a separate fail-closed lead gate. Any current lead
+within eight metres blocks START immediately. A selected lead within eight
+metres must persist for 0.5 seconds before the whole stop session is delegated
+to the base lead planner; transient unselected targets clear after 0.4 seconds
+of healthy no-lead observations. Leads beyond eight metres do not veto the
+bounded low-speed START, and unhealthy lead sensing leaves the base plan
+unchanged. A moving same-session GREEN removes the Traffic STOP immediately and
+returns the complete plan to the selected base planner.
 
 The GO request is bounded and deduplicated per stop session and never modifies
 Tesla vehicle state, CAN, or other vehicle signals. Traffic Off and Observe are
-output-transparent.
+output-transparent even if a prior STOP/HOLD/START was latched. `applied` means
+that Traffic changed at least one final longitudinal output field; an eligible
+constraint already dominated by the base planner is not attributed to Traffic
+in the UI.
 
 ## Consequences
 
@@ -55,5 +66,9 @@ output-transparent.
 - The old planner adapter, MPC Traffic-target setter, and fake-`leadTwo` path
   are removed; the post-planner arbitrator is the only longitudinal control
   seam.
+- Yellow PASS, driver gas override, and the configured maximum-speed bypass are
+  event-scoped: the same intersection cannot reacquire STOP ownership late.
+- Flashing green requires three in-range, motion-consistent GREEN/OFF pulses;
+  stable same-track GREEN for the maximum flash interval releases the stop.
 - The three backend profiles remain independently adjustable and require an
   explicit, lossless configuration migration when their schema changes.

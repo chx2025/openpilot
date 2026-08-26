@@ -27,7 +27,7 @@ def test_go_constants_and_first_cycle_numerics_are_frozen():
   assert START_MAX_SPEED == 2.5
   assert START_MAX_DURATION_NS == 3_000_000_000
   assert START_JERK_LIMIT == 1.0
-  assert START_NEAR_LEAD_DISTANCE == 20.0
+  assert START_NEAR_LEAD_DISTANCE == 8.0
 
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   hold = fake_sm(
@@ -155,7 +155,50 @@ def test_no_target_is_output_transparent():
   assert arbitrator.diagnostics.action == TrafficPlanAction.none
 
 
-def test_stop_and_start_do_not_require_a_radar_state_subscription():
+def test_observe_mode_clears_a_latched_hold_and_is_output_transparent():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  hold = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=True, event_id=201, session_id=201, distance=0.0, v_ego=0.0,
+  )
+  arbitrator.apply(base_plan(a_target=0.0, should_stop=True), hold, NOW_NS)
+
+  observe = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=False, event_id=201, session_id=201, distance=0.0, v_ego=0.0,
+  )
+  observe["trafficRadarState"].mode = 1
+  plan = base_plan(a_target=0.4, should_stop=False)
+  original = plan_output(plan)
+  observe["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
+  arbitrator.apply(plan, observe, NOW_NS + 50_000_000)
+
+  assert plan_output(plan) == original
+  assert not arbitrator.diagnostics.applied
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
+
+
+def test_stop_not_applied_when_base_plan_is_already_more_conservative():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  red = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=202, session_id=202, distance=20.0, v_ego=5.0,
+  )
+  plan = base_plan(a_target=-3.0, should_stop=True)
+  plan.speeds = [0.0] * len(plan.speeds)
+  plan.accels = [-3.0] * len(plan.accels)
+  plan.jerks = [0.0] * len(plan.jerks)
+  plan.allowThrottle = False
+  original = plan_output(plan)
+
+  arbitrator.apply(plan, red, NOW_NS)
+
+  assert plan_output(plan) == original
+  assert not arbitrator.diagnostics.applied
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
+
+
+def test_stop_is_radar_independent_but_active_start_fails_closed_without_radar_state():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   red = fake_sm(
     phase=TrafficControlPhase.hold, light_state=1, target=True,
@@ -176,11 +219,13 @@ def test_stop_and_start_do_not_require_a_radar_state_subscription():
     health.pop("radarState")
   green.values.pop("radarState")
   plan = base_plan(a_target=0.1)
+  original = plan_output(plan)
   arbitrator.apply(plan, green, NOW_NS + 50_000_000)
 
-  assert arbitrator.diagnostics.action == TrafficPlanAction.start
-  assert arbitrator.diagnostics.start_applied
-  assert plan.aTarget == pytest.approx(0.25)
+  assert plan_output(plan) == original
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
+  assert not arbitrator.diagnostics.start_applied
+  assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.physicalLead
 
   rolling = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   moving_red = fake_sm(
@@ -280,7 +325,7 @@ def test_target_replacement_keeps_an_armed_stop_for_the_same_session():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   first = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=80, session_id=20, distance=30.0, v_ego=10.0,
+    allowed=True, event_id=80, session_id=20, distance=40.0, v_ego=10.0,
   )
   arbitrator.apply(base_plan(), first, NOW_NS)
   assert arbitrator.diagnostics.action == TrafficPlanAction.stop
@@ -313,7 +358,7 @@ def test_armed_stop_has_bounded_raw_can_dropout_grace_and_hold_stays_latched():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   stopping = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=85, session_id=24, distance=30.0, v_ego=10.0,
+    allowed=True, event_id=85, session_id=24, distance=40.0, v_ego=10.0,
   )
   arbitrator.apply(base_plan(), stopping, NOW_NS)
   assert arbitrator.diagnostics.action == TrafficPlanAction.stop
@@ -346,7 +391,7 @@ def test_stale_grace_never_bypasses_a_stop_safety_gate():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   stopping = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=114, session_id=114, distance=30.0, v_ego=10.0,
+    allowed=True, event_id=114, session_id=114, distance=40.0, v_ego=10.0,
   )
   arbitrator.apply(base_plan(), stopping, NOW_NS)
   assert arbitrator.diagnostics.action == TrafficPlanAction.stop
@@ -367,7 +412,7 @@ def test_new_off_frame_at_zero_age_keeps_an_armed_stop_continuous():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   stopping = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=115, session_id=115, distance=30.0, v_ego=10.0,
+    allowed=True, event_id=115, session_id=115, distance=40.0, v_ego=10.0,
   )
   arbitrator.apply(base_plan(), stopping, NOW_NS)
   assert arbitrator.diagnostics.action == TrafficPlanAction.stop
@@ -412,11 +457,35 @@ def test_stop_is_shadow_when_physics_cannot_stop_within_trusted_distance():
   assert plan.aTarget == 0.2
 
 
+def test_route08_initially_impossible_stop_cannot_rearm_as_terminal_catch_at_zero():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  late = fake_sm(
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=208, session_id=208, distance=10.0, v_ego=7.6,
+  )
+  first = base_plan(a_target=-1.5, should_stop=True)
+  arbitrator.apply(first, late, NOW_NS)
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
+  assert not arbitrator.diagnostics.terminal_catch_active
+
+  late["carState"].vEgo = 1.6
+  late["trafficRadarState"].distanceToStopPoint = 0.0
+  late["trafficRadarState"].rawDistance = 0.0
+  late["trafficRadarState"].publishMonoTime = NOW_NS + 500_000_000
+  terminal = base_plan(a_target=-1.4, should_stop=True)
+  original = plan_output(terminal)
+  arbitrator.apply(terminal, late, NOW_NS + 500_000_000)
+
+  assert plan_output(terminal) == original
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
+  assert not arbitrator.diagnostics.terminal_catch_active
+
+
 def test_high_speed_stop_still_applies_when_physics_are_feasible():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   sm = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=84, session_id=23, distance=150.0,
+    allowed=True, event_id=84, session_id=23, distance=180.0,
     v_ego=95.0 / 3.6,
   )
   plan = base_plan(a_target=0.2)
@@ -597,7 +666,7 @@ def test_traffic_stop_uses_the_selected_longitudinal_personality():
     arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
     sm = fake_sm(
       phase=TrafficControlPhase.braking, light_state=1, target=True,
-        allowed=True, event_id=41, distance=50.0, v_ego=14.0,
+        allowed=True, event_id=41, distance=80.0, v_ego=14.0,
       personality=personality,
     )
     arbitrator.apply(base_plan(), sm, NOW_NS)
@@ -627,13 +696,16 @@ def test_fresh_raw_can_target_survives_a_300ms_interprocess_planner_gap():
 
 def test_zero_remaining_distance_while_moving_keeps_braking_until_stopped():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
-  plan = base_plan()
   sm = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=8, distance=0.0, v_ego=1.1,
+    allowed=True, event_id=8, session_id=8, distance=4.0, v_ego=1.1,
   )
+  arbitrator.apply(base_plan(), sm, NOW_NS)
+  sm["trafficRadarState"].distanceToStopPoint = 0.0
+  sm["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
+  plan = base_plan()
 
-  arbitrator.apply(plan, sm, NOW_NS)
+  arbitrator.apply(plan, sm, NOW_NS + 50_000_000)
 
   assert arbitrator.diagnostics.action == TrafficPlanAction.stop
   assert arbitrator.diagnostics.applied
@@ -644,13 +716,18 @@ def test_zero_remaining_distance_while_moving_keeps_braking_until_stopped():
 
 def test_hold_phase_while_vehicle_is_still_moving_keeps_braking():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
-  plan = base_plan()
   sm = fake_sm(
-    phase=TrafficControlPhase.hold, light_state=1, target=True,
-    allowed=True, event_id=8, distance=0.0, v_ego=0.7,
+    phase=TrafficControlPhase.braking, light_state=1, target=True,
+    allowed=True, event_id=8, session_id=8, distance=3.0, v_ego=0.7,
   )
+  arbitrator.apply(base_plan(), sm, NOW_NS)
+  sm["trafficRadarState"].phase = int(TrafficControlPhase.hold)
+  sm["trafficRadarState"].shouldStop = True
+  sm["trafficRadarState"].distanceToStopPoint = 0.0
+  sm["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
+  plan = base_plan()
 
-  arbitrator.apply(plan, sm, NOW_NS)
+  arbitrator.apply(plan, sm, NOW_NS + 50_000_000)
 
   assert arbitrator.diagnostics.action == TrafficPlanAction.hold
   assert arbitrator.diagnostics.applied
@@ -661,14 +738,17 @@ def test_hold_phase_while_vehicle_is_still_moving_keeps_braking():
 
 def test_terminal_stop_does_not_sample_zero_after_the_predicted_stop():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.5))
-  plan = base_plan(a_target=0.1)
   sm = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=8, distance=0.0, v_ego=0.8,
+    allowed=True, event_id=8, session_id=8, distance=3.0, v_ego=0.8,
   )
   sm["carState"].aEgo = -2.4
+  arbitrator.apply(base_plan(a_target=0.1), sm, NOW_NS)
+  sm["trafficRadarState"].distanceToStopPoint = 0.0
+  sm["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
+  plan = base_plan(a_target=0.1)
 
-  arbitrator.apply(plan, sm, NOW_NS)
+  arbitrator.apply(plan, sm, NOW_NS + 50_000_000)
 
   assert arbitrator.diagnostics.terminal_catch_active
   assert arbitrator.diagnostics.traffic_a_target < 0.0
@@ -679,13 +759,16 @@ def test_terminal_stop_does_not_sample_zero_after_the_predicted_stop():
 
 def test_low_speed_stop_enters_terminal_catch_before_distance_is_exhausted():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
-  plan = base_plan()
   sm = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=9, distance=0.5, v_ego=1.1,
+    allowed=True, event_id=9, session_id=9, distance=4.0, v_ego=1.1,
   )
+  arbitrator.apply(base_plan(), sm, NOW_NS)
+  sm["trafficRadarState"].distanceToStopPoint = 0.5
+  sm["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
+  plan = base_plan()
 
-  arbitrator.apply(plan, sm, NOW_NS)
+  arbitrator.apply(plan, sm, NOW_NS + 50_000_000)
 
   assert arbitrator.diagnostics.terminal_catch_active
   assert plan.aTarget < 0.0
@@ -697,9 +780,12 @@ def test_terminal_catch_survives_a_short_traffic_publisher_gap():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   sm = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=9, distance=0.8, v_ego=1.5,
+    allowed=True, event_id=9, session_id=9, distance=4.0, v_ego=1.5,
   )
   arbitrator.apply(base_plan(), sm, NOW_NS)
+  sm["trafficRadarState"].distanceToStopPoint = 0.8
+  sm["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
+  arbitrator.apply(base_plan(), sm, NOW_NS + 50_000_000)
   sm.alive["trafficRadarState"] = False
   sm["carState"].vEgo = 1.4
   latched = base_plan(a_target=0.3)
@@ -716,20 +802,23 @@ def test_terminal_to_hold_sequence_brakes_until_actual_standstill():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.5))
   sm = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
-    allowed=True, event_id=10, distance=0.8, v_ego=1.5,
+    allowed=True, event_id=10, session_id=10, distance=4.0, v_ego=1.5,
   )
+  arbitrator.apply(base_plan(a_target=0.3), sm, NOW_NS)
+  sm["trafficRadarState"].distanceToStopPoint = 0.8
+  sm["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000
 
   terminal = base_plan(a_target=0.3)
-  arbitrator.apply(terminal, sm, NOW_NS)
+  arbitrator.apply(terminal, sm, NOW_NS + 50_000_000)
 
   sm.alive["trafficRadarState"] = False
   sm["carState"].vEgo = 1.0
   publisher_gap = base_plan(a_target=0.3)
-  arbitrator.apply(publisher_gap, sm, NOW_NS + 50_000_000)
+  arbitrator.apply(publisher_gap, sm, NOW_NS + 100_000_000)
 
   sm["carState"].vEgo = 0.0
   standstill = base_plan(a_target=0.3)
-  arbitrator.apply(standstill, sm, NOW_NS + 100_000_000)
+  arbitrator.apply(standstill, sm, NOW_NS + 150_000_000)
 
   for moving_plan in (terminal, publisher_gap):
     assert moving_plan.aTarget < 0.0
@@ -813,6 +902,62 @@ def test_distant_unselected_visual_lead_does_not_block_green_start():
   arbitrator.apply(unaffected, green, NOW_NS + 50_000_000)
   assert arbitrator.diagnostics.start_applied
   assert unaffected.aTarget > 0.1
+
+
+def test_route75_transient_unselected_near_lead_does_not_poison_later_green():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  hold = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=True, event_id=203, session_id=203, distance=0.0, v_ego=0.0,
+  )
+  hold["radarState"].leadOne.present = True
+  hold["radarState"].leadOne.dRel = 6.0
+  arbitrator.apply(
+    base_plan(a_target=0.0, should_stop=True, source=log.LongitudinalPlan.LongitudinalPlanSource.e2e),
+    hold, NOW_NS,
+  )
+
+  # The unselected visual target disappears and remains healthily clear long
+  # before the same stop session receives its first confirmed green.
+  hold["radarState"].leadOne.present = False
+  for offset_ns in range(50_000_000, 650_000_000, 50_000_000):
+    hold["trafficRadarState"].publishMonoTime = NOW_NS + offset_ns
+    arbitrator.apply(base_plan(a_target=0.0, should_stop=True), hold, NOW_NS + offset_ns)
+
+  green = fake_sm(
+    phase=TrafficControlPhase.release, light_state=2, allowed=True, start=True,
+    event_id=204, session_id=203, distance=0.0, v_ego=0.0,
+  )
+  green["trafficRadarState"].publishMonoTime = NOW_NS + 37_050_000_000
+  plan = base_plan(a_target=0.1, should_stop=True)
+  arbitrator.apply(plan, green, NOW_NS + 37_050_000_000)
+
+  assert arbitrator.diagnostics.start_applied
+  assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.none
+
+
+def test_selected_lead_beyond_eight_meters_does_not_block_bounded_start():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  hold = fake_sm(
+    phase=TrafficControlPhase.hold, light_state=1, target=True,
+    allowed=True, event_id=205, session_id=205, distance=0.0, v_ego=0.0,
+  )
+  arbitrator.apply(base_plan(a_target=0.0, should_stop=True), hold, NOW_NS)
+  green = fake_sm(
+    phase=TrafficControlPhase.release, light_state=2, allowed=True, start=True,
+    event_id=206, session_id=205, distance=0.0, v_ego=0.0,
+  )
+  green["radarState"].leadOne.present = True
+  green["radarState"].leadOne.dRel = START_NEAR_LEAD_DISTANCE + 0.5
+  plan = base_plan(
+    a_target=0.1, should_stop=True, has_lead=True,
+    source=log.LongitudinalPlan.LongitudinalPlanSource.lead0,
+  )
+
+  arbitrator.apply(plan, green, NOW_NS + 50_000_000)
+
+  assert arbitrator.diagnostics.start_applied
+  assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.none
 
 
 def test_real_capnp_plan_source_enum_is_supported():
@@ -934,7 +1079,7 @@ def test_green_go_with_selected_lead_leaves_base_plan_unchanged(v_ego, a_target,
     event_id=131, session_id=130, distance=0.0, v_ego=v_ego,
   )
   green["radarState"].leadOne.present = True
-  green["radarState"].leadOne.dRel = 50.0
+  green["radarState"].leadOne.dRel = 4.0
   plan = base_plan(
     a_target=a_target, should_stop=should_stop, has_lead=True,
     source=log.LongitudinalPlan.LongitudinalPlanSource.lead0,
@@ -956,13 +1101,19 @@ def test_selected_lead_delegates_the_entire_stop_session_to_the_base_planner():
     phase=TrafficControlPhase.hold, light_state=1, target=True,
     allowed=True, event_id=132, session_id=132, distance=0.0, v_ego=0.0,
   )
-  arbitrator.apply(base_plan(a_target=0.0, should_stop=True), hold, NOW_NS)
+  hold["radarState"].leadOne.present = True
+  hold["radarState"].leadOne.dRel = 4.0
+  for offset_ns in range(0, 600_000_000, 50_000_000):
+    hold["trafficRadarState"].publishMonoTime = NOW_NS + offset_ns
+    arbitrator.apply(base_plan(
+      a_target=0.0, should_stop=True, has_lead=True,
+      source=log.LongitudinalPlan.LongitudinalPlanSource.lead0,
+    ), hold, NOW_NS + offset_ns)
   green = fake_sm(
     phase=TrafficControlPhase.release, light_state=2, allowed=True, start=True,
     event_id=133, session_id=132, distance=0.0, v_ego=0.0,
   )
-  green["radarState"].leadOne.present = True
-  green["radarState"].leadOne.dRel = 50.0
+  green["radarState"].leadOne.present = False
 
   blocked = base_plan(
     a_target=-0.3, should_stop=True, has_lead=True,
@@ -1025,8 +1176,8 @@ def test_route6d_lead_flicker_cannot_emit_a_start_pulse():
   stable_clear = base_plan(a_target=0.1)
   green["trafficRadarState"].publishMonoTime = NOW_NS + 750_000_000
   arbitrator.apply(stable_clear, green, NOW_NS + 750_000_000)
-  assert not arbitrator.diagnostics.start_applied
-  assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.physicalLead
+  assert arbitrator.diagnostics.start_applied
+  assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.none
 
 
 def test_near_visual_lead_delegation_survives_an_interrupted_release():
@@ -1165,7 +1316,7 @@ def test_published_lead_does_not_suppress_traffic_stop():
   assert plan.aTarget < 0.4
 
 
-def test_turn_signal_allows_red_stop_but_still_blocks_green_start():
+def test_turn_signal_does_not_veto_current_lane_stop_or_green_start():
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   red = fake_sm(
     phase=TrafficControlPhase.braking, light_state=1, target=True,
@@ -1192,11 +1343,11 @@ def test_turn_signal_allows_red_stop_but_still_blocks_green_start():
     start=True, event_id=31, distance=0.0, v_ego=0.0,
   )
   green["carControl"].rightBlinker = True
-  blocked_start = base_plan(a_target=0.1)
-  arbitrator.apply(blocked_start, green, NOW_NS + 100_000_000)
+  start = base_plan(a_target=0.1)
+  arbitrator.apply(start, green, NOW_NS + 100_000_000)
 
-  assert not arbitrator.diagnostics.start_applied
-  assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.driverOverride
+  assert arbitrator.diagnostics.start_applied
+  assert arbitrator.diagnostics.start_block_reason == TrafficStartBlockReason.none
 
 
 def test_green_start_remains_blocked_when_longitudinal_control_is_disabled():

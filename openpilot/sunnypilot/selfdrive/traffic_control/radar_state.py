@@ -72,20 +72,12 @@ class TrafficRadarSource:
                    if raw_traffic is not None else TeslaTrafficControlObservation())
     car_state = sm['carState']
     car_control = sm['carControl']
-    model_direction_unknown = bool(
-      'modelDataV2SP' in sm.seen and sm.seen['modelDataV2SP']
-      and sm.alive['modelDataV2SP'] and sm.valid['modelDataV2SP']
-      and int(sm['modelDataV2SP'].laneTurnDirection) != 0
-    )
-    vehicle_turn_signal_active = bool(
-      getattr(car_state, 'leftBlinker', False) or getattr(car_state, 'rightBlinker', False)
-    )
-    direction_unknown = bool(
-      vehicle_turn_signal_active or car_control.leftBlinker or car_control.rightBlinker or model_direction_unknown
-    )
+    # Tesla selects the signal for the vehicle's current lane before publishing
+    # 0x25D. Turn indicators and model manoeuvre intent therefore cannot veto
+    # the authoritative lane signal.
+    direction_unknown = False
     decision = self.controller.update(
       observation, now_ns, v_ego=float(car_state.vEgo), a_ego=float(car_state.aEgo),
-      model_stop_distance=None, model_stop_candidate=False,
       enabled=bool(vehicle_inputs_valid and car_control.enabled),
       long_active=bool(vehicle_inputs_valid and car_control.longActive), gas_pressed=bool(car_state.gasPressed),
       brake_pressed=bool(car_state.brakePressed),

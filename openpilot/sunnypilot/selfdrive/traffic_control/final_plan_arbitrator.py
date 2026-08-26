@@ -10,7 +10,7 @@ from openpilot.cereal import log
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.traffic_control import TRAFFIC_SIGNAL_CONTROL_PARAM
-from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
+from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlMode, TrafficControlPhase
 from openpilot.sunnypilot.selfdrive.traffic_control.stop_profile import StopProfileGenerator
 
 
@@ -20,7 +20,10 @@ START_MAX_ACCEL = 1.6
 START_MAX_SPEED = 2.5
 START_MAX_DURATION_NS = 3_000_000_000
 START_JERK_LIMIT = 1.0
-START_NEAR_LEAD_DISTANCE = 20.0
+START_NEAR_LEAD_DISTANCE = 8.0
+START_LEAD_CONFIRM_NS = 500_000_000
+START_LEAD_CLEAR_NS = 400_000_000
+START_LEAD_MAX_GAP_NS = 150_000_000
 MOVING_GREEN_SPEED = 0.3
 TERMINAL_MAX_SPEED = 1.5
 TERMINAL_LOOKAHEAD_S = 0.05
@@ -124,11 +127,61 @@ class FinalPlanArbitrator:
     self._completed_start_session_id = 0
     self._start_started_ns = 0
     self._lead_delegated_session_id = 0
+    self._lead_candidate_session_id = 0
+    self._lead_candidate_since_ns = 0
+    self._lead_candidate_last_ns = 0
+    self._near_lead_blocked_session_id = 0
+    self._lead_clear_since_ns = 0
+    self._lead_clear_last_ns = 0
     self._was_stopping = False
     self._hold_latched = False
     self._hold_latched_should_stop = False
     self._armed_stop_session_id = 0
+    self._rejected_stop_session_id = 0
     self.diagnostics = TrafficPlanDiagnostics()
+
+  def _reset_control_state(self) -> None:
+    self._held_event_id = 0
+    self._held_session_id = 0
+    self._seen_stop_session_id = 0
+    self._owned_stop_session_id = 0
+    self._active_start_session_id = 0
+    self._completed_start_session_id = 0
+    self._start_started_ns = 0
+    self._lead_delegated_session_id = 0
+    self._lead_candidate_session_id = 0
+    self._lead_candidate_since_ns = 0
+    self._lead_candidate_last_ns = 0
+    self._near_lead_blocked_session_id = 0
+    self._lead_clear_since_ns = 0
+    self._lead_clear_last_ns = 0
+    self._was_stopping = False
+    self._hold_latched = False
+    self._hold_latched_should_stop = False
+    self._armed_stop_session_id = 0
+    self._rejected_stop_session_id = 0
+    self._profile.reset()
+
+  @staticmethod
+  def _plan_snapshot(plan):
+    return (
+      tuple(float(value) for value in plan.speeds),
+      tuple(float(value) for value in plan.accels),
+      tuple(float(value) for value in plan.jerks),
+      float(plan.aTarget), bool(plan.shouldStop), bool(plan.allowThrottle),
+    )
+
+  @staticmethod
+  def _plan_changed(before, plan) -> bool:
+    after = FinalPlanArbitrator._plan_snapshot(plan)
+    for previous, current in zip(before[:3], after[:3], strict=True):
+      if len(previous) != len(current) or any(abs(a - b) > 1e-6 for a, b in zip(previous, current, strict=True)):
+        return True
+    return bool(
+      abs(before[3] - after[3]) > 1e-6
+      or before[4] != after[4]
+      or before[5] != after[5]
+    )
 
   def publisher(self, pm, sm, now_ns: int | None = None):
     return _TrafficPlanPublishSink(pm, self, sm, time.monotonic_ns() if now_ns is None else now_ns)
@@ -155,11 +208,7 @@ class FinalPlanArbitrator:
 
   @classmethod
   def _driver_allows_start(cls, sm) -> bool:
-    car_control = sm["carControl"]
-    return bool(
-      cls._driver_allows_stop(sm)
-      and not car_control.leftBlinker and not car_control.rightBlinker
-    )
+    return cls._driver_allows_stop(sm)
 
   @staticmethod
   def _times(length: int) -> np.ndarray:
@@ -238,24 +287,34 @@ class FinalPlanArbitrator:
     return _TrafficStopStyle(comfort_brake, jerk_limit, decel_margin)
 
   def _traffic_activation_distance(self, sm) -> float:
-    """Speed/personality-aware horizon that separates tracking from braking."""
+    """Use the same delayed, jerk-limited dynamics that generate the stop."""
     personality = sm["selfdriveState"].personality
     if personality == log.LongitudinalPersonality.relaxed:
-      activation_brake = 1.3
+      activation_brake, activation_jerk = 2.2, 0.55
     elif personality == log.LongitudinalPersonality.aggressive:
-      activation_brake = 1.9
+      activation_brake, activation_jerk = 2.8, 1.10
     else:
-      activation_brake = 1.6
+      activation_brake, activation_jerk = 2.5, 0.80
     v_ego = max(0.0, float(sm["carState"].vEgo))
-    delay_distance = v_ego * (self._actuator_delay + 0.8)
-    braking_distance = v_ego ** 2 / (2.0 * activation_brake)
-    return float(np.clip(braking_distance + delay_distance + 8.0, 20.0, 200.0))
+    speed_jerk_scale = float(np.interp(v_ego * 3.6, [0.0, 30.0, 60.0, 90.0], [0.70, 0.85, 1.10, 1.25]))
+    braking_distance = StopProfileGenerator.required_stop_distance(
+      v_ego=v_ego, a_ego=float(sm["carState"].aEgo),
+      actuator_delay=self._actuator_delay + 0.2,
+      max_brake=activation_brake, jerk_limit=activation_jerk * speed_jerk_scale,
+    )
+    # Reserve enough distance for 2 Hz signal cadence, one confirmation frame,
+    # and style-preserving control convergence before the physical stop model
+    # reaches its nominal boundary.
+    return float(np.clip(braking_distance + 26.0, 20.0, 200.0))
 
   def _traffic_stop_feasible(self, sm, remaining_distance: float) -> bool:
     v_ego = max(0.0, float(sm["carState"].vEgo))
-    effective_distance = max(remaining_distance - v_ego * (self._actuator_delay + 0.8), 0.5)
-    required_brake = v_ego ** 2 / (2.0 * effective_distance)
-    return required_brake <= MAX_TRAFFIC_STOP_BRAKE
+    required_distance = StopProfileGenerator.required_stop_distance(
+      v_ego=v_ego, a_ego=float(sm["carState"].aEgo),
+      actuator_delay=self._actuator_delay + TERMINAL_LOOKAHEAD_S,
+      max_brake=MAX_TRAFFIC_STOP_BRAKE, jerk_limit=1.1,
+    )
+    return remaining_distance >= required_distance
 
   def _apply_stop_constraint(self, plan, sm, *, remaining_distance: float,
                              hold: bool, terminal: bool) -> float:
@@ -287,7 +346,7 @@ class FinalPlanArbitrator:
     plan.allowThrottle = bool(plan.allowThrottle and not (hold or terminal))
     return traffic_a_target
 
-  def _apply_stop(self, plan, sm, traffic) -> None:
+  def _apply_stop(self, plan, sm, traffic, now_ns: int) -> None:
     phase = TrafficControlPhase(int(traffic.phase))
     hold = bool(phase == TrafficControlPhase.hold or traffic.shouldStop)
     v_ego = float(sm["carState"].vEgo)
@@ -311,10 +370,7 @@ class FinalPlanArbitrator:
     )
 
     session_id = int(traffic.stopSessionId)
-    if self._lead_delegated_session_id not in (0, session_id):
-      self._lead_delegated_session_id = 0
-    if self._lead_requires_delegation(plan, sm):
-      self._lead_delegated_session_id = session_id
+    self._update_go_lead_gate(plan, sm, session_id, now_ns)
 
     if hold or terminal_stop:
       self._held_event_id = int(traffic.eventId)
@@ -343,33 +399,89 @@ class FinalPlanArbitrator:
       int(log.LongitudinalPlan.LongitudinalPlanSource.lead2),
     ) else None
 
-  @staticmethod
-  def _near_visual_lead(radar_state) -> bool:
-    for lead in (radar_state.leadOne, radar_state.leadTwo):
-      if not bool(getattr(lead, "present", False)):
-        continue
-      d_rel = float(getattr(lead, "dRel", 0.0))
-      if not np.isfinite(d_rel) or d_rel <= START_NEAR_LEAD_DISTANCE:
-        return True
-    return False
-
   @classmethod
-  def _lead_requires_delegation(cls, plan, sm) -> bool:
+  def _lead_gate_state(cls, plan, sm) -> tuple[bool, bool, bool]:
     lead_source = cls._base_plan_lead_source(plan)
     if "radarState" not in sm.seen or not cls._healthy(sm, "radarState"):
-      return bool(getattr(plan, "hasLead", False) or lead_source is not None)
+      return False, False, False
     radar_state = sm["radarState"]
-    selected_lead_present = bool(
-      (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead0)
-       and radar_state.leadOne.present)
-      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead1)
-          and radar_state.leadTwo.present)
-      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead2)
-          and (radar_state.leadOne.present or radar_state.leadTwo.present))
+    near = []
+    for lead in (radar_state.leadOne, radar_state.leadTwo):
+      if not bool(getattr(lead, "present", False)):
+        near.append(False)
+        continue
+      d_rel = float(getattr(lead, "dRel", float("nan")))
+      # A malformed current lead is uncertain and therefore blocks this GO
+      # cycle, but it can never permanently own a stop session.
+      near.append(not np.isfinite(d_rel) or d_rel <= 0.0 or d_rel <= START_NEAR_LEAD_DISTANCE)
+    any_near = any(near)
+    selected_near = bool(
+      (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead0) and near[0])
+      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead1) and near[1])
+      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead2) and any_near)
     )
-    return selected_lead_present or cls._near_visual_lead(radar_state)
+    return True, any_near, selected_near
 
-  def _start_block_reason(self, plan, sm, traffic) -> TrafficStartBlockReason:
+  def _update_go_lead_gate(self, plan, sm, session_id: int, now_ns: int) -> bool:
+    tracked_ids = (
+      self._lead_delegated_session_id, self._lead_candidate_session_id,
+      self._near_lead_blocked_session_id,
+    )
+    if any(tracked not in (0, session_id) for tracked in tracked_ids):
+      self._lead_delegated_session_id = 0
+      self._lead_candidate_session_id = 0
+      self._lead_candidate_since_ns = 0
+      self._lead_candidate_last_ns = 0
+      self._near_lead_blocked_session_id = 0
+      self._lead_clear_since_ns = 0
+      self._lead_clear_last_ns = 0
+
+    healthy, any_near, selected_near = self._lead_gate_state(plan, sm)
+    if not healthy:
+      self._lead_clear_since_ns = 0
+      self._lead_clear_last_ns = 0
+      self._lead_candidate_since_ns = 0
+      self._lead_candidate_last_ns = 0
+      return False
+
+    if any_near:
+      self._near_lead_blocked_session_id = session_id
+      self._lead_clear_since_ns = 0
+      self._lead_clear_last_ns = 0
+    elif self._near_lead_blocked_session_id == session_id:
+      if (self._lead_clear_since_ns == 0 or self._lead_clear_last_ns == 0
+          or now_ns - self._lead_clear_last_ns > START_LEAD_MAX_GAP_NS):
+        self._lead_clear_since_ns = now_ns
+      self._lead_clear_last_ns = now_ns
+      if now_ns - self._lead_clear_since_ns >= START_LEAD_CLEAR_NS:
+        self._near_lead_blocked_session_id = 0
+        self._lead_clear_since_ns = 0
+        self._lead_clear_last_ns = 0
+
+    if selected_near:
+      if (self._lead_candidate_session_id != session_id or self._lead_candidate_since_ns == 0
+          or self._lead_candidate_last_ns == 0
+          or now_ns - self._lead_candidate_last_ns > START_LEAD_MAX_GAP_NS):
+        self._lead_candidate_session_id = session_id
+        self._lead_candidate_since_ns = now_ns
+      self._lead_candidate_last_ns = now_ns
+      if now_ns - self._lead_candidate_since_ns >= START_LEAD_CONFIRM_NS:
+        self._lead_delegated_session_id = session_id
+    else:
+      self._lead_candidate_session_id = 0
+      self._lead_candidate_since_ns = 0
+      self._lead_candidate_last_ns = 0
+    return True
+
+  def _go_lead_blocked(self, plan, sm, session_id: int, now_ns: int) -> bool:
+    healthy = self._update_go_lead_gate(plan, sm, session_id, now_ns)
+    return bool(
+      not healthy
+      or self._lead_delegated_session_id == session_id
+      or self._near_lead_blocked_session_id == session_id
+    )
+
+  def _start_block_reason(self, plan, sm, traffic, now_ns: int) -> TrafficStartBlockReason:
     session_id = int(traffic.stopSessionId)
     if session_id == 0:
       return TrafficStartBlockReason.noPreviousHold
@@ -379,14 +491,7 @@ class FinalPlanArbitrator:
       return TrafficStartBlockReason.alreadyStarted
     if not self._driver_allows_start(sm):
       return TrafficStartBlockReason.driverOverride
-    # Traffic GO never manages a queue lead. Delegate the entire stop session
-    # to the selected base planner when it is following a lead, or when a
-    # visual lead is inside the low-speed safety envelope. A distant,
-    # unselected visual target (for example across the intersection) does not
-    # suppress an otherwise valid same-session CAN green start.
-    if self._lead_requires_delegation(plan, sm):
-      self._lead_delegated_session_id = session_id
-    if self._lead_delegated_session_id == session_id:
+    if self._go_lead_blocked(plan, sm, session_id, now_ns):
       return TrafficStartBlockReason.physicalLead
     # A same-event OEM CAN green is authoritative over a model/base-plan
     # traffic-stop residue, matching CP's e2eStopped -> e2eCruise transition.
@@ -404,7 +509,7 @@ class FinalPlanArbitrator:
   def _apply_start(self, plan, sm, traffic, now_ns: int) -> bool:
     self.diagnostics.start_requested = True
     session_id = int(traffic.stopSessionId)
-    block_reason = self._start_block_reason(plan, sm, traffic)
+    block_reason = self._start_block_reason(plan, sm, traffic, now_ns)
     self.diagnostics.start_block_reason = block_reason
     if block_reason != TrafficStartBlockReason.none:
       if (block_reason != TrafficStartBlockReason.physicalLead
@@ -503,28 +608,25 @@ class FinalPlanArbitrator:
 
   def apply(self, plan, sm, now_ns: int | None = None) -> None:
     now_ns = time.monotonic_ns() if now_ns is None else now_ns
+    base_snapshot = self._plan_snapshot(plan)
     base_a_target = float(plan.aTarget)
     self.diagnostics = TrafficPlanDiagnostics(base_a_target=base_a_target, final_a_target=base_a_target)
     traffic = self._traffic(sm, now_ns)
     self._set_diagnostics_from_traffic(traffic)
 
+    if traffic is not None and int(traffic.mode) not in (
+      int(TrafficControlMode.stopOnly), int(TrafficControlMode.stopGo),
+    ):
+      self._reset_control_state()
+      self.diagnostics.final_a_target = float(plan.aTarget)
+      self.diagnostics.should_stop = bool(plan.shouldStop)
+      return
+
     event_passed = bool(
       traffic is not None and int(traffic.phase) == int(TrafficControlPhase.passed)
     )
     if event_passed:
-      self._held_event_id = 0
-      self._held_session_id = 0
-      self._seen_stop_session_id = 0
-      self._owned_stop_session_id = 0
-      self._active_start_session_id = 0
-      self._completed_start_session_id = 0
-      self._start_started_ns = 0
-      self._lead_delegated_session_id = 0
-      self._was_stopping = False
-      self._hold_latched = False
-      self._hold_latched_should_stop = False
-      self._armed_stop_session_id = 0
-      self._profile.reset()
+      self._reset_control_state()
       self.diagnostics.final_a_target = float(plan.aTarget)
       self.diagnostics.should_stop = bool(plan.shouldStop)
       return
@@ -560,15 +662,21 @@ class FinalPlanArbitrator:
     if trackable_stop:
       session_id = int(traffic.stopSessionId)
       self._seen_stop_session_id = int(traffic.stopSessionId)
+      if self._rejected_stop_session_id not in (0, session_id):
+        self._rejected_stop_session_id = 0
       inside_horizon = bool(
         int(traffic.phase) == int(TrafficControlPhase.hold)
         or float(traffic.distanceToStopPoint) <= self._traffic_activation_distance(sm)
       )
       feasible = self._traffic_stop_feasible(sm, float(traffic.distanceToStopPoint))
-      if session_id != self._armed_stop_session_id:
-        self._armed_stop_session_id = session_id if inside_horizon and feasible and traffic.stopControlAllowed else 0
-      elif inside_horizon and feasible:
-        self._armed_stop_session_id = session_id
+      if session_id not in (self._armed_stop_session_id, self._rejected_stop_session_id) and inside_horizon:
+        if feasible and traffic.stopControlAllowed:
+          self._armed_stop_session_id = session_id
+        elif not feasible:
+          # Make the ownership decision once. An initially impossible event
+          # cannot become a surprise terminal catch only because the base
+          # planner happened to slow the vehicle later.
+          self._rejected_stop_session_id = session_id
     else:
       self._armed_stop_session_id = 0
     stale_armed_grace = bool(
@@ -582,16 +690,11 @@ class FinalPlanArbitrator:
       and (traffic.stopControlAllowed or stale_armed_grace) and driver_allows_stop
     )
     if active_stop:
-      self._apply_stop(plan, sm, traffic)
+      self._apply_stop(plan, sm, traffic, now_ns)
     elif traffic is not None and bool(traffic.plannerStartRequested) and int(traffic.lightState) == 2:
-      if bool(traffic.directionUnknown):
+      if float(sm["carState"].vEgo) > MOVING_GREEN_SPEED:
         self.diagnostics.start_requested = True
-        self.diagnostics.start_block_reason = TrafficStartBlockReason.driverOverride
-      elif float(sm["carState"].vEgo) > MOVING_GREEN_SPEED:
-        self.diagnostics.start_requested = True
-        if self._lead_requires_delegation(plan, sm):
-          self._lead_delegated_session_id = int(traffic.stopSessionId)
-        if self._lead_delegated_session_id == int(traffic.stopSessionId):
+        if self._go_lead_blocked(plan, sm, int(traffic.stopSessionId), now_ns):
           self.diagnostics.start_block_reason = TrafficStartBlockReason.physicalLead
         self._finish_start(int(traffic.stopSessionId))
         self._hold_latched = False
@@ -602,10 +705,11 @@ class FinalPlanArbitrator:
       elif not self._apply_start(plan, sm, traffic, now_ns):
         self._profile.reset()
         self._was_stopping = False
-    elif signal_release and bool(traffic.directionUnknown):
+    elif signal_release:
       self._hold_latched = False
       self._hold_latched_should_stop = False
       self._was_stopping = False
+      self._armed_stop_session_id = 0
       self._profile.reset()
     elif (self._hold_latched and float(sm["carState"].vEgo) <= TERMINAL_MAX_SPEED
           and driver_allows_stop):
@@ -621,6 +725,10 @@ class FinalPlanArbitrator:
 
     self.diagnostics.final_a_target = float(plan.aTarget)
     self.diagnostics.should_stop = bool(plan.shouldStop)
+    if self.diagnostics.applied and not self._plan_changed(base_snapshot, plan):
+      self.diagnostics.applied = False
+      self.diagnostics.action = TrafficPlanAction.none
+      self.diagnostics.start_applied = False
 
   def annotate_plan_sp(self, plan_sp) -> None:
     diagnostics = self.diagnostics

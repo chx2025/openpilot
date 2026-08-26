@@ -39,7 +39,7 @@ observable. The old unconditional `Panda.get_type() == 9` override is excluded.
 | P0 | Tesla Control | DBC/HW4 decoding, MADS/coop steering, manual longitudinal selection, Dynamic Auto Stock, AP Hybrid, auto speed, safety validation | Tesla Control Profile at car init; Tesla Control Runtime at selfdrived | Core/opendbc ported; device test pending |
 | P0 | Radar Backend | OEM/ARS408/Off selector, ARS RX parser, tracker, diagnostics, bounded motion TX, Panda safety | one backend selector in opendbc; one enum Param/UI control | Host-tested; device test pending |
 | P1 | Planner Backend | Upstream Official plus restored legacy Experimental and TN-NoDEC; session latch; independent live profiles/tuning; TN stopping policy | one planner factory; isolated backend registry; one shared legacy MPC equation/build module | Darwin and C3XL route differentials, host/device convergence, and device timing pass; on-road behavior pending |
-| P1 | Traffic Radar / Stop Profile | Off/Observe/Shadow/StopOnly/StopGo, one Tesla event controller, CP model stop confirmation, independent typed Traffic target, bounded planner-only departure, radar/lead/driver gates, HUD diagnostics | one planner decorator; one `trafficcontrold` publisher; optional narrow MPC target setter | Host-tested with route-derived candidate-jitter fixture; on-road behavior pending |
+| P1 | Traffic Radar / Stop Profile | Off/Observe/Shadow/StopOnly/StopGo, current-lane Tesla CAN event controller, independent typed Traffic target, jerk-limited stop ownership, bounded eight-metre-gated departure, causal HUD diagnostics | one `trafficcontrold` publisher; one common post-planner arbitrator | Host-tested with route-derived and deterministic regression fixtures; on-road behavior pending |
 | P2 | Device Query/Command | default-on fully unauthenticated settings/commands, Tesla/HW4 diagnostics and validation, hotspot, opt-in offroad terminal; no driving-information page/API | one managed service; query/command boundary | Device HTTP verified; physical command tests pending |
 | P2 | Update reliability | proxy Adapter, current-tree LFS hydrate, last-known-good clock | narrow updater/time hooks | LFS and clock host-tested; proxy pending |
 | P3 | Local Defaults/UX | complete Simplified Chinese catalog, legacy onroad-alert localization and glyph coverage; legacy C3XL GPIO42 buzzer; brightness controls; functional one-minute shutdown choice; speed offset cap; eGPU telemetry/safe eject | separate defaults policy, alert adapter, and isolated UI rows | Translation/font/alert/power host checks pass; device rendering, audible, and display checks pending |
@@ -89,21 +89,21 @@ retains the legacy DEC/Experimental Mode behavior, while TN-NoDEC ignores DEC an
 Experimental Mode directly, matching the final old trees.
 
 `trafficcontrold` is the only Traffic state-machine owner and publishes
-`trafficRadarState`. The direct Stop Profile and independent Traffic Radar
-strategies consume that same decision. Traffic Radar is a fourth planner
-obstacle candidate identified by `lead2`; it never overwrites `leadOne` or
-`leadTwo`, never publishes `radarState`, never enters modeld, and does not make
-`hasLead` or FCW report a physical vehicle. Observe and Shadow are output-
-transparent and may add diagnostics only.
+`trafficRadarState`. Tesla bus-2 `0x25D` supplies the authoritative current-lane
+color and distance inside 200 metres; no CP/model stop point, fake `lead2`, MPC
+target setter, turn-intent veto, or navigation signal is used. The selected
+Official, Experimental, or TN-NoDEC backend first publishes its normal base
+plan, then one common `FinalPlanArbitrator` applies a more conservative STOP.
+Observe and disabled modes atomically clear Traffic ownership and are output-
+transparent.
 
-The confirmed-stop policy follows the local CP reference: Tesla CAN supplies a
-fresh explicit red/yellow event and identity, while an aligned CP model stop
-supplies the primary stopping distance. Confirmed green may request departure
-only in Stop/Go + Traffic Radar + Planner Start mode at or below 1 m/s, with
-valid radar and no lead, no pedal input, and no turn intent. The request is
-deduplicated per event, capped at 0.4 m/s², and affects only the selected
-longitudinal planner output; it does not mutate vehicle state, CAN, or backend
-persistent state.
+Confirmed same-session green removes a moving STOP immediately. A stationary
+bounded START is deduplicated per session, capped at 1.6 m/s², 2.5 m/s, and
+three seconds, and is fail-closed when visual lead health is unknown. Any
+current lead within eight metres blocks the request; a selected near lead must
+persist for 0.5 seconds before the session is delegated to the base lead
+planner, while transient unselected targets clear after 0.4 seconds. The
+request never mutates vehicle state, CAN, or backend persistent state.
 
 ### Local console boundary
 

@@ -153,19 +153,19 @@ def test_a_published_lead_never_changes_traffic_permissions():
   assert not lead_target.suppressedByPhysicalLead
 
 
-def test_model_turn_direction_downgrades_generic_signal_to_shadow():
+def test_model_turn_direction_does_not_veto_current_lane_can():
   sm = red_light_sm()
   sm["modelDataV2SP"].laneTurnDirection = 1
   source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
   for now_ns in range(0, 1_000_000_001, 100_000_000):
     sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
     target = source.update(sm, now_ns).trafficRadarState
-  assert target.directionUnknown
+  assert not target.directionUnknown
   assert target.targetPresent
-  assert not target.controlAllowed
+  assert target.controlAllowed
 
 
-def test_vehicle_blinker_suppresses_both_stop_and_go_permissions():
+def test_vehicle_blinker_does_not_veto_current_lane_stop_or_release():
   sm = red_light_sm()
   sm["carState"].vEgo = 0.0
   sm["carStateSP"].teslaTrafficControl.distance = 12.0
@@ -177,25 +177,25 @@ def test_vehicle_blinker_suppresses_both_stop_and_go_permissions():
   for now_ns in range(0, 1_000_000_001, 100_000_000):
     sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
     target = source.update(sm, now_ns).trafficRadarState
-  assert target.stopDirectionUnknown
-  assert not target.stopControlAllowed
-  assert target.directionUnknown
-  assert not target.controlAllowed
+  assert not target.stopDirectionUnknown
+  assert target.stopControlAllowed
+  assert not target.directionUnknown
+  assert target.controlAllowed
 
   sm["carStateSP"].teslaTrafficControl.lightState = 2
   sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_200_000_000
   source.update(sm, 1_200_000_000)
   sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_700_000_000
-  green_blocked = source.update(sm, 1_700_000_000).trafficRadarState
-  assert green_blocked.phase == 6
-  assert green_blocked.directionUnknown
-  assert not green_blocked.plannerStartRequested
+  green_allowed = source.update(sm, 1_700_000_000).trafficRadarState
+  assert green_allowed.phase == 6
+  assert not green_allowed.directionUnknown
+  assert green_allowed.plannerStartRequested
 
   sm["carState"].leftBlinker = False
   sm["carStateSP"].teslaTrafficControl.frameMonoTime = 2_200_000_000
-  green_allowed = source.update(sm, 2_200_000_000).trafficRadarState
-  assert not green_allowed.directionUnknown
-  assert green_allowed.plannerStartRequested
+  still_allowed = source.update(sm, 2_200_000_000).trafficRadarState
+  assert not still_allowed.directionUnknown
+  assert still_allowed.plannerStartRequested
 
 
 def test_stale_observation_keeps_raw_age_and_distance_only_for_diagnostics():
