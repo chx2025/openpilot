@@ -10,10 +10,12 @@ import zipfile
 import pytest
 
 from openpilot.selfdrive.debug.device_log_download import (
+  LogDeletion,
   LogSelection,
   MAX_LOG_RANGE_SECONDS,
   available_log_range,
   build_log_zip,
+  delete_log_selection,
   download_filename,
   scan_log_segments,
   select_log_range,
@@ -108,6 +110,42 @@ def test_builds_browser_friendly_zip_with_manifest_and_no_video(tmp_path):
   assert download_filename(selection).endswith(".zip")
 
 
+def test_deletes_only_selected_structured_logs_and_preserves_video(tmp_path):
+  segment = make_segment(tmp_path, "00000001--123456789a--0", 1_000_000, {
+    "qlog.zst": b"qlog-data",
+    "rlog.zst": b"rlog-data",
+    "fcamera.hevc": b"video-data",
+  })
+  selection = select_log_range(990_000, 1_070_000, tmp_path)
+
+  result = delete_log_selection(selection, tmp_path)
+
+  assert result.file_count == 2
+  assert result.total_bytes == len(b"qlog-data") + len(b"rlog-data")
+  assert result.segment_count == 1
+  assert result.skipped_files == ()
+  assert not (segment / "qlog.zst").exists()
+  assert not (segment / "rlog.zst").exists()
+  assert (segment / "fcamera.hevc").read_bytes() == b"video-data"
+  assert segment.is_dir()
+
+
+def test_delete_skips_log_replaced_by_symlink_after_selection(tmp_path):
+  segment = make_segment(tmp_path, "00000001--123456789a--0", 1_000_000, {"qlog.zst": b"selected"})
+  selection = select_log_range(990_000, 1_070_000, tmp_path)
+  outside = tmp_path / "outside.txt"
+  outside.write_bytes(b"keep")
+  (segment / "qlog.zst").unlink()
+  (segment / "qlog.zst").symlink_to(outside)
+
+  result = delete_log_selection(selection, tmp_path)
+
+  assert result.file_count == 0
+  assert result.skipped_files == ("00000001--123456789a--0/qlog.zst",)
+  assert outside.read_bytes() == b"keep"
+  assert (segment / "qlog.zst").is_symlink()
+
+
 @pytest.fixture
 def console_server(monkeypatch):
   monkeypatch.setattr(device_console.DeviceConsoleHandler, "_authorize_api", lambda self: True)
@@ -131,6 +169,9 @@ def test_console_page_exposes_time_range_log_download(monkeypatch):
   assert "/api/logs/status" in page
   assert "/api/logs/preview" in page
   assert "/api/logs/download" in page
+  assert "/api/logs/delete" in page
+  assert "清理所选日志" in page
+  assert "确定永久删除所选时间范围内的 rlog/qlog" in page
   assert "仅包含 rlog/qlog，不包含视频" in page
 
 
@@ -174,6 +215,68 @@ def test_console_streams_selected_logs_as_zip(monkeypatch, console_server, tmp_p
     assert "manifest.json" in archive.namelist()
     assert not any(name.endswith(".hevc") for name in archive.namelist())
   assert disposition.startswith('attachment; filename="openpilot-logs-')
+
+
+def test_console_deletes_confirmed_selected_logs(monkeypatch, console_server, tmp_path):
+  make_segment(tmp_path, "00000001--123456789a--0", 1_000_000, {"qlog.zst": b"selected"})
+  selection = select_log_range(990_000, 1_070_000, tmp_path)
+  monkeypatch.setattr(device_console, "require_offroad", lambda: None)
+  monkeypatch.setattr(device_console, "select_log_range", lambda start, end: selection)
+  monkeypatch.setattr(device_console, "delete_log_selection",
+                      lambda selected: LogDeletion(2, 4, 8192, ()))
+  payload = json.dumps({"start_ms": 1000, "end_ms": 2000, "confirm": True}).encode()
+  request = urllib.request.Request(
+    f"http://127.0.0.1:{console_server.server_port}/api/logs/delete",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+  )
+
+  with urllib.request.urlopen(request, timeout=2) as response:
+    result = json.loads(response.read())
+
+  assert result == {
+    "ok": True,
+    "segment_count": 2,
+    "file_count": 4,
+    "total_bytes": 8192,
+    "skipped_files": [],
+  }
+
+
+def test_console_requires_explicit_log_delete_confirmation(monkeypatch, console_server):
+  monkeypatch.setattr(device_console, "require_offroad", lambda: None)
+  payload = json.dumps({"start_ms": 1000, "end_ms": 2000}).encode()
+  request = urllib.request.Request(
+    f"http://127.0.0.1:{console_server.server_port}/api/logs/delete",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+  )
+
+  with pytest.raises(urllib.error.HTTPError) as exc_info:
+    urllib.request.urlopen(request, timeout=2)
+
+  assert exc_info.value.code == 400
+  assert "明确确认" in json.loads(exc_info.value.read())["message"]
+
+
+def test_console_blocks_log_delete_while_onroad(monkeypatch, console_server):
+  monkeypatch.setattr(device_console, "require_offroad",
+                      lambda: (_ for _ in ()).throw(PermissionError("行驶中禁止执行该操作")))
+  payload = json.dumps({"start_ms": 1000, "end_ms": 2000, "confirm": True}).encode()
+  request = urllib.request.Request(
+    f"http://127.0.0.1:{console_server.server_port}/api/logs/delete",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+  )
+
+  with pytest.raises(urllib.error.HTTPError) as exc_info:
+    urllib.request.urlopen(request, timeout=2)
+
+  assert exc_info.value.code == 403
+  assert "行驶中禁止" in json.loads(exc_info.value.read())["message"]
 
 
 def test_console_blocks_log_download_while_onroad(monkeypatch, console_server):

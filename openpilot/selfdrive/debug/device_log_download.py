@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import io
 import json
+import os
 from pathlib import Path
 import re
+import stat
 from typing import BinaryIO
 import zipfile
 
@@ -63,6 +65,22 @@ class LogSelection:
       "file_count": len(self.files),
       "total_bytes": self.total_bytes,
       "segments": [segment.name for segment in self.segments],
+    }
+
+
+@dataclass(frozen=True)
+class LogDeletion:
+  segment_count: int
+  file_count: int
+  total_bytes: int
+  skipped_files: tuple[str, ...]
+
+  def summary(self) -> dict:
+    return {
+      "segment_count": self.segment_count,
+      "file_count": self.file_count,
+      "total_bytes": self.total_bytes,
+      "skipped_files": list(self.skipped_files),
     }
 
 
@@ -148,6 +166,42 @@ def select_log_range(start_ms: int, end_ms: int, root: str | Path | None = None)
   if selection.total_bytes > MAX_DOWNLOAD_BYTES:
     raise ValueError(f"日志总大小超过 {MAX_DOWNLOAD_BYTES // (1024 ** 3)} GiB，请缩短时间范围")
   return selection
+
+
+def delete_log_selection(selection: LogSelection, root: str | Path | None = None) -> LogDeletion:
+  """Delete unchanged rlog/qlog files selected from the configured log root."""
+  log_root = _log_root(root)
+  deleted_segments: set[str] = set()
+  deleted_files = 0
+  deleted_bytes = 0
+  skipped_files: list[str] = []
+
+  for file in selection.files:
+    directory = log_root / file.segment
+    if (not SEGMENT_NAME_RE.fullmatch(file.segment) or not LOG_FILE_RE.fullmatch(file.name) or
+        file.path != directory / file.name):
+      skipped_files.append(file.archive_name)
+      continue
+
+    directory_fd: int | None = None
+    try:
+      directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+      current = os.stat(file.name, dir_fd=directory_fd, follow_symlinks=False)
+      if (not stat.S_ISREG(current.st_mode) or current.st_size != file.size or
+          current.st_mtime_ns != file.modified_ns):
+        skipped_files.append(file.archive_name)
+        continue
+      os.unlink(file.name, dir_fd=directory_fd)
+      deleted_segments.add(file.segment)
+      deleted_files += 1
+      deleted_bytes += file.size
+    except OSError:
+      skipped_files.append(file.archive_name)
+    finally:
+      if directory_fd is not None:
+        os.close(directory_fd)
+
+  return LogDeletion(len(deleted_segments), deleted_files, deleted_bytes, tuple(skipped_files))
 
 
 def download_filename(selection: LogSelection) -> str:
