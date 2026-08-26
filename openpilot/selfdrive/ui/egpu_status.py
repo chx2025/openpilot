@@ -42,7 +42,8 @@ class EgpuSidebarStatus:
 def build_egpu_sidebar_status(*, present: bool, compiled: bool, link_state: str | None,
                               usb_speed_mbps: int, pcie_ltssm: int | None,
                               eject_status: str | None, loading: bool,
-                              active: bool | None, loading_progress: int = 0) -> EgpuSidebarStatus:
+                              active: bool | None, loading_progress: int = 0,
+                              model_failed: bool = False) -> EgpuSidebarStatus:
   if eject_status == "ejecting":
     return EgpuSidebarStatus("REMOVE...", "progress", "正在安全卸载 eGPU")
   if eject_status == "safe":
@@ -64,7 +65,7 @@ def build_egpu_sidebar_status(*, present: bool, compiled: bool, link_state: str 
     return EgpuSidebarStatus("NO MODEL", "warning", "USB/PCIe 正常，但默认大模型尚未编译")
   if loading:
     return EgpuSidebarStatus(f"LOAD {loading_progress}%", "progress", f"USB/PCIe 正常，大模型加载 {loading_progress}%")
-  if active is False:
+  if model_failed or active is False:
     return EgpuSidebarStatus("MODEL ERR", "danger", "链路正常，但默认大模型加载或运行失败")
   if active is True:
     return EgpuSidebarStatus("ACTIVE", "good", f"eGPU 大模型运行中 · USB {usb_speed_mbps} Mbps · PCIe L0")
@@ -89,6 +90,30 @@ def classify_egpu_link_state(*, present: bool, usb_speed_mbps: int, telemetry_al
 def egpu_icon_visible(*, connected: bool) -> bool:
   """The onroad source icon is persistent for exactly the USB-connected state."""
   return connected
+
+
+def active_bundle_requires_usbgpu(active_bundle) -> bool:
+  """Read the selected model platform from Params JSON or a cereal bundle."""
+  if active_bundle is None:
+    return False
+  overrides = active_bundle.get("overrides", []) if isinstance(active_bundle, dict) else getattr(active_bundle, "overrides", [])
+  for override in overrides:
+    key = override.get("key") if isinstance(override, dict) else getattr(override, "key", None)
+    value = override.get("value") if isinstance(override, dict) else getattr(override, "value", None)
+    if key == "model_platform":
+      return value == "usbgpu"
+  return False
+
+
+def big_model_failed(*, requires_usbgpu: bool, started: bool, chestnut_present: bool,
+                     active: bool | None, model_seen: bool, model_alive: bool) -> bool:
+  """Return whether the selected USBGPU model has failed after onroad startup."""
+  if not requires_usbgpu or not started:
+    return False
+  return (active is False or
+          not chestnut_present or
+          (active is True and model_seen and not model_alive) or
+          (active is None and model_seen))
 
 
 def resolve_egpu_connection(device_state) -> bool:

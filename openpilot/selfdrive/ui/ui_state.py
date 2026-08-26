@@ -12,7 +12,8 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.prime_state import PrimeState
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.hardware import HARDWARE, PC
-from openpilot.selfdrive.ui.egpu_status import resolve_egpu_connection
+from openpilot.selfdrive.ui.egpu_status import (active_bundle_requires_usbgpu, big_model_failed as evaluate_big_model_failed,
+                                                resolve_egpu_connection)
 from openpilot.sunnypilot.models.helpers import usbgpu_model_ready
 
 from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP, DeviceSP
@@ -117,6 +118,18 @@ class UIState(UIStateSP):
 
   def add_on_body_changed_callbacks(self, callback: Callable[[], None]):
     self._on_body_changed_callbacks.append(callback)
+
+  @property
+  def big_model_failed(self) -> bool:
+    model_seen = self.sm.recv_frame["modelV2"] > self.started_frame
+    return evaluate_big_model_failed(
+      requires_usbgpu=active_bundle_requires_usbgpu(self.active_bundle),
+      started=self.started,
+      chestnut_present=bool(self.sm["deviceState"].chestnutPresent),
+      active=self.usbgpu_active,
+      model_seen=model_seen,
+      model_alive=bool(self.sm.alive["modelV2"]),
+    )
 
   @property
   def engaged(self) -> bool:

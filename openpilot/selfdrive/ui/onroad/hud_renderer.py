@@ -128,7 +128,7 @@ class HudRenderer(Widget):
   def _draw_egpu_icon(self, rect: rl.Rectangle) -> None:
     if not egpu_icon_visible(connected=resolve_egpu_connection(ui_state.sm["deviceState"])):
       return
-    icon = self._egpu_icon_green if ui_state.usbgpu_active is True else self._egpu_icon_orange
+    icon = self._egpu_icon_green if ui_state.usbgpu_active is True and not ui_state.big_model_failed else self._egpu_icon_orange
     rl.draw_texture_ex(
       icon,
       rl.Vector2(rect.x + rect.width - UI_CONFIG.border_size - icon.width,

@@ -88,6 +88,7 @@ class SidebarSP:
       loading=ui_state.usbgpu_loading,
       active=ui_state.usbgpu_active,
       loading_progress=ui_state.usbgpu_loading_progress,
+      model_failed=ui_state.big_model_failed,
     )
     color = {
       "good": Colors.GOOD,
