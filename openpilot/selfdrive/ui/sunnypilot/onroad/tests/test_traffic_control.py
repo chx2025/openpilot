@@ -11,6 +11,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import (
   TrafficSignalDisplayState,
   TRAFFIC_DETAIL_FONT_SIZE,
   TRAFFIC_DISTANCE_FONT_SIZE,
+  TRAFFIC_SOURCE_FONT_SIZE,
   TRAFFIC_CARD_WIDTH,
   TRAFFIC_CARD_HEIGHT,
   TRAFFIC_LIGHT_HOUSING_HEIGHT,
@@ -19,31 +20,35 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import (
   TRAFFIC_TEXT_X_OFFSET,
   traffic_action_text,
   traffic_card_rect,
+  traffic_source_text,
 )
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
 
 
 ACTION_CASES = [
-  ({"quality": 0, "raw_distance": 255}, "No traffic signal"),
-  ({"light": 1, "stop_allowed": False}, "Red detected · brake pending"),
-  ({"light": 1, "stop_allowed": True}, "Red detected · waiting"),
+  ({"quality": 0, "raw_distance": 255}, ""),
+  ({"light": 1, "stop_allowed": False}, ""),
+  ({"light": 1, "stop_allowed": True}, ""),
+  ({"light": 1, "applied": False, "action": 1}, ""),
+  ({"light": 2, "applied": False, "action": 3}, ""),
   ({"light": 1, "applied": True, "action": 1}, "Red · slowing to stop"),
   ({"light": 1, "applied": True, "action": 2, "should_stop": True}, "Red · holding"),
   ({"light": 2, "applied": True, "action": 3}, "Green · auto start"),
   ({"light": 2, "applied": True, "action": 4}, "Green · releasing brakes"),
   ({"light": 2, "applied": True, "action": 5}, "Green · continuing"),
   ({"light": 2, "phase": TrafficControlPhase.release, "should_stop": True,
-    "start_block_reason": 6}, "Green · lead blocks auto start"),
-  ({"light": 2, "phase": TrafficControlPhase.release, "should_stop": True}, "Green · planner holding"),
+    "start_block_reason": 6}, ""),
+  ({"light": 2, "phase": TrafficControlPhase.release, "should_stop": True}, ""),
   ({"light": 2, "phase": TrafficControlPhase.hold, "applied": True,
     "action": 2, "should_stop": True}, "Green · confirming release"),
   ({"light": 2, "phase": TrafficControlPhase.flashingGreenStop,
     "applied": True, "action": 1}, "Signal changing · stopping"),
-  ({"light": 2, "direction_unknown": True, "should_stop": True}, "Direction unclear · monitoring"),
-  ({"light": 2}, "Green · planner control"),
-  ({"light": 0, "should_stop": True}, "Signal unclear · planner holding"),
-  ({"light": 3, "should_stop": True}, "Signal changing · stopping"),
-  ({"light": 1, "raw_fresh": False}, "Signal expired · control idle"),
+  ({"light": 2, "direction_unknown": True, "should_stop": True}, ""),
+  ({"light": 2}, ""),
+  ({"light": 0, "should_stop": True}, ""),
+  ({"light": 3, "should_stop": True}, ""),
+  ({"light": 1, "raw_fresh": False}, ""),
+  ({"light": 1, "raw_fresh": False, "applied": False, "action": 2}, ""),
   ({"light": 1, "raw_fresh": False, "applied": True, "action": 1}, "Signal lost · slowing continues"),
   ({"light": 1, "raw_fresh": False, "applied": True, "action": 2, "should_stop": True}, "Signal lost · holding stop"),
   ({"light": 2, "raw_fresh": False, "applied": True, "action": 3}, "Green · auto start"),
@@ -163,6 +168,20 @@ def test_applied_go_action_takes_priority_over_stop_only_direction_shadow():
   assert traffic_action_text(state)[0] == "Green · auto start"
 
 
+def test_source_badge_only_identifies_applied_traffic_control():
+  inactive = TrafficSignalDisplayState.from_plan(target(
+    light=1, applied=False, should_stop=True,
+  ))
+  active = TrafficSignalDisplayState.from_plan(target(
+    light=1, applied=True, action=2, should_stop=True,
+  ))
+
+  assert traffic_source_text(inactive) == ""
+  assert traffic_action_text(inactive)[0] == ""
+  assert traffic_source_text(active) == "Tesla Traffic Control"
+  assert traffic_action_text(active)[0] == "Red · holding"
+
+
 def test_all_english_action_labels_fit_the_card_at_render_size():
   font_path = Path(__file__).resolve().parents[4] / "assets" / "fonts" / "Inter-Regular.ttf"
   with TTFont(font_path) as font:
@@ -170,18 +189,14 @@ def test_all_english_action_labels_fit_the_card_at_render_size():
     metrics = font["hmtx"].metrics
     units_per_em = font["head"].unitsPerEm
 
-  labels = {expected for _, expected in ACTION_CASES} | {
-    "Signal changing · stopping",
-    "Direction unclear · monitoring",
-    "Driver override · paused",
-    "Signal detected · monitoring",
-    "Traffic signals · monitoring",
-    "Green · lead blocks auto start",
-    "Green · planner holding",
-    "Green · confirming release",
-    "Signal unclear · planner holding",
+  labels = {expected for _, expected in ACTION_CASES if expected} | {
+    "Signal changing · stopping", "Green · confirming release",
   }
   available_width = TRAFFIC_CARD_WIDTH - TRAFFIC_TEXT_X_OFFSET - 14.0
   for label in labels:
     width = sum(metrics[cmap.get(ord(char), ".notdef")][0] for char in label) / units_per_em * TRAFFIC_DETAIL_FONT_SIZE
     assert width <= available_width, f"{label!r} is {width:.1f}px wide; available width is {available_width:.1f}px"
+
+  source = "Tesla Traffic Control"
+  source_width = sum(metrics[cmap.get(ord(char), ".notdef")][0] for char in source) / units_per_em * TRAFFIC_SOURCE_FONT_SIZE
+  assert source_width + 44.0 < TRAFFIC_CARD_WIDTH - TRAFFIC_TEXT_X_OFFSET

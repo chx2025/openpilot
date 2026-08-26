@@ -10,6 +10,7 @@ from openpilot.selfdrive.ui.onroad.hud_renderer import UI_CONFIG
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
 from openpilot.system.ui.lib.application import FontWeight, gui_app
 from openpilot.system.ui.lib.multilang import tr
+from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
 
@@ -21,12 +22,15 @@ CARD = rl.Color(12, 15, 19, 160)
 BORDER = rl.Color(255, 255, 255, 38)
 TEXT = rl.Color(245, 247, 250, 255)
 MUTED = rl.Color(190, 197, 205, 255)
-PHYSICAL_LEAD_BLOCK_REASON = 6
+CONTROL_BADGE = rl.Color(36, 112, 184, 230)
 TRAFFIC_CARD_WIDTH = 940.0
 TRAFFIC_CARD_HEIGHT = 240.0
 TRAFFIC_CARD_TOP_OFFSET = 47.0
 TRAFFIC_DISTANCE_FONT_SIZE = 82
 TRAFFIC_DETAIL_FONT_SIZE = 52
+TRAFFIC_SOURCE_FONT_SIZE = 36
+TRAFFIC_SOURCE_BADGE_HEIGHT = 58.0
+TRAFFIC_SOURCE_BADGE_PADDING = 22.0
 TRAFFIC_LIGHT_HOUSING_WIDTH = 92.0
 TRAFFIC_LIGHT_HOUSING_HEIGHT = 192.0
 TRAFFIC_LIGHT_RADIUS = 22.0
@@ -97,10 +101,15 @@ class TrafficSignalDisplayState:
 
 
 def traffic_action_text(state: TrafficSignalDisplayState) -> tuple[str, rl.Color]:
-  if state.has_signal and not state.raw_observation_fresh:
+  # Only describe actions that Traffic Control actually applied to the final
+  # longitudinal plan. Raw observations, blocked GO requests, and base-planner
+  # stops remain visible through the lamp/distance without claiming ownership.
+  if not state.control_active:
+    return "", MUTED
+  if not state.raw_observation_fresh:
     if state.action == 1:
       return tr("Signal lost · slowing continues"), AMBER
-    if state.action == 2 or state.should_stop:
+    if state.action == 2:
       return tr("Signal lost · holding stop"), AMBER
     if state.action == 3:
       return tr("Green · auto start"), GREEN
@@ -108,53 +117,30 @@ def traffic_action_text(state: TrafficSignalDisplayState) -> tuple[str, rl.Color
       return tr("Green · releasing brakes"), GREEN
     if state.action == 5:
       return tr("Green · continuing"), GREEN
-    return tr("Signal expired · control idle"), AMBER
-  if state.driver_override_active:
-    return tr("Driver override · paused"), MUTED
-  if not state.has_signal:
-    return tr("No traffic signal"), MUTED
-  if state.flashing and state.action == 1:
-    return tr("Signal changing · stopping"), AMBER
-  if state.light_state == 2:
-    if state.action == 3:
-      return tr("Green · auto start"), GREEN
-    if state.start_block_reason == PHYSICAL_LEAD_BLOCK_REASON:
-      return tr("Green · lead blocks auto start"), AMBER
-    if state.action == 4:
-      return tr("Green · releasing brakes"), GREEN
-    if state.action == 5:
-      return tr("Green · continuing"), GREEN
-    if state.stop_direction_unknown:
-      return tr("Direction unclear · monitoring"), AMBER
-    if state.action in (1, 2) or state.phase == int(TrafficControlPhase.hold):
-      return tr("Green · confirming release"), AMBER
-    if state.should_stop:
-      return tr("Green · planner holding"), AMBER
-    return tr("Green · planner control"), GREEN
+    return "", MUTED
   if state.action == 1:
     if state.flashing or state.light_state == 3:
       return tr("Signal changing · stopping"), AMBER
     if state.light_state == 1:
       return tr("Red · slowing to stop"), RED
-    return tr("Signal unclear · planner holding"), AMBER
-  if state.action == 2 or state.should_stop:
+    return tr("Signal changing · stopping"), AMBER
+  if state.action == 2:
     if state.light_state == 1:
       return tr("Red · holding"), RED
-    if state.light_state == 3:
-      return tr("Signal changing · stopping"), AMBER
-    return tr("Signal unclear · planner holding"), AMBER
+    if state.light_state == 2:
+      return tr("Green · confirming release"), AMBER
+    return tr("Signal changing · stopping"), AMBER
+  if state.action == 3:
+    return tr("Green · auto start"), GREEN
   if state.action == 4:
     return tr("Green · releasing brakes"), GREEN
   if state.action == 5:
     return tr("Green · continuing"), GREEN
-  if state.stop_direction_unknown:
-    return tr("Direction unclear · monitoring"), AMBER
-  if state.light_state == 1:
-    return (tr("Red detected · waiting") if state.stop_control_allowed
-            else tr("Red detected · brake pending")), RED
-  if state.light_state == 3:
-    return tr("Signal detected · monitoring"), AMBER
-  return tr("Traffic signals · monitoring"), MUTED
+  return "", MUTED
+
+
+def traffic_source_text(state: TrafficSignalDisplayState) -> str:
+  return tr("Tesla Traffic Control") if state.control_active else ""
 
 
 class TrafficControlRenderer(Widget):
@@ -207,6 +193,36 @@ class TrafficControlRenderer(Widget):
     distance_pos = rl.Vector2(x + TRAFFIC_TEXT_X_OFFSET, y + 22)
     rl.draw_text_ex(self.font, distance_text, distance_pos, distance_size, 0, TEXT)
 
+    source = traffic_source_text(self.state)
+    if source:
+      source_size = measure_text_cached(self.font_regular, source, TRAFFIC_SOURCE_FONT_SIZE, 0)
+      badge_width = source_size.x + 2.0 * TRAFFIC_SOURCE_BADGE_PADDING
+      badge = rl.Rectangle(
+        card.x + card.width - badge_width - 22.0,
+        y + 32.0,
+        badge_width,
+        TRAFFIC_SOURCE_BADGE_HEIGHT,
+      )
+      rl.draw_rectangle_rounded(badge, 0.45, 8, CONTROL_BADGE)
+      rl.draw_text_ex(
+        self.font_regular,
+        source,
+        rl.Vector2(
+          badge.x + TRAFFIC_SOURCE_BADGE_PADDING,
+          badge.y + (badge.height - source_size.y) / 2.0,
+        ),
+        TRAFFIC_SOURCE_FONT_SIZE,
+        0,
+        TEXT,
+      )
+
     detail, detail_color = traffic_action_text(self.state)
-    detail_size = TRAFFIC_DETAIL_FONT_SIZE
-    rl.draw_text_ex(self.font_regular, detail, rl.Vector2(x + TRAFFIC_TEXT_X_OFFSET, y + 154), detail_size, 0, detail_color)
+    if detail:
+      rl.draw_text_ex(
+        self.font_regular,
+        detail,
+        rl.Vector2(x + TRAFFIC_TEXT_X_OFFSET, y + 154),
+        TRAFFIC_DETAIL_FONT_SIZE,
+        0,
+        detail_color,
+      )
