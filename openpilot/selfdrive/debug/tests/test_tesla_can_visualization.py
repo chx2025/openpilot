@@ -542,3 +542,123 @@ def test_tesla_can_visualization_uses_ch_pedestrian_object_as_positioned_evidenc
   assert positioned[0]["type"] == "pedestrian"
   assert positioned[0]["x_m"] == 16.0
   assert positioned[0]["y_m"] == 1.05
+
+
+def test_tesla_can_visualization_decodes_detailed_vehicle_bus_diagnostics():
+  packer = CANPacker("tesla_modely_hw4_perception")
+  frames = [
+    _frame(packer, "APP_roadDisturbance", 1, {
+      "APP_roadDisturbanceIndex": 2, "APP_roadDisturbanceHeight": 0.12,
+      "APP_roadDisturbanceX0": 10.0, "APP_roadDisturbanceX1": 15.0,
+      "APP_roadDisturbanceY0": -1.0, "APP_roadDisturbanceY1": 1.0,
+      "APP_suspensionLevelRequest": 3,
+    }),
+    _frame(packer, "BMS_hvBusStatus", 1, {
+      "BMS_dcLinkVoltage": 402.5, "BMS_packCurrent": -80.0, "BMS_currentUnfiltered": -79.5,
+    }),
+    _frame(packer, "BMS_status", 1, {
+      "BMS_hvacPowerRequest": 1, "BMS_preconditionAllowed": 1, "BMS_contactorState": 4,
+      "BMS_userChargeStatus": 3, "BMS_batteryInputPower": 50.0, "BMS_chargeRequest": 1,
+      "BMS_state": 1, "BMS_chgPowerAvailable": 120.0, "BMS_conditioningRequest": 1,
+      "BMS_smStateRequest": 1, "BMS_hvState": 3,
+    }),
+    _frame(packer, "VCSEC_TPMSData", 1, {
+      "VCSEC_TPMSDataIndex": 0, "VCSEC_TPMSPressure0": 2.5, "VCSEC_TPMSTemperature0": 30,
+      "VCSEC_TPMSBatVoltage0": 2.8, "VCSEC_TPMSLocation0": 0,
+      "VCSEC_TPMSTemperatureCompensatedPressure0": 2.45, "VCSEC_TPMSPressureRateOfChange0": -0.02,
+      "VCSEC_TPMSCapabilityPressureInAdv0": 1, "VCSEC_TPMSCapabilityConfigurablePressure0": 1,
+    }),
+    _frame(packer, "VCSEC_TPMSData", 1, {
+      "VCSEC_TPMSDataIndex": 4, "VCSEC_TPMSRecommendedColdPressureFront": 2.9,
+      "VCSEC_TPMSRecommendedColdPressureRear": 3.0, "VCSEC_TPMSFeature0": 5,
+      "VCSEC_TPMSFeature1": 4, "VCSEC_TPMSFeature0Count": 3, "VCSEC_TPMSFeature0TimeS": 12,
+    }),
+    _frame(packer, "VCSEC_TPMSData", 1, {
+      "VCSEC_TPMSDataIndex": 5, "VCSEC_TPMSAutonomyStatus": 0,
+      "VCSEC_TPMSLastKnownPressureFL": 2.5, "VCSEC_TPMSLastKnownPressureFR": 2.55,
+      "VCSEC_TPMSLastKnownPressureRL": 2.6, "VCSEC_TPMSLastKnownPressureRR": 2.65,
+    }),
+    _frame(packer, "VCSEC_TPMSDisplay", 1, {
+      "VCSEC_TPMSDisplayPressureFL": 2.5, "VCSEC_TPMSDisplayPressureFR": 2.55,
+      "VCSEC_TPMSDisplayPressureRL": 2.6, "VCSEC_TPMSDisplayPressureRR": 2.65,
+      "VCSEC_TPMSTellTale": 1, "VCSEC_TPMSDisplaySoftWarningIndicationFL": 1,
+    }),
+    _frame(packer, "TPMS_data", 1, {
+      "TPMS_pressureFL": 2.5, "TPMS_temperatureFL": 30,
+      "TPMS_pressureFR": 2.55, "TPMS_temperatureFR": 31,
+      "TPMS_pressureRL": 2.6, "TPMS_temperatureRL": 32,
+      "TPMS_pressureRR": 2.65, "TPMS_temperatureRR": 33,
+    }),
+    _frame(packer, "DIR_power", 1, {
+      "DIR_elecPower": -10, "DIR_heatPowerOptimal": 2, "DIR_heatPowerMax": 4,
+      "DIR_heatPowerActual": 3, "DIR_excessHeatCommand": 1, "DIR_drivePowerMax": 250,
+    }),
+    _frame(packer, "DIF_power", 1, {
+      "DIF_elecPower": 20, "DIF_heatPowerOptimal": 2, "DIF_heatPowerMax": 4,
+      "DIF_heatPowerActual": 3, "DIF_excessHeatCommand": 1, "DIF_drivePowerMax": 240,
+    }),
+    _frame(packer, "DIR_temperature", 1, {
+      "DIR_tempIndex": 0, "DIR_inverterTQF": 2, "DIR_pcbT": 45, "DIR_inverterT": 50,
+      "DIR_statorT": 55, "DIR_dcCapT": 42, "DIR_heatsinkT": 44,
+      "DIR_inverterTpct": 40, "DIR_statorTpct": 44,
+    }),
+    _frame(packer, "DIR_temperature", 1, {
+      "DIR_tempIndex": 1, "DIR_heatsink1Temp": 41, "DIR_heatsink2Temp": 42,
+      "DIR_heatsink3Temp": 43, "DIR_pcbTemp2": 44, "DIR_junctionTemp": 48,
+      "DIR_TPak1Temp": 46, "DIR_TPak2Temp": 47,
+    }),
+    _frame(packer, "DIR_temperature", 1, {
+      "DIR_tempIndex": 2, "DIR_fluidInTemp": 35,
+      "DIR_normalFetBurnIn": 1.526, "DIR_additionalFetBurnIn": 0.763,
+    }),
+    _frame(packer, "DIF_temperature", 1, {
+      "DIF_tempIndex": 0, "DIF_inverterTQF": 2, "DIF_pcbT": 43, "DIF_inverterT": 48,
+      "DIF_statorT": 53, "DIF_dcCapT": 40, "DIF_heatsinkT": 42,
+    }),
+    _frame(packer, "DI_odometerStatus", 1, {"DI_odometer": 12345.678, "DI_obdDriveCycleStatus": 1}),
+    _frame(packer, "BMS_kwhCounter", 1, {"BMS_kwhDischargeTotal": 120.5, "BMS_kwhChargeTotal": 100.25}),
+    _frame(packer, "DI_estimatedBrakeTemp", 1, {
+      "DI_brakeFLTemp": 85, "DI_brakeFRTemp": 86, "DI_brakeRLTemp": 65, "DI_brakeRRTemp": 66,
+      "DI_mcpIndex": 1.0, "DI_mcpIndexPrimeFilt": 1.2,
+    }),
+    _frame(packer, "UI_ambientLightingCtrls", 1, {
+      "UI_ambientLightPowerOverride": 1, "UI_rgbEnableState": 2, "UI_rgbEffectType": 4,
+      "UI_rgbLightingColorHexRed": 18, "UI_rgbLightingColorHexGreen": 52,
+      "UI_rgbLightingColorHexBlue": 86, "UI_rgbBrightnessLevel": 60,
+      "UI_audioVisualizerState": 1, "UI_rgbTargetDOORFL": 1, "UI_rgbTargetIPFR": 1,
+    }),
+  ]
+  visualization = TeslaCanVisualization()
+  visualization.update([(1_000_000_000, frames)])
+
+  scene = visualization.snapshot(1_100_000_000)
+  assert scene["road_disturbance"]["longitudinal_span_m"] == 5.0
+  assert scene["battery_diagnostics"]["dc_link_voltage_v"] == 402.5
+  assert scene["battery_diagnostics"]["contactor_state"] == "closed"
+  assert scene["battery_diagnostics"]["hv_state"] == "up_for_drive"
+  assert scene["tpms"]["wheels"]["front_left"]["display_pressure_bar"] == 2.5
+  assert scene["tpms"]["sensors"][0]["location"] == "front_left"
+  assert scene["tpms"]["feature_state"] == "active"
+  assert scene["drive_power"]["front"]["electrical_power_kw"] == 20.0
+  assert scene["drive_power"]["rear"]["electrical_power_kw"] == -10.0
+  assert scene["drive_temperatures"]["rear"]["received_pages"] == [0, 1, 2]
+  assert scene["drive_temperatures"]["rear"]["operating_c"]["stator"] == 55.0
+  assert scene["drive_temperatures"]["rear"]["operating_percent"]["inverter"] == 40.0
+  assert scene["drive_temperatures"]["rear"]["fet_burn_in"]["normal"] == 1.53
+  assert scene["vehicle_totals"]["odometer_km"] == 12345.678
+  assert scene["vehicle_totals"]["brake_temperature_c"]["front_right"] == 86.0
+  assert scene["ambient_lighting"]["hex_color"] == "#123456"
+  assert scene["ambient_lighting"]["effect_duration_ms"] == 1000
+  assert scene["ambient_lighting"]["targets"] == ["front_left_door", "instrument_panel_right"]
+
+
+def test_tesla_can_visualization_expires_vehicle_mux_pages():
+  packer = CANPacker("tesla_modely_hw4_perception")
+  frame = _frame(packer, "DIR_temperature", 1, {
+    "DIR_tempIndex": 0, "DIR_inverterTQF": 2, "DIR_inverterT": 50,
+  })
+  visualization = TeslaCanVisualization()
+  visualization.update([(1_000_000_000, [frame])])
+
+  assert visualization.snapshot(1_100_000_000)["drive_temperatures"]["rear"]["available"]
+  assert not visualization.snapshot(7_000_000_000)["drive_temperatures"]["rear"]["available"]

@@ -17,7 +17,26 @@ VEH_MESSAGES = (
   "UI_driverAssistMapData",
   "PARK_oocStatus",
   "APP_pedestrianDetection",
+  "APP_roadDisturbance",
+  "BMS_hvBusStatus",
+  "BMS_status",
+  "VCSEC_TPMSData",
+  "VCSEC_TPMSDisplay",
+  "TPMS_data",
+  "DIR_power",
+  "DIF_power",
+  "DIR_temperature",
+  "DIF_temperature",
+  "DI_odometerStatus",
+  "BMS_kwhCounter",
+  "DI_estimatedBrakeTemp",
+  "UI_ambientLightingCtrls",
 )
+VEH_MUX_MESSAGES = {
+  "VCSEC_TPMSData": "VCSEC_TPMSDataIndex",
+  "DIR_temperature": "DIR_tempIndex",
+  "DIF_temperature": "DIF_tempIndex",
+}
 PARTY_MESSAGES = (
   "APP_trafficControl",
   "DAS_longControl",
@@ -38,6 +57,7 @@ BUS_NAMES = {0: "PARTY", 1: "VEH", 2: "AP-PARTY"}
 FRAME_STALE_NS = 2_000_000_000
 NAV_STALE_NS = 5_000_000_000
 PEDESTRIAN_STALE_NS = 750_000_000
+VEH_DIAGNOSTIC_STALE_NS = 5_000_000_000
 
 USAGE = {0: "rejected", 1: "available", 2: "fused", 3: "blacklisted"}
 VEHICLE_TYPES = {0: "unknown", 1: "truck", 2: "car", 3: "motorcycle", 4: "bicycle", 5: "pedestrian", 6: "ipso"}
@@ -77,6 +97,23 @@ LONG_CONTROL_STACKS = {
   4: "aeb_control", 5: "pedal_control", 6: "torque_control", 7: "sna",
 }
 COLLISION_SIDES = {0: "none", 1: "right", 2: "left", 3: "front", 4: "rear", 5: "unknown", 7: "sna"}
+BMS_CONTACTOR_STATES = {0: "sna", 1: "open", 2: "opening", 3: "closing", 4: "closed", 5: "welded", 6: "blocked"}
+BMS_CHARGE_STATES = {
+  0: "disconnected", 1: "no_power", 2: "about_to_charge", 3: "charging", 4: "charge_complete",
+  5: "charge_stopped", 6: "calibrating",
+}
+BMS_STATES = {
+  0: "standby", 1: "drive", 2: "support", 3: "charge", 4: "feim", 5: "clear_fault",
+  6: "fault", 7: "weld", 8: "test", 9: "sna", 10: "diagnostic",
+}
+BMS_HV_STATES = {0: "down", 1: "coming_up", 2: "going_down", 3: "up_for_drive", 4: "up_for_charge", 5: "up_for_dc_charge", 6: "up"}
+TPMS_LOCATIONS = {0: "front_left", 1: "front_right", 2: "rear_left", 3: "rear_right", 4: "unknown"}
+TPMS_TELLTALES = {0: "off", 1: "solid", 2: "flashing"}
+TPMS_FEATURE_STATES = {0: "not_supported", 1: "unavailable_1", 2: "unavailable_2", 3: "wait_for_stationary", 4: "ready", 5: "active", 6: "blocked"}
+TPMS_PROXIMITY_STATES = {0: "none", 1: "reached", 2: "incorrect", 3: "far_away", 4: "medium", 5: "close"}
+INVERTER_QUALITY = {0: "initializing", 1: "irrational", 2: "rational", 3: "unknown"}
+AMBIENT_ENABLE_STATES = {0: "off", 1: "on", 2: "auto"}
+PARK_OBSTACLE_HEIGHTS = {0: "no_object", 1: "low", 2: "high", 3: "unknown"}
 
 
 def _round(value: float, digits: int = 2) -> float:
@@ -89,6 +126,18 @@ def _int(values: dict[str, float], name: str) -> int:
 
 def _bool(values: dict[str, float], name: str) -> bool:
   return bool(_int(values, name))
+
+
+def _value(values: dict[str, float], name: str, invalid: tuple[float, ...] = ()) -> float | None:
+  if name not in values:
+    return None
+  value = float(values[name])
+  return None if any(math.isclose(value, sentinel, abs_tol=1e-6) for sentinel in invalid) else value
+
+
+def _measurement(values: dict[str, float], name: str, invalid: tuple[float, ...] = (), digits: int = 2) -> float | None:
+  value = _value(values, name, invalid)
+  return _round(value, digits) if value is not None else None
 
 
 class TeslaCanVisualization:
@@ -125,6 +174,9 @@ class TeslaCanVisualization:
     self.object_frames: dict[int, tuple[dict[str, float], int, int]] = {}
     self.road_sign_frames: dict[int, tuple[dict[str, float], int, int]] = {}
     self.long_control_frames: dict[int, tuple[dict[str, float], int, int]] = {}
+    self.veh_mux_frames: dict[str, dict[int, tuple[dict[str, float], int, int]]] = {
+      name: {} for name in VEH_MUX_MESSAGES
+    }
     self.latest_long_control_frame: tuple[dict[str, float], int, int] | None = None
 
   def reset(self) -> None:
@@ -132,6 +184,8 @@ class TeslaCanVisualization:
     self.object_frames.clear()
     self.road_sign_frames.clear()
     self.long_control_frames.clear()
+    for frames in self.veh_mux_frames.values():
+      frames.clear()
     self.latest_long_control_frame = None
 
   def update(self, can_packets: list[tuple[int, list[tuple[int, bytes, int]]]]) -> None:
@@ -141,7 +195,7 @@ class TeslaCanVisualization:
       updated = parser.update(can_packets)
       message_names = self.parser_messages[bus]
       for name in message_names:
-        if name in ("UI_driverAssistRoadSign", "DAS_object", "DAS_longControl"):
+        if name in ("UI_driverAssistRoadSign", "DAS_object", "DAS_longControl") or name in VEH_MUX_MESSAGES:
           continue
         # 0x25D is bus-dependent. Match the control observer and surface the
         # APP traffic-control message only from the verified AP-PARTY source.
@@ -214,6 +268,22 @@ class TeslaCanVisualization:
             # their wire order so the last multiplexed sample is current.
             self.latest_long_control_frame = frame
 
+      for name, mux_name in VEH_MUX_MESSAGES.items():
+        if name not in message_names:
+          continue
+        address = parser.dbc.name_to_msg[name].address
+        if address not in updated:
+          continue
+        all_values = parser.vl_all[name]
+        mux_values = all_values.get(mux_name, [])
+        timestamp = max(parser.ts_nanos[name].values(), default=0)
+        for index, mux_value in enumerate(mux_values):
+          mux = int(mux_value)
+          values = {signal: samples[index] for signal, samples in all_values.items() if index < len(samples)}
+          previous = self.veh_mux_frames[name].get(mux)
+          if timestamp and (previous is None or timestamp >= previous[1]):
+            self.veh_mux_frames[name][mux] = (values, timestamp, bus)
+
   @staticmethod
   def _fresh(frame: tuple[dict[str, float], int, int] | None, now_ns: int, stale_ns: int = FRAME_STALE_NS) -> bool:
     return frame is not None and frame[1] > 0 and 0 <= now_ns - frame[1] <= stale_ns
@@ -229,6 +299,10 @@ class TeslaCanVisualization:
   def _long_control_frame(self, mux: int, now_ns: int) -> tuple[dict[str, float], int, int] | None:
     frame = self.long_control_frames.get(mux)
     return frame if self._fresh(frame, now_ns) else None
+
+  def _veh_mux_frame(self, name: str, mux: int, now_ns: int) -> tuple[dict[str, float], int, int] | None:
+    frame = self.veh_mux_frames.get(name, {}).get(mux)
+    return frame if self._fresh(frame, now_ns, VEH_DIAGNOSTIC_STALE_NS) else None
 
   def _bus(self, frame: tuple[dict[str, float], int, int] | None) -> str | None:
     return self.bus_names.get(frame[2], str(frame[2])) if frame else None
@@ -701,6 +775,261 @@ class TeslaCanVisualization:
       "activation_failure_status": _int(values, "DAS_activationFailureStatus") if frame else None,
     }
 
+  def _road_disturbance(self, now_ns: int) -> dict[str, Any]:
+    frame = self._frame("APP_roadDisturbance", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    values = frame[0] if frame else {}
+    x0 = _measurement(values, "APP_roadDisturbanceX0")
+    x1 = _measurement(values, "APP_roadDisturbanceX1")
+    y0 = _measurement(values, "APP_roadDisturbanceY0")
+    y1 = _measurement(values, "APP_roadDisturbanceY1")
+    return {
+      "available": bool(frame),
+      "bus": self._bus(frame),
+      "index": _int(values, "APP_roadDisturbanceIndex") if frame else None,
+      "height_m": _measurement(values, "APP_roadDisturbanceHeight"),
+      "x0_m": x0,
+      "x1_m": x1,
+      "y0_m": y0,
+      "y1_m": y1,
+      "longitudinal_span_m": _round(abs(x1 - x0)) if x0 is not None and x1 is not None else None,
+      "lateral_span_m": _round(abs(y1 - y0)) if y0 is not None and y1 is not None else None,
+      "suspension_level_request": _int(values, "APP_suspensionLevelRequest") if frame else None,
+    }
+
+  def _battery_diagnostics(self, now_ns: int) -> dict[str, Any]:
+    bus_frame = self._frame("BMS_hvBusStatus", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    status_frame = self._frame("BMS_status", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    bus_values = bus_frame[0] if bus_frame else {}
+    status = status_frame[0] if status_frame else {}
+    contactor_code = _int(status, "BMS_contactorState") if status_frame else None
+    charge_code = _int(status, "BMS_userChargeStatus") if status_frame else None
+    state_code = _int(status, "BMS_state") if status_frame else None
+    requested_state_code = _int(status, "BMS_smStateRequest") if status_frame else None
+    hv_code = _int(status, "BMS_hvState") if status_frame else None
+    return {
+      "available": bool(bus_frame or status_frame),
+      "sources": sorted(filter(None, (self._bus(bus_frame), self._bus(status_frame)))),
+      "dc_link_voltage_v": _measurement(bus_values, "BMS_dcLinkVoltage"),
+      "pack_current_a": _measurement(bus_values, "BMS_packCurrent", (-3276.8,)),
+      "current_unfiltered_a": _measurement(bus_values, "BMS_currentUnfiltered", (-2460.4,)),
+      "contactor_state": BMS_CONTACTOR_STATES.get(contactor_code, "unknown") if contactor_code is not None else None,
+      "contactor_state_code": contactor_code,
+      "charge_status": BMS_CHARGE_STATES.get(charge_code, "unknown") if charge_code is not None else None,
+      "charge_status_code": charge_code,
+      "state": BMS_STATES.get(state_code, "unknown") if state_code is not None else None,
+      "state_code": state_code,
+      "requested_state": BMS_STATES.get(requested_state_code, "unknown") if requested_state_code is not None else None,
+      "requested_state_code": requested_state_code,
+      "hv_state": BMS_HV_STATES.get(hv_code, "unknown") if hv_code is not None else None,
+      "hv_state_code": hv_code,
+      "battery_input_power_kw": _measurement(status, "BMS_batteryInputPower", (3276.75,)),
+      "charge_power_available_kw": _measurement(status, "BMS_chgPowerAvailable", (511.875,)),
+      "hvac_power_request": _bool(status, "BMS_hvacPowerRequest") if status_frame else False,
+      "not_enough_power_for_drive": _bool(status, "BMS_notEnoughPowerForDrive") if status_frame else False,
+      "not_enough_power_for_support": _bool(status, "BMS_notEnoughPowerForSupport") if status_frame else False,
+      "precondition_allowed": _bool(status, "BMS_preconditionAllowed") if status_frame else False,
+      "update_allowed": _bool(status, "BMS_updateAllowed") if status_frame else False,
+      "charge_port_missing_on_hv_system": _bool(status, "BMS_cpMiaOnHvs") if status_frame else False,
+      "charge_request": _bool(status, "BMS_chargeRequest") if status_frame else False,
+      "conditioning_request": _bool(status, "BMS_conditioningRequest") if status_frame else False,
+      "pcs_pwm_enabled": _bool(status, "BMS_pcsPwmEnabled") if status_frame else False,
+      "charge_retry_count": _int(status, "BMS_chargeRetryCount") if status_frame else None,
+      "limp_request": _bool(status, "BMS_diLimpRequest") if status_frame else False,
+      "ok_to_ship_by_air": _bool(status, "BMS_okToShipByAir") if status_frame else False,
+      "ok_to_ship_by_land": _bool(status, "BMS_okToShipByLand") if status_frame else False,
+    }
+
+  def _tpms_diagnostics(self, now_ns: int) -> dict[str, Any]:
+    display_frame = self._frame("VCSEC_TPMSDisplay", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    direct_frame = self._frame("TPMS_data", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    display = display_frame[0] if display_frame else {}
+    direct = direct_frame[0] if direct_frame else {}
+    sensors = []
+    for index in range(4):
+      frame = self._veh_mux_frame("VCSEC_TPMSData", index, now_ns)
+      if not frame:
+        continue
+      values = frame[0]
+      location_code = _int(values, f"VCSEC_TPMSLocation{index}")
+      sensors.append({
+        "sensor_index": index,
+        "location": TPMS_LOCATIONS.get(location_code, "unknown"),
+        "location_code": location_code,
+        "pressure_bar": _measurement(values, f"VCSEC_TPMSPressure{index}", (12.75, 12.775)),
+        "temperature_c": _measurement(values, f"VCSEC_TPMSTemperature{index}", (215.0,)),
+        "temperature_compensated_pressure_bar": _measurement(values, f"VCSEC_TPMSTemperatureCompensatedPressure{index}", (12.75, 12.775)),
+        "pressure_rate": _measurement(values, f"VCSEC_TPMSPressureRateOfChange{index}"),
+        "battery_voltage_v": _measurement(values, f"VCSEC_TPMSBatVoltage{index}", (4.05,)),
+        "pressure_in_advertisement": _bool(values, f"VCSEC_TPMSCapabilityPressureInAdv{index}"),
+        "configurable_pressure": _bool(values, f"VCSEC_TPMSCapabilityConfigurablePressure{index}"),
+      })
+
+    feature_frame = self._veh_mux_frame("VCSEC_TPMSData", 4, now_ns)
+    autonomy_frame = self._veh_mux_frame("VCSEC_TPMSData", 5, now_ns)
+    feature = feature_frame[0] if feature_frame else {}
+    autonomy = autonomy_frame[0] if autonomy_frame else {}
+    telltale_code = _int(display, "VCSEC_TPMSTellTale") if display_frame else None
+    wheels = {}
+    for suffix, key in (("FL", "front_left"), ("FR", "front_right"), ("RL", "rear_left"), ("RR", "rear_right")):
+      wheels[key] = {
+        "display_pressure_bar": _measurement(display, f"VCSEC_TPMSDisplayPressure{suffix}", (6.35, 6.375)),
+        "direct_pressure_bar": _measurement(direct, f"TPMS_pressure{suffix}"),
+        "direct_temperature_c": _measurement(direct, f"TPMS_temperature{suffix}"),
+        "last_known_pressure_bar": _measurement(autonomy, f"VCSEC_TPMSLastKnownPressure{suffix}", (6.35, 6.375)),
+        "soft_warning": _bool(display, f"VCSEC_TPMSDisplaySoftWarningIndication{suffix}") if display_frame else False,
+        "hard_warning": _bool(display, f"VCSEC_TPMSDisplayHardWarningIndication{suffix}") if display_frame else False,
+      }
+    feature0 = _int(feature, "VCSEC_TPMSFeature0") if feature_frame else None
+    feature1 = _int(feature, "VCSEC_TPMSFeature1") if feature_frame else None
+    autonomy_code = _int(autonomy, "VCSEC_TPMSAutonomyStatus") if autonomy_frame else None
+    sources = {self._bus(frame) for frame in (display_frame, direct_frame, feature_frame, autonomy_frame) if frame}
+    sources.update(self._bus(self._veh_mux_frame("VCSEC_TPMSData", index, now_ns)) for index in range(4))
+    return {
+      "available": bool(display_frame or direct_frame or sensors or feature_frame or autonomy_frame),
+      "sources": sorted(source for source in sources if source),
+      "telltale": TPMS_TELLTALES.get(telltale_code, "unknown") if telltale_code is not None else None,
+      "telltale_code": telltale_code,
+      "wheels": wheels,
+      "sensors": sensors,
+      "recommended_cold_pressure_front_bar": _measurement(feature, "VCSEC_TPMSRecommendedColdPressureFront", (6.35, 6.375)),
+      "recommended_cold_pressure_rear_bar": _measurement(feature, "VCSEC_TPMSRecommendedColdPressureRear", (6.35, 6.375)),
+      "feature_state": TPMS_FEATURE_STATES.get(feature0, "unknown") if feature0 is not None else None,
+      "feature_state_code": feature0,
+      "proximity_state": TPMS_PROXIMITY_STATES.get(feature1, "unknown") if feature1 is not None else None,
+      "proximity_state_code": feature1,
+      "feature_count": _int(feature, "VCSEC_TPMSFeature0Count") if feature_frame else None,
+      "feature_time_s": _measurement(feature, "VCSEC_TPMSFeature0TimeS"),
+      "autonomy_status": {0: "normal", 1: "mia", 2: "reset"}.get(autonomy_code, "unknown") if autonomy_code is not None else None,
+      "autonomy_status_code": autonomy_code,
+      "autonomy_mia_time_s": _measurement(autonomy, "VCSEC_TPMSAutonomyStatusMIATimeS"),
+    }
+
+  def _drive_power(self, now_ns: int) -> dict[str, Any]:
+    result: dict[str, Any] = {"available": False, "units_inferred": True}
+    sources = set()
+    for message, key, prefix in (("DIR_power", "rear", "DIR"), ("DIF_power", "front", "DIF")):
+      frame = self._frame(message, now_ns, VEH_DIAGNOSTIC_STALE_NS)
+      values = frame[0] if frame else {}
+      if frame:
+        result["available"] = True
+        sources.add(self._bus(frame))
+      result[key] = {
+        "available": bool(frame),
+        "electrical_power_kw": _measurement(values, f"{prefix}_elecPower", (-512.0,)),
+        "heat_power_optimal_kw": _measurement(values, f"{prefix}_heatPowerOptimal"),
+        "heat_power_max_kw": _measurement(values, f"{prefix}_heatPowerMax"),
+        "heat_power_actual_kw": _measurement(values, f"{prefix}_heatPowerActual"),
+        "excess_heat_command_kw": _measurement(values, f"{prefix}_excessHeatCommand"),
+        "drive_power_max_kw": _measurement(values, f"{prefix}_drivePowerMax", (511.0,)),
+      }
+    result["sources"] = sorted(source for source in sources if source)
+    return result
+
+  def _drive_temperature_side(self, message: str, prefix: str, now_ns: int) -> dict[str, Any]:
+    pages = {mux: self._veh_mux_frame(message, mux, now_ns) for mux in range(5)}
+    values = {mux: (frame[0] if frame else {}) for mux, frame in pages.items()}
+    p0, p1, p2, p3, p4 = (values[mux] for mux in range(5))
+    return {
+      "available": any(pages.values()),
+      "received_pages": [mux for mux, frame in pages.items() if frame],
+      "quality": INVERTER_QUALITY.get(_int(p0, f"{prefix}_inverterTQF"), "unknown") if pages[0] else None,
+      "operating_c": {
+        "pcb": _measurement(p0, f"{prefix}_pcbT", (-40.0,)),
+        "inverter": _measurement(p0, f"{prefix}_inverterT", (-40.0,)),
+        "stator": _measurement(p0, f"{prefix}_statorT", (-40.0,)),
+        "dc_capacitor": _measurement(p0, f"{prefix}_dcCapT", (-40.0,)),
+        "heatsink": _measurement(p0, f"{prefix}_heatsinkT", (-40.0,)),
+      },
+      "operating_percent": {
+        "inverter": _measurement(p0, f"{prefix}_inverterTpct"),
+        "stator": _measurement(p0, f"{prefix}_statorTpct"),
+      },
+      "heatsink_and_pack_c": {
+        "heatsink_1": _measurement(p1, f"{prefix}_heatsink1Temp"),
+        "heatsink_2": _measurement(p1, f"{prefix}_heatsink2Temp"),
+        "heatsink_3": _measurement(p1, f"{prefix}_heatsink3Temp"),
+        "pcb_2": _measurement(p1, f"{prefix}_pcbTemp2"),
+        "junction": _measurement(p1, f"{prefix}_junctionTemp"),
+        "t_pak_1": _measurement(p1, f"{prefix}_TPak1Temp"),
+        "t_pak_2": _measurement(p1, f"{prefix}_TPak2Temp"),
+      },
+      "fluid_in_c": _measurement(p2, f"{prefix}_fluidInTemp", (-40.0,)),
+      "fet_burn_in": {
+        "normal": _measurement(p2, f"{prefix}_normalFetBurnIn", (500.03205,)),
+        "additional": _measurement(p2, f"{prefix}_additionalFetBurnIn", (500.03205,)),
+      },
+      "life_estimates": {
+        "current_weibull_miles": _measurement(p3, f"{prefix}_currentWeibullMiles", (262136.0,), 0),
+        "end_of_service_weibull_miles": _measurement(p3, f"{prefix}_endOfServiceWeibullMiles", (262136.0,), 0),
+        "burn_in_damage_ratio": _measurement(p3, f"{prefix}_burnInDamageRatio", (5.11,)),
+        "sensor_estimate_c": _measurement(p3, f"{prefix}_inverterSensorEst"),
+        "heatsink_1_estimate_c": _measurement(p3, f"{prefix}_inverterHS1Est"),
+      },
+      "estimated_c": {
+        "heatsink_2": _measurement(p4, f"{prefix}_inverterHS2Est"),
+        "inlet": _measurement(p4, f"{prefix}_inverterInletEst"),
+        "stator_housing": _measurement(p4, f"{prefix}_statorHousingTemp", (-40.0,)),
+      },
+      "initial_burn_in_odometer": _measurement(p4, f"{prefix}_initialBurnInVehicleOdometer", (4294967.295,), 3),
+    }
+
+  def _drive_temperatures(self, now_ns: int) -> dict[str, Any]:
+    front = self._drive_temperature_side("DIF_temperature", "DIF", now_ns)
+    rear = self._drive_temperature_side("DIR_temperature", "DIR", now_ns)
+    return {"available": front["available"] or rear["available"], "bus": "VEH" if front["available"] or rear["available"] else None,
+            "front": front, "rear": rear}
+
+  def _vehicle_totals(self, now_ns: int) -> dict[str, Any]:
+    odometer_frame = self._frame("DI_odometerStatus", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    energy_frame = self._frame("BMS_kwhCounter", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    brake_frame = self._frame("DI_estimatedBrakeTemp", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    odometer = odometer_frame[0] if odometer_frame else {}
+    energy = energy_frame[0] if energy_frame else {}
+    brakes = brake_frame[0] if brake_frame else {}
+    return {
+      "available": bool(odometer_frame or energy_frame or brake_frame),
+      "sources": sorted(filter(None, (self._bus(odometer_frame), self._bus(energy_frame), self._bus(brake_frame)))),
+      "odometer_km": _measurement(odometer, "DI_odometer", (4294967.295,), 3),
+      "obd_drive_cycle_active": _bool(odometer, "DI_obdDriveCycleStatus") if odometer_frame else False,
+      "discharge_total_kwh": _measurement(energy, "BMS_kwhDischargeTotal", (0.0, 4294967.295), 3),
+      "charge_total_kwh": _measurement(energy, "BMS_kwhChargeTotal", (0.0, 4294967.295), 3),
+      "brake_temperature_c": {
+        "front_left": _measurement(brakes, "DI_brakeFLTemp", (983.0,)),
+        "front_right": _measurement(brakes, "DI_brakeFRTemp", (983.0,)),
+        "rear_left": _measurement(brakes, "DI_brakeRLTemp", (983.0,)),
+        "rear_right": _measurement(brakes, "DI_brakeRRTemp", (983.0,)),
+      },
+      "mcp_index": _measurement(brakes, "DI_mcpIndex"),
+      "mcp_index_filtered": _measurement(brakes, "DI_mcpIndexPrimeFilt"),
+    }
+
+  def _ambient_lighting(self, now_ns: int) -> dict[str, Any]:
+    frame = self._frame("UI_ambientLightingCtrls", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    values = frame[0] if frame else {}
+    enable_code = _int(values, "UI_rgbEnableState") if frame else None
+    brightness = _int(values, "UI_rgbBrightnessLevel") if frame else None
+    red = _int(values, "UI_rgbLightingColorHexRed") if frame else 0
+    green = _int(values, "UI_rgbLightingColorHexGreen") if frame else 0
+    blue = _int(values, "UI_rgbLightingColorHexBlue") if frame else 0
+    return {
+      "available": bool(frame),
+      "bus": self._bus(frame),
+      "power_override": _bool(values, "UI_ambientLightPowerOverride") if frame else False,
+      "enable_state": AMBIENT_ENABLE_STATES.get(enable_code, "unknown") if enable_code is not None else None,
+      "enable_state_code": enable_code,
+      "effect_code": _int(values, "UI_rgbEffectType") if frame else None,
+      "effect_duration_ms": _int(values, "UI_rgbEffectType") * 250 if frame else None,
+      "rgb": {"red": red, "green": green, "blue": blue},
+      "hex_color": f"#{red:02X}{green:02X}{blue:02X}" if frame else None,
+      "brightness": None if brightness == 127 else brightness,
+      "audio_visualizer": _bool(values, "UI_audioVisualizerState") if frame else False,
+      "targets": [name for name, signal in (
+        ("front_left_door", "UI_rgbTargetDOORFL"), ("front_right_door", "UI_rgbTargetDOORFR"),
+        ("rear_left_door", "UI_rgbTargetDOORRL"), ("rear_right_door", "UI_rgbTargetDOORRR"),
+        ("instrument_panel_left", "UI_rgbTargetIPFL"), ("instrument_panel_right", "UI_rgbTargetIPFR"),
+      ) if frame and _bool(values, signal)],
+    }
+
   def _parking_obstacle(self, now_ns: int) -> dict[str, Any]:
     frame = self._frame("PARK_oocStatus", now_ns)
     values = frame[0] if frame else {}
@@ -719,6 +1048,8 @@ class TeslaCanVisualization:
       "x_m": _round(x_cm / 100.0) if valid and x_cm != 394.0 else None,
       "y_m": _round(y_cm / 100.0) if valid and y_cm != 126.0 else None,
       "collision_side": COLLISION_SIDES.get(side_code, "unknown") if valid else None,
+      "height": PARK_OBSTACLE_HEIGHTS.get(_int(values, "PARK_oocHeight"), "unknown") if valid else None,
+      "off_course": _int(values, "PARK_oocOffCourse") if valid else None,
       "direct_echo_only": _bool(values, "PARK_oocDirectEchoOnly") if valid else False,
       "untracked_time_s": _round(values["PARK_oocUntrackedTime"]) if valid else None,
     }
@@ -736,6 +1067,13 @@ class TeslaCanVisualization:
     longitudinal_shadow = self._longitudinal_shadow(now_ns)
     proximity_safety = self._proximity_safety(now_ns)
     parking_obstacle = self._parking_obstacle(now_ns)
+    road_disturbance = self._road_disturbance(now_ns)
+    battery_diagnostics = self._battery_diagnostics(now_ns)
+    tpms = self._tpms_diagnostics(now_ns)
+    drive_power = self._drive_power(now_ns)
+    drive_temperatures = self._drive_temperatures(now_ns)
+    vehicle_totals = self._vehicle_totals(now_ns)
+    ambient_lighting = self._ambient_lighting(now_ns)
     pedestrians = [vehicle for vehicle in vehicles if vehicle["type"] == "pedestrian"]
     pedestrian_detection = self._pedestrian_detection(
       now_ns, pedestrians, proximity_safety.get("long_collision_warning") == 2,
@@ -753,11 +1091,21 @@ class TeslaCanVisualization:
       *([longitudinal_shadow["bus"]] if longitudinal_shadow.get("bus") else []),
       *([proximity_safety["bus"]] if proximity_safety.get("bus") else []),
       *([parking_obstacle["bus"]] if parking_obstacle.get("bus") else []),
+      *([road_disturbance["bus"]] if road_disturbance.get("bus") else []),
+      *(battery_diagnostics.get("sources") or []),
+      *(tpms.get("sources") or []),
+      *(drive_power.get("sources") or []),
+      *([drive_temperatures["bus"]] if drive_temperatures.get("bus") else []),
+      *(vehicle_totals.get("sources") or []),
+      *([ambient_lighting["bus"]] if ambient_lighting.get("bus") else []),
     })
     return {
       "available": bool(navigation["available"] or lanes["available"] or vehicles or traffic["available"] or driver_assist["available"]
                         or road_sign["available"] or pedestrian_detection["available"] or blind_spot["available"] or front_safety["available"]
-                        or longitudinal_shadow["available"] or proximity_safety["available"] or parking_obstacle["available"]),
+                        or longitudinal_shadow["available"] or proximity_safety["available"] or parking_obstacle["available"]
+                        or road_disturbance["available"] or battery_diagnostics["available"] or tpms["available"]
+                        or drive_power["available"] or drive_temperatures["available"] or vehicle_totals["available"]
+                        or ambient_lighting["available"]),
       "dbc": DBC_NAME,
       "buses": buses,
       "capabilities": {
@@ -779,6 +1127,13 @@ class TeslaCanVisualization:
       "longitudinal_shadow": longitudinal_shadow,
       "proximity_safety": proximity_safety,
       "parking_obstacle": parking_obstacle,
+      "road_disturbance": road_disturbance,
+      "battery_diagnostics": battery_diagnostics,
+      "tpms": tpms,
+      "drive_power": drive_power,
+      "drive_temperatures": drive_temperatures,
+      "vehicle_totals": vehicle_totals,
+      "ambient_lighting": ambient_lighting,
       "pedestrians": pedestrians,
       "cyclists": [vehicle for vehicle in vehicles if vehicle["type"] in ("bicycle", "motorcycle")],
     }

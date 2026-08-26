@@ -51,6 +51,15 @@ def test_console_page_exposes_driving_information(monkeypatch):
   assert "/api/driving-status" in page
 
 
+def test_console_page_exposes_requested_vehicle_can_diagnostics(monkeypatch):
+  monkeypatch.setattr("openpilot.selfdrive.debug.device_console.driving_status_enabled", lambda: True)
+  page = render_page().decode()
+
+  for address in ("0x238", "0x23E", "0x1FC", "0x132", "0x212", "0x219", "0x25A", "0x31F",
+                  "0x266", "0x2E5", "0x315", "0x376", "0x3B6", "0x3D2", "0x3FE", "0x679"):
+    assert address in page
+
+
 def test_console_page_exposes_tesla_turn_signal_validation(monkeypatch):
   monkeypatch.setattr("openpilot.selfdrive.debug.device_console.driving_status_enabled", lambda: True)
   page = render_page().decode()
