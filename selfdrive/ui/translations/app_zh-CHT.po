@@ -1263,6 +1263,10 @@ msgstr "自動巡航"
 msgid "Manual control"
 msgstr "駕駛接管"
 
+#: selfdrive/ui/onroad/hud_renderer.py:371
+msgid "Steering Angle"
+msgstr "方向盤角度"
+
 msgid "### Human Turn Detection ###"
 msgstr "### 人工轉彎檢測 ###"
 

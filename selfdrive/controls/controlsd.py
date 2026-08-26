@@ -62,6 +62,14 @@ class Controls:
     elif self.CP.lateralTuning.which() == 'torque':
       self.LaC = LatControlTorque(self.CP, self.CI, DT_CTRL)
 
+    # dp: TOYOTA_COROLLA_TSS2 動態 Torque/Angle 熱切換控制（移植自 sunnypilot LatControlDynamic）
+    # 僅在此車型 + torque 調校下生效，其餘車型完全不受影響
+    if self.CP.lateralTuning.which() == 'torque':
+      from opendbc.car.toyota.values import CAR as ToyotaCAR
+      if self.CP.carFingerprint == ToyotaCAR.TOYOTA_COROLLA_TSS2:
+        from openpilot.selfdrive.controls.lib.latcontrol_dynamic import LatControlDynamic
+        self.LaC = LatControlDynamic(self.CP, self.CI, DT_CTRL)
+
     # dp - ALKA: cache enabled state (CP doesn't change after init)
     self.alka_enabled = bool(self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA)
     self.alka_active = False
@@ -168,6 +176,20 @@ class Controls:
                                                        curvature_limited, lat_delay)
     actuators.torque = float(steer)
     actuators.steeringAngleDeg = float(steeringAngleDeg)
+    # dp: 告知 carcontroller 這一幀應該用 Torque 還是 Angle(LTA) 送出
+    # 與開發者原始 commit (547751461052ea2bf39bc438785d6717bc7a6e31) 對齊：
+    # 有 LatControlDynamic 就依 use_angle 動態決定；其餘車型則照 CP.steerControlType 靜態值填入，
+    # 確保原生 angle 車型（如 ANGLE_CONTROL_CAR）的 actuators.steerControlType 也正確，而非停留在 capnp 預設值
+    if hasattr(self.LaC, 'use_angle'):
+      if self.LaC.use_angle:
+        actuators.steerControlType = car.CarControl.Actuators.SteerControlType.angle
+      else:
+        actuators.steerControlType = car.CarControl.Actuators.SteerControlType.torque
+    else:
+      if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
+        actuators.steerControlType = car.CarControl.Actuators.SteerControlType.angle
+      else:
+        actuators.steerControlType = car.CarControl.Actuators.SteerControlType.torque
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)
@@ -232,13 +254,20 @@ class Controls:
     cs.forceDecel = bool((self.sm['driverMonitoringState'].alertLevel == log.DriverMonitoringState.AlertLevel.three) or
                          (self.sm['selfdriveState'].state == State.softDisabling))
 
-    lat_tuning = self.CP.lateralTuning.which()
-    if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
-      cs.lateralControlState.angleState = lac_log
-    elif lat_tuning == 'pid':
-      cs.lateralControlState.pidState = lac_log
-    elif lat_tuning == 'torque':
-      cs.lateralControlState.torqueState = lac_log
+    # dp: LatControlDynamic 會在 Torque/Angle 之間動態切換，log 型別要跟著切，避免送錯 union 類型
+    if hasattr(self.LaC, 'use_angle'):
+      if self.LaC.use_angle:
+        cs.lateralControlState.angleState = lac_log
+      else:
+        cs.lateralControlState.torqueState = lac_log
+    else:
+      lat_tuning = self.CP.lateralTuning.which()
+      if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
+        cs.lateralControlState.angleState = lac_log
+      elif lat_tuning == 'pid':
+        cs.lateralControlState.pidState = lac_log
+      elif lat_tuning == 'torque':
+        cs.lateralControlState.torqueState = lac_log
 
     self.pm.send('controlsState', dat)
 

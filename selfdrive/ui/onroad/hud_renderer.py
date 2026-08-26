@@ -82,6 +82,9 @@ class HudRenderer(Widget):
     self.lead_dist: str = "-"
     self.lead_dist_raw: float = 0.0
 
+    # dp: 右下角資訊列 - 方向盤角度（取代原本的駕駛/自動控制狀態文字）
+    self.steering_angle_deg: float = 0.0
+
     # --- TDX 路況預警變數 ---
     self.tdx_speed: int = -1
     self.tdx_next_speed: int = -1
@@ -114,7 +117,8 @@ class HudRenderer(Widget):
       self.speed = 0.0
       self.lead_dist = "-"
       self.lead_dist_raw = 0.0
-      
+      self.steering_angle_deg = 0.0
+
       # 重置 TDX 變數，避免殘留上次熄火前的資料
       self.tdx_speed = -1
       self.tdx_next_speed = -1
@@ -175,6 +179,9 @@ class HudRenderer(Widget):
     v_ego = v_ego_cluster if self.v_ego_cluster_seen else car_state.vEgo
     speed_conversion = CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
     self.speed = max(0.0, v_ego * speed_conversion)
+
+    # dp: 右下角資訊列 - 方向盤角度
+    self.steering_angle_deg = car_state.steeringAngleDeg
 
   def _render(self, rect: rl.Rectangle) -> None:
     """Render HUD elements to the screen."""
@@ -368,7 +375,7 @@ class HudRenderer(Widget):
       return
 
     stats = self._get_perf_stats()
-    control_text = self._get_control_state_text()
+    steering_angle_text = f"{tr('Steering Angle')} {self.steering_angle_deg:.0f}°"
 
     lead_dist = self.lead_dist
     cpu_temp = stats.get("cpu_temp", "-")
@@ -380,7 +387,7 @@ class HudRenderer(Widget):
       f"{tr('CPU Temp')} {cpu_temp}",
       f"{tr('Memory')} {mem_usage}",
       f"{tr('Disk Free')} {disk_free}",
-      f"{control_text}",
+      f"{steering_angle_text}",
     ]
 
     measurements = [measure_text_cached(self._perf_font, text, PERF_FONT_SIZE) for text in items]
@@ -409,16 +416,8 @@ class HudRenderer(Widget):
       text_color = rl.WHITE
       if i == 0 and self.lead_dist != "-" and self.lead_dist_raw < 15.0:
         text_color = rl.Color(255, 188, 0, 200)
-      elif i == 4 and ui_state.status != UIStatus.ENGAGED:
-        text_color = rl.YELLOW
 
       rl.draw_text_ex(self._perf_font, text, rl.Vector2(cursor_x, text_y), PERF_FONT_SIZE, 0, text_color)
-
-  def _get_control_state_text(self) -> str:
-    status = ui_state.status
-    if status == UIStatus.ENGAGED:
-      return tr("Auto control")
-    return tr("Manual control")
 
   def _get_perf_stats(self) -> dict[str, str]:
     with self._perf_lock:
