@@ -104,6 +104,14 @@ def test_view_model_marks_flashing_green_stop():
   assert state.flashing
 
 
+def test_view_model_does_not_animate_historical_unconfirmed_flash_candidate():
+  state = TrafficSignalDisplayState.from_plan(target(
+    light=2, phase=TrafficControlPhase.greenFlashCandidate,
+  ))
+  assert state.visible
+  assert not state.flashing
+
+
 def test_view_model_stays_visible_without_a_current_signal():
   assert not TrafficSignalDisplayState.from_plan(target(), valid=False).visible
   unavailable = TrafficSignalDisplayState.from_plan(target(quality=0, raw_distance=255))

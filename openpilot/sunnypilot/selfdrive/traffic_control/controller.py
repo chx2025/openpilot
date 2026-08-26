@@ -348,9 +348,10 @@ class TeslaTrafficControlController:
       self.first_off_ns = now_ns
       self.green_between_off = False
       self.stable_green_since_ns = 0
-      if (observation.distance <= self.config.max_control_distance
-          and self.phase not in self.ACTIVE_PHASES):
-        self.phase = TrafficControlPhase.greenFlashCandidate
+      if self.phase not in self.ACTIVE_PHASES:
+        # Unconfirmed flashing is evidence, not a vehicle-control phase. Keep
+        # OFF/RELEASE ownership intact until the third valid pulse confirms a
+        # real flashing-green STOP.
         self._mark_transition("green_flash_candidate")
     elif color == 2 and self.first_off_ns:
       since_off_s = (now_ns - self.first_off_ns) / 1e9

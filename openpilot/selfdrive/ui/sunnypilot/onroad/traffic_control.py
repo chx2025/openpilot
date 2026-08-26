@@ -90,10 +90,7 @@ class TrafficSignalDisplayState:
       light_state=light,
       distance_m=raw_distance if has_signal else 0.0,
       phase=phase,
-      flashing=has_signal and phase in (
-        int(TrafficControlPhase.greenFlashCandidate),
-        int(TrafficControlPhase.flashingGreenStop),
-      ),
+      flashing=has_signal and phase == int(TrafficControlPhase.flashingGreenStop),
       action=int(target.action),
       should_stop=bool(target.shouldStop),
       start_block_reason=int(target.startBlockReason),

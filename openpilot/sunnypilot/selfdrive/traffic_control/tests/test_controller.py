@@ -335,10 +335,10 @@ def test_three_in_range_green_off_pulses_latch_flashing_green_stop():
   update(c, 1.0, observation(80.0, 2, 1.0), v_ego=8.0)
   update(c, 1.1, observation(79.2, 2, 1.1), v_ego=8.0)
   first_off = update(c, 1.2, observation(78.4, 0, 1.2), v_ego=8.0)
-  assert first_off.phase == TrafficControlPhase.greenFlashCandidate
+  assert first_off.phase == TrafficControlPhase.off
   update(c, 1.7, observation(74.4, 2, 1.7), v_ego=8.0)
   second_off = update(c, 2.2, observation(70.4, 0, 2.2), v_ego=8.0)
-  assert second_off.phase == TrafficControlPhase.greenFlashCandidate
+  assert second_off.phase == TrafficControlPhase.off
   assert not second_off.apply_constraint
   update(c, 2.7, observation(66.4, 2, 2.7), v_ego=8.0)
   third_off = update(c, 3.2, observation(62.4, 0, 3.2), v_ego=8.0)
@@ -355,9 +355,41 @@ def test_irregular_third_green_off_pulse_resets_flash_candidate():
     (2.6, 67.2, 2), (4.2, 54.4, 0),
   ):
     decision = update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
-  assert decision.phase == TrafficControlPhase.greenFlashCandidate
+  assert decision.phase == TrafficControlPhase.off
   assert not decision.apply_constraint
   assert not c.flash_latched
+
+
+def test_route10_single_off_then_stable_green_never_enters_a_flash_phase():
+  c = controller()
+  update(c, 1.0, observation(200.0, 2, 1.0), v_ego=10.0)
+  first_off = update(c, 1.1, observation(199.0, 0, 1.1), v_ego=10.0)
+  assert first_off.phase == TrafficControlPhase.off
+
+  now_s = 1.6
+  distance = 194.0
+  while distance >= 5.0:
+    decision = update(c, now_s, observation(distance, 2, now_s), v_ego=10.0)
+    assert decision.phase == TrafficControlPhase.off
+    assert not decision.apply_constraint
+    distance -= 5.0
+    now_s += 0.5
+
+
+def test_single_off_cannot_overwrite_an_existing_release_session():
+  c = controller()
+  establish_red(c, distance=5.0, speed=0.0)
+  update(c, 2.0, observation(5.0, 2, 2.0), v_ego=0.0)
+  released = update(c, 2.5, observation(5.0, 2, 2.5), v_ego=0.0)
+  assert released.phase == TrafficControlPhase.release
+  session_id = c.stop_session_id
+
+  one_off = update(c, 3.0, observation(5.0, 0, 3.0), v_ego=0.0)
+  assert one_off.phase == TrafficControlPhase.release
+  assert c.stop_session_id == session_id
+  green = update(c, 3.5, observation(5.0, 2, 3.5), v_ego=0.0)
+  assert green.phase == TrafficControlPhase.release
+  assert c.stop_session_id == session_id
 
 
 def test_out_of_range_green_off_cadence_cannot_arm_inside_control_range():

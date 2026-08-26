@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 
@@ -21,33 +23,49 @@ class StopProfileGenerator:
   def required_stop_distance(*, v_ego: float, a_ego: float,
                              actuator_delay: float, max_brake: float,
                              jerk_limit: float, dt: float = 0.05) -> float:
-    """Numerically predict the distance of the same delayed, jerk-limited stop."""
-    velocity = max(float(v_ego), 0.0)
-    acceleration = float(np.clip(a_ego, -max_brake, max_brake))
-    distance = 0.0
-    delay_remaining = max(float(actuator_delay), 0.0)
-    step = max(float(dt), 1e-3)
+    """Closed-form delayed, jerk-limited stop envelope."""
+    del dt  # Kept for call-site compatibility with older tests/tools.
+    velocity = float(v_ego)
+    acceleration = float(a_ego)
+    delay = float(actuator_delay)
+    brake = float(max_brake)
+    jerk = float(jerk_limit)
+    if not all(math.isfinite(value) for value in (velocity, acceleration, delay, brake, jerk)):
+      return math.inf
 
-    while velocity > 0.0 and delay_remaining > 1e-9:
-      cycle = min(step, delay_remaining)
-      next_velocity = max(0.0, velocity + acceleration * cycle)
-      distance += max(0.0, (velocity + next_velocity) * 0.5 * cycle)
-      velocity = next_velocity
-      delay_remaining -= cycle
+    velocity = max(velocity, 0.0)
+    brake = max(brake, 0.1)
+    jerk = max(jerk, 0.1)
+    # Do not assume that a positive measured acceleration is bounded by the
+    # available braking magnitude. Retain it so the predicted stopping
+    # distance cannot be understated; only cap already-strong braking at -B.
+    acceleration = max(acceleration, -brake)
+    delay = max(delay, 0.0)
+    if velocity <= 0.0:
+      return 0.0
 
-    for _ in range(60_000):
-      if velocity <= 0.0:
-        break
-      acceleration += float(np.clip(
-        -max_brake - acceleration,
-        -max(jerk_limit, 0.1) * step,
-        max(jerk_limit, 0.1) * step,
-      ))
-      acceleration = float(np.clip(acceleration, -max_brake, max_brake))
-      next_velocity = max(0.0, velocity + acceleration * step)
-      distance += max(0.0, (velocity + next_velocity) * 0.5 * step)
-      velocity = next_velocity
-    return distance
+    # The vehicle may stop during the actuator-delay interval when it is
+    # already decelerating strongly.
+    delay_time = min(delay, velocity / -acceleration) if acceleration < 0.0 else delay
+    distance = max(0.0, velocity * delay_time + 0.5 * acceleration * delay_time ** 2)
+    velocity = max(0.0, velocity + acceleration * delay_time)
+    if velocity <= 0.0:
+      return distance
+
+    # Ramp acceleration from a0 to -brake with constant negative jerk. If the
+    # velocity reaches zero first, use that positive root instead.
+    ramp_to_brake = max(0.0, (acceleration + brake) / jerk)
+    stop_in_ramp = (acceleration + math.sqrt(acceleration ** 2 + 2.0 * jerk * velocity)) / jerk
+    ramp_time = min(ramp_to_brake, stop_in_ramp)
+    distance += max(0.0, (
+      velocity * ramp_time
+      + 0.5 * acceleration * ramp_time ** 2
+      - jerk * ramp_time ** 3 / 6.0
+    ))
+    velocity = max(0.0, velocity + acceleration * ramp_time - 0.5 * jerk * ramp_time ** 2)
+
+    # Any remaining velocity is removed at constant maximum braking.
+    return distance + velocity ** 2 / (2.0 * brake)
 
   @staticmethod
   def _dt(times: np.ndarray, index: int) -> float:

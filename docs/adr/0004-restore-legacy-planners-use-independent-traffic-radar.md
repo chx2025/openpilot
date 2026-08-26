@@ -46,12 +46,27 @@ bounded low-speed START, and unhealthy lead sensing leaves the base plan
 unchanged. A moving same-session GREEN removes the Traffic STOP immediately and
 returns the complete plan to the selected base planner.
 
+For a confirmed selected queue lead, the base lead planner also owns queue
+motion while the Traffic stop point remains outside a dynamic guard: the larger
+of five metres and the personality-aware comfortable stopping envelope. The
+near lead must remain valid, selected, healthy, and continuously confirmed;
+radar-health recovery requires a fresh 0.5-second confirmation. The Traffic
+stop session stays armed rather than being discarded and resumes its ordinary
+STOP before the guard is consumed. This prevents a zero-speed Traffic profile
+from pinning a vehicle behind a departing queue, avoids a hard ownership switch
+at 0.3 m/s, and does not give a stale or far lead slot authority over the final
+stop-line guard.
+
 The GO request is bounded and deduplicated per stop session and never modifies
 Tesla vehicle state, CAN, or other vehicle signals. Traffic Off and Observe are
-output-transparent even if a prior STOP/HOLD/START was latched. `applied` means
-that Traffic changed at least one final longitudinal output field; an eligible
-constraint already dominated by the base planner is not attributed to Traffic
-in the UI.
+output-transparent even if a prior STOP/HOLD/START was latched. `active` means
+that Traffic changed the complete published plan, including a future-only
+trajectory constraint. `applied` is narrower: Traffic changed the current
+actuator contract consumed by controls (`aTarget` by more than the
+`1e-3 m/s²` diagnostic noise tolerance, or any `shouldStop` change). An
+eligible future constraint already dominated at the current actuator horizon
+therefore remains observable as active but is not attributed to Traffic as
+current vehicle control in the UI.
 
 ## Consequences
 
@@ -69,6 +84,19 @@ in the UI.
 - Yellow PASS, driver gas override, and the configured maximum-speed bypass are
   event-scoped: the same intersection cannot reacquire STOP ownership late.
 - Flashing green requires three in-range, motion-consistent GREEN/OFF pulses;
-  stable same-track GREEN for the maximum flash interval releases the stop.
+  one or two pulses remain internal evidence and never become a control phase;
+  stable same-track GREEN for the maximum flash interval releases a confirmed
+  flashing stop.
+- Yellow receives STOP ownership only when the personality-aware comfortable,
+  jerk-limited stopping envelope plus a bounded uncertainty margin fits inside
+  the remaining distance. A rejected yellow session cannot reacquire ownership
+  after changing to red.
+- The delayed jerk-limited stopping envelope uses an O(1) closed-form solution.
+  Its STOP-ownership decision is cached per stop session; armed and rejected
+  sessions do not repeat that decision at planner frequency while the
+  publisher continues to identify the same session. Loss of the Traffic
+  service clears armed ownership because a restarted producer may reuse a
+  numeric session ID. A currently delegated queue lead recomputes only the
+  lightweight dynamic line guard as speed changes.
 - The three backend profiles remain independently adjustable and require an
   explicit, lossless configuration migration when their schema changes.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
+import math
 import time
 
 import numpy as np
@@ -24,11 +25,23 @@ START_NEAR_LEAD_DISTANCE = 8.0
 START_LEAD_CONFIRM_NS = 500_000_000
 START_LEAD_CLEAR_NS = 400_000_000
 START_LEAD_MAX_GAP_NS = 150_000_000
+QUEUE_STOP_LINE_GUARD = 5.0
 MOVING_GREEN_SPEED = 0.3
 TERMINAL_MAX_SPEED = 1.5
 TERMINAL_LOOKAHEAD_S = 0.05
 PLANNER_TRAFFIC_STALE_NS = 350_000_000
 MAX_TRAFFIC_STOP_BRAKE = 3.0
+YELLOW_MARGIN_BASE = 1.0
+YELLOW_MARGIN_TIME = 0.15
+YELLOW_MARGIN_MIN = 2.0
+YELLOW_MARGIN_MAX = 4.0
+STOP_CONTROL_PHASES = (
+  int(TrafficControlPhase.approachRed),
+  int(TrafficControlPhase.braking),
+  int(TrafficControlPhase.hold),
+  int(TrafficControlPhase.flashingGreenStop),
+  int(TrafficControlPhase.yellowStop),
+)
 
 
 @dataclass(frozen=True)
@@ -138,6 +151,7 @@ class FinalPlanArbitrator:
     self._hold_latched_should_stop = False
     self._armed_stop_session_id = 0
     self._rejected_stop_session_id = 0
+    self._traffic_service_gap = False
     self.diagnostics = TrafficPlanDiagnostics()
 
   def _reset_control_state(self) -> None:
@@ -182,6 +196,28 @@ class FinalPlanArbitrator:
       or before[4] != after[4]
       or before[5] != after[5]
     )
+
+  @staticmethod
+  def _actuation_changed(before, plan) -> bool:
+    # controlsd feeds only aTarget and shouldStop into LongControl. Future
+    # trajectory arrays express a planned constraint, not current actuator
+    # ownership, and allowThrottle is only consumed by onroad rendering.
+    return bool(
+      abs(before[3] - float(plan.aTarget)) > 1e-3
+      or before[4] != bool(plan.shouldStop)
+    )
+
+  def _finalize_diagnostics(self, before, plan) -> None:
+    self.diagnostics.final_a_target = float(plan.aTarget)
+    self.diagnostics.should_stop = bool(plan.shouldStop)
+    if self.diagnostics.action == TrafficPlanAction.none:
+      return
+    planned = self._plan_changed(before, plan)
+    if not planned:
+      self.diagnostics.action = TrafficPlanAction.none
+    self.diagnostics.applied = bool(planned and self._actuation_changed(before, plan))
+    if not self.diagnostics.applied:
+      self.diagnostics.start_applied = False
 
   def publisher(self, pm, sm, now_ns: int | None = None):
     return _TrafficPlanPublishSink(pm, self, sm, time.monotonic_ns() if now_ns is None else now_ns)
@@ -255,14 +291,23 @@ class FinalPlanArbitrator:
         target = min(target, float(np.min(actuator_window)))
     return target
 
-  def _traffic_stop_style(self, sm, *, remaining_distance: float, terminal: bool) -> _TrafficStopStyle:
+  @staticmethod
+  def _base_stop_style(sm, *, yellow_admission: bool = False) -> _TrafficStopStyle:
     personality = sm["selfdriveState"].personality
     if personality == log.LongitudinalPersonality.relaxed:
       base_brake, base_jerk, decel_margin = 2.2, 0.55, 1.15
-    elif personality == log.LongitudinalPersonality.aggressive:
+    elif personality == log.LongitudinalPersonality.aggressive and not yellow_admission:
       base_brake, base_jerk, decel_margin = 2.8, 1.10, 1.02
     else:
       base_brake, base_jerk, decel_margin = 2.5, 0.80, 1.08
+    return _TrafficStopStyle(base_brake, base_jerk, decel_margin)
+
+  @staticmethod
+  def _speed_jerk_scale(v_ego: float) -> float:
+    return float(np.interp(v_ego * 3.6, [0.0, 30.0, 60.0, 90.0], [0.70, 0.85, 1.10, 1.25]))
+
+  def _traffic_stop_style(self, sm, *, remaining_distance: float, terminal: bool) -> _TrafficStopStyle:
+    base = self._base_stop_style(sm)
 
     v_ego = max(0.0, float(sm["carState"].vEgo))
     effective_distance = max(
@@ -271,50 +316,68 @@ class FinalPlanArbitrator:
     )
     required_brake = v_ego ** 2 / (2.0 * effective_distance)
     comfort_brake = float(np.clip(
-      max(base_brake, required_brake * decel_margin),
-      base_brake,
+      max(base.comfort_brake, required_brake * base.decel_margin),
+      base.comfort_brake,
       MAX_TRAFFIC_STOP_BRAKE,
     ))
     # At higher approach speeds, begin changing acceleration more decisively.
     # Personality still shapes the ramp: relaxed is gentler, aggressive reacts
     # faster. Terminal catch keeps a safety floor independent of preference.
-    speed_jerk_scale = float(np.interp(v_ego * 3.6, [0.0, 30.0, 60.0, 90.0], [0.70, 0.85, 1.10, 1.25]))
-    jerk_limit = base_jerk * speed_jerk_scale
+    jerk_limit = base.jerk_limit * self._speed_jerk_scale(v_ego)
+    decel_margin = base.decel_margin
     if terminal:
       comfort_brake = MAX_TRAFFIC_STOP_BRAKE
       jerk_limit = max(jerk_limit, 1.0)
       decel_margin = max(decel_margin, 1.10)
     return _TrafficStopStyle(comfort_brake, jerk_limit, decel_margin)
 
-  def _traffic_activation_distance(self, sm) -> float:
-    """Use the same delayed, jerk-limited dynamics that generate the stop."""
-    personality = sm["selfdriveState"].personality
-    if personality == log.LongitudinalPersonality.relaxed:
-      activation_brake, activation_jerk = 2.2, 0.55
-    elif personality == log.LongitudinalPersonality.aggressive:
-      activation_brake, activation_jerk = 2.8, 1.10
-    else:
-      activation_brake, activation_jerk = 2.5, 0.80
-    v_ego = max(0.0, float(sm["carState"].vEgo))
-    speed_jerk_scale = float(np.interp(v_ego * 3.6, [0.0, 30.0, 60.0, 90.0], [0.70, 0.85, 1.10, 1.25]))
+  def _traffic_activation_distance(self, sm, *, yellow_admission: bool = False) -> float:
+    """Gate ownership with the stop executor's delay, jerk, and brake limits."""
+    style = self._base_stop_style(sm, yellow_admission=yellow_admission)
+    raw_v_ego = float(sm["carState"].vEgo)
+    raw_a_ego = float(sm["carState"].aEgo)
+    if not math.isfinite(raw_v_ego) or not math.isfinite(raw_a_ego):
+      return 200.0
+    v_ego = max(0.0, raw_v_ego)
     braking_distance = StopProfileGenerator.required_stop_distance(
-      v_ego=v_ego, a_ego=float(sm["carState"].aEgo),
+      v_ego=v_ego, a_ego=raw_a_ego,
       actuator_delay=self._actuator_delay + 0.2,
-      max_brake=activation_brake, jerk_limit=activation_jerk * speed_jerk_scale,
+      max_brake=style.comfort_brake,
+      jerk_limit=style.jerk_limit * self._speed_jerk_scale(v_ego),
     )
     # Reserve enough distance for 2 Hz signal cadence, one confirmation frame,
     # and style-preserving control convergence before the physical stop model
     # reaches its nominal boundary.
     return float(np.clip(braking_distance + 26.0, 20.0, 200.0))
 
-  def _traffic_stop_feasible(self, sm, remaining_distance: float) -> bool:
-    v_ego = max(0.0, float(sm["carState"].vEgo))
+  def _traffic_stop_feasible(self, sm, remaining_distance: float, phase: TrafficControlPhase) -> bool:
+    raw_v_ego = float(sm["carState"].vEgo)
+    a_ego = float(sm["carState"].aEgo)
+    if not all(math.isfinite(value) for value in (raw_v_ego, a_ego, remaining_distance)):
+      return False
+    v_ego = max(0.0, raw_v_ego)
+    if phase == TrafficControlPhase.yellowStop:
+      # A yellow STOP must be comfortable, not merely possible at the maximum
+      # emergency envelope. Aggressive admission is capped at Standard so the
+      # personality setting cannot turn a dilemma-zone PASS into a harsh stop.
+      style = self._base_stop_style(sm, yellow_admission=True)
+      max_brake = style.comfort_brake
+      jerk_limit = style.jerk_limit * self._speed_jerk_scale(v_ego)
+      uncertainty_margin = float(np.clip(
+        YELLOW_MARGIN_BASE + YELLOW_MARGIN_TIME * v_ego,
+        YELLOW_MARGIN_MIN,
+        YELLOW_MARGIN_MAX,
+      ))
+    else:
+      max_brake = MAX_TRAFFIC_STOP_BRAKE
+      jerk_limit = 1.1
+      uncertainty_margin = 0.0
     required_distance = StopProfileGenerator.required_stop_distance(
-      v_ego=v_ego, a_ego=float(sm["carState"].aEgo),
+      v_ego=v_ego, a_ego=a_ego,
       actuator_delay=self._actuator_delay + TERMINAL_LOOKAHEAD_S,
-      max_brake=MAX_TRAFFIC_STOP_BRAKE, jerk_limit=1.1,
+      max_brake=max_brake, jerk_limit=jerk_limit,
     )
-    return remaining_distance >= required_distance
+    return remaining_distance >= required_distance + uncertainty_margin
 
   def _apply_stop_constraint(self, plan, sm, *, remaining_distance: float,
                              hold: bool, terminal: bool) -> float:
@@ -369,9 +432,6 @@ class FinalPlanArbitrator:
       terminal=hold or terminal_stop,
     )
 
-    session_id = int(traffic.stopSessionId)
-    self._update_go_lead_gate(plan, sm, session_id, now_ns)
-
     if hold or terminal_stop:
       self._held_event_id = int(traffic.eventId)
       self._held_session_id = int(traffic.stopSessionId)
@@ -405,20 +465,24 @@ class FinalPlanArbitrator:
     if "radarState" not in sm.seen or not cls._healthy(sm, "radarState"):
       return False, False, False
     radar_state = sm["radarState"]
-    near = []
+    blocking_near = []
+    confirmable_near = []
     for lead in (radar_state.leadOne, radar_state.leadTwo):
       if not bool(getattr(lead, "present", False)):
-        near.append(False)
+        blocking_near.append(False)
+        confirmable_near.append(False)
         continue
       d_rel = float(getattr(lead, "dRel", float("nan")))
       # A malformed current lead is uncertain and therefore blocks this GO
       # cycle, but it can never permanently own a stop session.
-      near.append(not np.isfinite(d_rel) or d_rel <= 0.0 or d_rel <= START_NEAR_LEAD_DISTANCE)
-    any_near = any(near)
+      valid_distance = bool(np.isfinite(d_rel) and d_rel > 0.0)
+      blocking_near.append(not valid_distance or d_rel <= START_NEAR_LEAD_DISTANCE)
+      confirmable_near.append(valid_distance and d_rel <= START_NEAR_LEAD_DISTANCE)
+    any_near = any(blocking_near)
     selected_near = bool(
-      (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead0) and near[0])
-      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead1) and near[1])
-      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead2) and any_near)
+      (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead0) and confirmable_near[0])
+      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead1) and confirmable_near[1])
+      or (lead_source == int(log.LongitudinalPlan.LongitudinalPlanSource.lead2) and any(confirmable_near))
     )
     return True, any_near, selected_near
 
@@ -479,6 +543,39 @@ class FinalPlanArbitrator:
       not healthy
       or self._lead_delegated_session_id == session_id
       or self._near_lead_blocked_session_id == session_id
+    )
+
+  def _queue_stop_guard_distance(self, sm) -> float:
+    raw_v_ego = float(sm["carState"].vEgo)
+    a_ego = float(sm["carState"].aEgo)
+    if not math.isfinite(raw_v_ego) or not math.isfinite(a_ego):
+      return 200.0
+    v_ego = max(0.0, raw_v_ego)
+    style = self._base_stop_style(sm)
+    braking_distance = StopProfileGenerator.required_stop_distance(
+      v_ego=v_ego, a_ego=a_ego,
+      actuator_delay=self._actuator_delay + 0.2,
+      max_brake=style.comfort_brake,
+      jerk_limit=style.jerk_limit * self._speed_jerk_scale(v_ego),
+    )
+    return float(np.clip(max(QUEUE_STOP_LINE_GUARD, braking_distance),
+                         QUEUE_STOP_LINE_GUARD, 200.0))
+
+  def _queue_follow_owns_motion(self, plan, sm, traffic, now_ns: int) -> bool:
+    session_id = int(traffic.stopSessionId)
+    return bool(
+      session_id > 0
+      and self._lead_delegated_session_id == session_id
+      # STOP queue ownership requires a currently healthy, fully reconfirmed
+      # selected near lead. The permanent session bit remains only a GO veto;
+      # it cannot by itself release a red-light STOP for a stale/far lead slot.
+      and self._lead_candidate_session_id == session_id
+      and self._lead_candidate_since_ns > 0
+      and now_ns - self._lead_candidate_since_ns >= START_LEAD_CONFIRM_NS
+      and float(traffic.distanceToStopPoint) > self._queue_stop_guard_distance(sm)
+      and bool(getattr(plan, "hasLead", False))
+      and self._base_plan_lead_source(plan) is not None
+      and "radarState" in sm.seen and self._healthy(sm, "radarState")
     )
 
   def _start_block_reason(self, plan, sm, traffic, now_ns: int) -> TrafficStartBlockReason:
@@ -575,6 +672,23 @@ class FinalPlanArbitrator:
     self.diagnostics.traffic_a_target = traffic_a_target
     self.diagnostics.terminal_catch_active = v_ego > 0.01
 
+  def _apply_invalid_motion_fallback(self, plan) -> None:
+    holding = self._hold_latched
+    owned_stop = bool(holding or self._armed_stop_session_id != 0 or self._was_stopping)
+    self._profile.reset()
+    if not owned_stop:
+      return
+    # Motion geometry is unusable, so do not synthesize a trajectory. Preserve
+    # the last owned STOP's minimum current-control contract instead: never add
+    # throttle, never turn a known standstill HOLD into a resume, and never let
+    # Traffic itself introduce a positive acceleration.
+    plan.aTarget = min(float(plan.aTarget), 0.0)
+    if holding and self._hold_latched_should_stop:
+      plan.shouldStop = True
+    plan.allowThrottle = False
+    self.diagnostics.action = TrafficPlanAction.hold if holding else TrafficPlanAction.stop
+    self.diagnostics.traffic_a_target = 0.0
+
   def _apply_release(self, plan, sm) -> None:
     if not self._was_stopping:
       self._profile.reset()
@@ -614,6 +728,29 @@ class FinalPlanArbitrator:
     traffic = self._traffic(sm, now_ns)
     self._set_diagnostics_from_traffic(traffic)
 
+    if traffic is None:
+      self._traffic_service_gap = True
+    elif self._traffic_service_gap:
+      # Preserve a latched terminal STOP while the publisher is absent, but
+      # never let its executor/session identity leak through recovery. The
+      # producer may have restarted and reused numeric event/session IDs.
+      recovery_v_ego = float(sm["carState"].vEgo)
+      preserve_terminal_latch = bool(
+        self._hold_latched
+        and math.isfinite(recovery_v_ego)
+        and recovery_v_ego <= TERMINAL_MAX_SPEED
+        and int(traffic.phase) in STOP_CONTROL_PHASES
+      )
+      preserve_should_stop = self._hold_latched_should_stop
+      self._reset_control_state()
+      if preserve_terminal_latch:
+        # This is deliberately identity-free. It preserves only the minimum
+        # low-speed braking contract until a valid STOP can be re-established;
+        # it cannot make a restarted producer's reused session look owned.
+        self._hold_latched = True
+        self._hold_latched_should_stop = preserve_should_stop
+      self._traffic_service_gap = False
+
     if traffic is not None and int(traffic.mode) not in (
       int(TrafficControlMode.stopOnly), int(TrafficControlMode.stopGo),
     ):
@@ -651,33 +788,54 @@ class FinalPlanArbitrator:
       self.diagnostics.final_a_target = float(plan.aTarget)
       self.diagnostics.should_stop = bool(plan.shouldStop)
       return
-    stop_phases = (
-      int(TrafficControlPhase.approachRed), int(TrafficControlPhase.braking), int(TrafficControlPhase.hold),
-      int(TrafficControlPhase.flashingGreenStop), int(TrafficControlPhase.yellowStop),
-    )
+
+    motion_values = [float(sm["carState"].vEgo), float(sm["carState"].aEgo)]
+    if traffic is not None:
+      motion_values.append(float(traffic.distanceToStopPoint))
+    if not all(math.isfinite(value) for value in motion_values):
+      if signal_release:
+        self._was_stopping = False
+        self._armed_stop_session_id = 0
+        self._profile.reset()
+      else:
+        self._apply_invalid_motion_fallback(plan)
+      self._finalize_diagnostics(base_snapshot, plan)
+      return
     trackable_stop = bool(
       traffic is not None and traffic.targetPresent and float(traffic.confidence) >= 0.9
-      and int(traffic.phase) in stop_phases
+      and int(traffic.phase) in STOP_CONTROL_PHASES
     )
     if trackable_stop:
       session_id = int(traffic.stopSessionId)
       self._seen_stop_session_id = int(traffic.stopSessionId)
+      if self._armed_stop_session_id not in (0, session_id):
+        self._armed_stop_session_id = 0
       if self._rejected_stop_session_id not in (0, session_id):
         self._rejected_stop_session_id = 0
-      inside_horizon = bool(
-        int(traffic.phase) == int(TrafficControlPhase.hold)
-        or float(traffic.distanceToStopPoint) <= self._traffic_activation_distance(sm)
-      )
-      feasible = self._traffic_stop_feasible(sm, float(traffic.distanceToStopPoint))
-      if session_id not in (self._armed_stop_session_id, self._rejected_stop_session_id) and inside_horizon:
-        if feasible and traffic.stopControlAllowed:
-          self._armed_stop_session_id = session_id
-        elif not feasible:
-          # Make the ownership decision once. An initially impossible event
-          # cannot become a surprise terminal catch only because the base
-          # planner happened to slow the vehicle later.
-          self._rejected_stop_session_id = session_id
-    else:
+      decision_pending = session_id not in (self._armed_stop_session_id, self._rejected_stop_session_id)
+      if decision_pending:
+        phase = TrafficControlPhase(int(traffic.phase))
+        remaining_distance = float(traffic.distanceToStopPoint)
+        inside_horizon = bool(
+          phase == TrafficControlPhase.hold
+          or remaining_distance <= self._traffic_activation_distance(
+            sm, yellow_admission=phase == TrafficControlPhase.yellowStop,
+          )
+        )
+        if inside_horizon:
+          feasible = self._traffic_stop_feasible(sm, remaining_distance, phase)
+          if feasible and traffic.stopControlAllowed:
+            self._armed_stop_session_id = session_id
+          elif not feasible:
+            # Make the ownership decision once. An initially impossible or
+            # uncomfortable yellow event cannot become a surprise terminal
+            # catch only because the base planner slowed the vehicle later.
+            self._rejected_stop_session_id = session_id
+    elif traffic is None or int(traffic.stopSessionId) != self._armed_stop_session_id:
+      # Preserve an ownership decision across a transient target/phase/
+      # confidence gap only while the publisher still proves the same stop
+      # session. Service loss, a new session, or a cleared session cannot
+      # inherit the old decision (session counters may restart after a crash).
       self._armed_stop_session_id = 0
     stale_armed_grace = bool(
       trackable_stop and int(traffic.stopSessionId) == self._armed_stop_session_id
@@ -689,8 +847,18 @@ class FinalPlanArbitrator:
       trackable_stop and int(traffic.stopSessionId) == self._armed_stop_session_id
       and (traffic.stopControlAllowed or stale_armed_grace) and driver_allows_stop
     )
-    if active_stop:
+    if trackable_stop:
+      self._update_go_lead_gate(plan, sm, int(traffic.stopSessionId), now_ns)
+    queue_follow = bool(active_stop and self._queue_follow_owns_motion(plan, sm, traffic, now_ns))
+    if active_stop and not queue_follow:
       self._apply_stop(plan, sm, traffic, now_ns)
+    elif queue_follow:
+      # A currently confirmed close queue lead owns motion while the vehicle
+      # remains outside the personality-aware stop-line braking guard. Keep the
+      # Traffic session armed so its normal STOP resumes before the guard is
+      # consumed, without a hard ownership switch at 0.3 m/s.
+      self._was_stopping = False
+      self._profile.reset()
     elif traffic is not None and bool(traffic.plannerStartRequested) and int(traffic.lightState) == 2:
       if float(sm["carState"].vEgo) > MOVING_GREEN_SPEED:
         self.diagnostics.start_requested = True
@@ -723,12 +891,7 @@ class FinalPlanArbitrator:
         self._finish_start(self._active_start_session_id)
       self._apply_release(plan, sm)
 
-    self.diagnostics.final_a_target = float(plan.aTarget)
-    self.diagnostics.should_stop = bool(plan.shouldStop)
-    if self.diagnostics.applied and not self._plan_changed(base_snapshot, plan):
-      self.diagnostics.applied = False
-      self.diagnostics.action = TrafficPlanAction.none
-      self.diagnostics.start_applied = False
+    self._finalize_diagnostics(base_snapshot, plan)
 
   def annotate_plan_sp(self, plan_sp) -> None:
     diagnostics = self.diagnostics
