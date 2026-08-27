@@ -85,8 +85,10 @@ for usbgpu in [False, True] if USBGPU else [False]:
       continue
     raise
   camera_res_args = ' '.join(f'{cw}x{ch}' for cw, ch in CAMERA_CONFIGS)
-  # CPU 7 is isolated with isolcpus on AGNOS, so explicitly pin the compiler to it.
-  taskset = 'taskset -c 7 ' if arch == 'comma_arm64' else ''
+  # CPU 7 is isolated on standard AGNOS devices. C3XL has four CPUs, so pin
+  # compilation to the highest CPU that actually exists instead.
+  compile_cpu = min(7, max(0, (os.cpu_count() or 1) - 1))
+  taskset = f'taskset -c {compile_cpu} ' if arch == 'comma_arm64' else ''
   cmd = (f'{cmd_flags} {mac_brew_string} {taskset}python3 {modeld_dir}/compile_modeld.py '
         f'--model-size {model_w}x{model_h} '
         f'--camera-resolutions {camera_res_args} '
