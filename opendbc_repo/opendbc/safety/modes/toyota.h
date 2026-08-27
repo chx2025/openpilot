@@ -276,41 +276,37 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       lta_angle = to_signed(lta_angle, 16);
 
       bool steer_control_enabled = lta_request || lta_request2;
-      if (!toyota_lta) {
-        // using torque (LKA), block LTA msgs with actuation requests
-        if (steer_control_enabled || (lta_angle != 0) || (torque_wind_down != 0)) {
-          tx = false;
-        }
-      } else {
-        // check angle rate limits and inactive angle
-        if (steer_angle_cmd_checks(lta_angle, steer_control_enabled, TOYOTA_ANGLE_STEERING_LIMITS)) {
-          tx = false;
-        }
 
-        if (lta_request != lta_request2) {
-          tx = false;
-        }
+      // dp: 動態 Torque/Angle 熱切換（比照 sunnypilot）：LTA 不再因 toyota_lta 靜態旗標被整條擋死，
+      // 永遠做角度速率/範圍檢查，讓 carcontroller.py 可以在同一顆 ECU 上依情況切換使用哪一個通道。
+      // 兩通道互斥（同一時刻只能有一個在動）改由軟體端（carcontroller.py 會把未使用的通道歸零）保證。
+      if (steer_angle_cmd_checks(lta_angle, steer_control_enabled, TOYOTA_ANGLE_STEERING_LIMITS)) {
+        tx = false;
+      }
 
-        // TORQUE_WIND_DOWN is gated on steer request
-        if (!steer_control_enabled && (torque_wind_down != 0)) {
-          tx = false;
-        }
+      if (lta_request != lta_request2) {
+        tx = false;
+      }
 
-        // TORQUE_WIND_DOWN can only be no or full torque
-        if ((torque_wind_down != 0) && (torque_wind_down != 100)) {
-          tx = false;
-        }
+      // TORQUE_WIND_DOWN is gated on steer request
+      if (!steer_control_enabled && (torque_wind_down != 0)) {
+        tx = false;
+      }
 
-        // check if we should wind down torque
-        int driver_torque = SAFETY_MIN(SAFETY_ABS(torque_driver.min), SAFETY_ABS(torque_driver.max));
-        if ((driver_torque > TOYOTA_LTA_MAX_DRIVER_TORQUE) && (torque_wind_down != 0)) {
-          tx = false;
-        }
+      // TORQUE_WIND_DOWN can only be no or full torque
+      if ((torque_wind_down != 0) && (torque_wind_down != 100)) {
+        tx = false;
+      }
 
-        int eps_torque = SAFETY_MIN(SAFETY_ABS(torque_meas.min), SAFETY_ABS(torque_meas.max));
-        if ((eps_torque > TOYOTA_LTA_MAX_MEAS_TORQUE) && (torque_wind_down != 0)) {
-          tx = false;
-        }
+      // check if we should wind down torque
+      int driver_torque = SAFETY_MIN(SAFETY_ABS(torque_driver.min), SAFETY_ABS(torque_driver.max));
+      if ((driver_torque > TOYOTA_LTA_MAX_DRIVER_TORQUE) && (torque_wind_down != 0)) {
+        tx = false;
+      }
+
+      int eps_torque = SAFETY_MIN(SAFETY_ABS(torque_meas.min), SAFETY_ABS(torque_meas.max));
+      if ((eps_torque > TOYOTA_LTA_MAX_MEAS_TORQUE) && (torque_wind_down != 0)) {
+        tx = false;
       }
     }
 
@@ -333,15 +329,10 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       int desired_torque = (msg->data[1] << 8) | msg->data[2];
       desired_torque = to_signed(desired_torque, 16);
       bool steer_req = GET_BIT(msg, 0U);
-      // When using LTA (angle control), assert no actuation on LKA message
-      if (!toyota_lta) {
-        if (steer_torque_cmd_checks(desired_torque, steer_req, TOYOTA_TORQUE_STEERING_LIMITS)) {
-          tx = false;
-        }
-      } else {
-        if ((desired_torque != 0) || steer_req) {
-          tx = false;
-        }
+      // dp: 動態 Torque/Angle 熱切換（比照 sunnypilot）：LKA 不再因 toyota_lta 靜態旗標被整條擋死，
+      // 永遠做力矩速率/範圍檢查。同上，兩通道互斥改由軟體端保證。
+      if (steer_torque_cmd_checks(desired_torque, steer_req, TOYOTA_TORQUE_STEERING_LIMITS)) {
+        tx = false;
       }
     }
   }
