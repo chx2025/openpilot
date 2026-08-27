@@ -307,7 +307,7 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  def update(self, radarstate, personality=log.LongitudinalPersonality.standard):
+  def update(self, radarstate, personality=log.LongitudinalPersonality.standard, traffic_stop_obstacle_m=None):
     t_follow = get_T_FOLLOW(personality)
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
@@ -319,8 +319,23 @@ class LongitudinalMpc:
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
-    x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle])
-    self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
+    obstacle_cols = [lead_0_obstacle, lead_1_obstacle]
+    obstacle_sources = list(MPC_SOURCES)
+
+    if traffic_stop_obstacle_m is not None:
+      # Traffic-light / stop-sign virtual stop-line obstacle (sunnypilot addition, ported from
+      # carrot). Represented as an N+1-timestep column of the same constant distance -- i.e. a
+      # lead car with zero relative speed that never moves -- so it collapses into the same
+      # np.min() below as any other obstacle. No acados model change needed.
+      # NOTE: LongitudinalPlanSource has no dedicated enum value for this source; `cruise` is
+      # borrowed purely for telemetry/debug display and has no effect on the actual braking.
+      # traffic_stop_obstacle_m already has TrafficStopDistanceAdjust applied by
+      # TrafficStopController -- do not apply any further offset here.
+      obstacle_cols.append(np.full(N + 1, traffic_stop_obstacle_m))
+      obstacle_sources.append(LongitudinalPlanSource.cruise)
+
+    x_obstacles = np.column_stack(obstacle_cols)
+    self.source = obstacle_sources[int(np.argmin(x_obstacles[0]))]
 
     self.yref[:,:] = 0.0
     for i in range(N):
