@@ -94,10 +94,12 @@ class ManagerDownloadTestBase(OpenpilotTestCase):
     self.dest = self._tmp.name
 
     self.reported: list[float] = []
+    self.reported_statuses: list[int] = []
 
     self.manager = ModelManagerSP.__new__(ModelManagerSP)
     self.manager.params = mock.MagicMock()
     self.manager.params.get.return_value = b'0'  # not cancelled
+    self.manager._download_ref = b'0'
     self.manager.pm = mock.MagicMock()
     self.manager.pm.send.side_effect = self._record_progress
     self.manager.selected_bundle = None
@@ -113,6 +115,7 @@ class ManagerDownloadTestBase(OpenpilotTestCase):
     artifact = getattr(self, 'artifact', None)
     if artifact is not None:
       self.reported.append(float(artifact.downloadProgress.progress))
+      self.reported_statuses.append(getattr(artifact.downloadProgress.status, 'raw', artifact.downloadProgress.status))
 
   def make_artifact(self, chunked: bool):
     bundle = custom.ModelManagerSP.ModelBundle.new_message()
@@ -149,17 +152,23 @@ class TestManagerDownload(ManagerDownloadTestBase):
       self.base_url = f'http://{host}:{port}'
       return fn()
 
-  def test_download_request_is_bound_to_stable_bundle_ref(self):
-    bundle = custom.ModelManagerSP.ModelBundle.new_message()
-    bundle.ref = "lm-usbgpu"
-    self.manager.selected_bundle = bundle
-    self.manager.params.get.side_effect = lambda key: "other-ref" if key == "ModelManager_DownloadRef" else None
+  def test_replaced_download_ref_queues_instead_of_cancelling(self):
+    self.manager.params.get.return_value = b"other-ref"
+    self.manager._download_ref = b"current-ref"
 
-    assert not self.manager._download_requested()
+    assert not self.manager._download_interrupted()
 
-    self.manager.params.get.side_effect = lambda key: "lm-usbgpu" if key == "ModelManager_DownloadRef" else None
+  def test_removed_download_ref_cancels(self):
+    self.manager.params.get.return_value = None
+    assert self.manager._download_interrupted()
 
-    assert self.manager._download_requested()
+  def test_release_keeps_a_newer_queued_ref(self):
+    self.manager.params.get.return_value = b"new-ref"
+    self.manager._download_ref = b"old-ref"
+
+    self.manager._release_download_ref()
+
+    self.manager.params.remove.assert_not_called()
 
   def test_download_file_writes_exact_bytes(self):
     def body():
@@ -214,11 +223,30 @@ class TestManagerDownload(ManagerDownloadTestBase):
 
       assert any(0.0 < progress < 100.0 for progress in self.reported)
       assert self.reported[-1] == 100.0
+      assert custom.ModelManagerSP.DownloadStatus.verifying in self.reported_statuses
       assert artifact.downloadProgress.status == custom.ModelManagerSP.DownloadStatus.cached
       assert DownloadHandler.request_paths == []
       with open(get_manifest_path(base_path)) as f:
         assert f.read() == str(len(CHUNK_BODIES))
 
+    self.run_with_server(body)
+
+  def test_resume_skips_valid_chunks(self):
+    """A valid chunk already on disk is retained and the transfer resumes after it."""
+    def body():
+      artifact = self.make_artifact(chunked=True)
+      base_path = os.path.join(self.dest, artifact.fileName)
+      with open(get_chunk_name(base_path, 0, len(CHUNK_BODIES)), 'wb') as f:
+        f.write(CHUNK_BODIES[0])
+
+      asyncio.run(self.manager._process_artifact(artifact, self.dest))
+
+      chunk0_suffix = get_chunk_name('', 0, len(CHUNK_BODIES))
+      assert not any(path.endswith(chunk0_suffix) for path in DownloadHandler.request_paths)
+      for i, expected in enumerate(CHUNK_BODIES):
+        with open(get_chunk_name(base_path, i, len(CHUNK_BODIES)), 'rb') as f:
+          assert f.read() == expected
+      assert min(self.reported) >= (1 / len(CHUNK_BODIES)) * 100 - 1
     self.run_with_server(body)
 
   def test_session_is_reused_across_chunks(self):
@@ -340,7 +368,7 @@ class TestManagerDownload(ManagerDownloadTestBase):
 
     assert statuses == [custom.ModelManagerSP.DownloadStatus.downloading]
 
-  def test_selecting_active_bundle_clears_request_without_downloading(self):
+  def test_selecting_active_bundle_reverifies_and_clears_request(self):
     class StopLoop(BaseException):
       pass
 
@@ -370,7 +398,7 @@ class TestManagerDownload(ManagerDownloadTestBase):
       self.manager.main_thread()
 
     self.manager.params.remove.assert_any_call("ModelManager_DownloadRef")
-    self.manager.download.assert_not_called()
+    self.manager.download.assert_called_once_with(bundle, manager_module.Paths.model_root(), "qcom")
 
   def test_repeat_downloads_are_stable(self):
     """Back-to-back runs must produce identical bytes and leak no start-time state."""
@@ -410,6 +438,29 @@ class TestManagerDownload(ManagerDownloadTestBase):
     assert os.path.isfile(os.path.join(self.dest, "usbgpu.pkl"))
     assert not os.path.exists(os.path.join(self.dest, "unused.pkl"))
 
+  def test_queued_selection_starts_after_current_download_in_same_tick(self):
+    first = custom.ModelManagerSP.ModelBundle.new_message()
+    first.ref = "first"
+    second = custom.ModelManagerSP.ModelBundle.new_message()
+    second.ref = "second"
+    self.manager.source_models = {"qcom": [first], "usbgpu": [second]}
+    store = {"ModelManager_DownloadRef": "first"}
+    self.manager.params.get.side_effect = store.get
+    self.manager.params.remove.side_effect = lambda key: store.pop(key, None)
+    downloads = []
+
+    def download(bundle, destination, source):
+      downloads.append((bundle.ref, source))
+      if bundle.ref == "first":
+        store["ModelManager_DownloadRef"] = "second"
+
+    self.manager.download = download
+
+    self.manager._process_download_requests()
+
+    assert downloads == [("first", "qcom"), ("second", "usbgpu")]
+    assert "ModelManager_DownloadRef" not in store
+
 
 class TestManagerImports(OpenpilotTestCase):
   """Catches undeclared dependencies. aiohttp lived only in the AGNOS venv; 19.6 dropped
@@ -426,6 +477,9 @@ class TestManagerImports(OpenpilotTestCase):
   def test_download_timeout_is_explicit(self):
     connect, read = manager_module.DOWNLOAD_TIMEOUT
     assert connect > 0 and read > 0, "requests defaults to no timeout; downloads would hang forever"
+
+  def test_verifying_download_status_is_available(self):
+    assert custom.ModelManagerSP.DownloadStatus.verifying == 5
 
 
 @unittest.skipUnless(os.environ.get('RUN_INTEGRATION_TESTS'), 'requires external network')

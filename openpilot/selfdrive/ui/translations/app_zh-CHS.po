@@ -2761,3 +2761,99 @@ msgstr "Tesla Speed Button CAN Test"
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Tesla Turn Signal CAN Test"
 msgstr "Tesla Turn Signal CAN Test"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big Model"
+msgstr "大模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big model unavailable until the next drive."
+msgstr "大模型不可用，将在下次行驶时重试。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big model unavailable, {} is driving until the next drive."
+msgstr "大模型不可用，{} 将运行至下次行驶。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Cancel Verification"
+msgstr "取消验证"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Getting the big model ready."
+msgstr "正在准备大模型。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "No models are available for this hardware yet. Connect to the internet and refresh the model list."
+msgstr "此硬件暂无可用模型。请连接网络并刷新模型列表。"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "No models available"
+msgstr "暂无可用模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Small Model"
+msgstr "小模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "active"
+msgstr "使用中"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "big"
+msgstr "大"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "big model"
+msgstr "大模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "big models"
+msgstr "大模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "cancel verification"
+msgstr "取消验证"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "downloaded"
+msgstr "已下载"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "getting ready"
+msgstr "正在准备"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "queued"
+msgstr "等待中"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "small"
+msgstr "小"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "small model"
+msgstr "小模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "small models"
+msgstr "小模型"
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "unavailable"
+msgstr "不可用"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "verifying"
+msgstr "正在验证"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} drives until the big model is ready."
+msgstr "大模型准备完成前，由 {} 运行。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} will drive when the eGPU is ready."
+msgstr "eGPU 准备完成后，由 {} 运行。"
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} will drive. If it fails during a drive, {} takes over until the next drive."
+msgstr "由 {} 运行。若行驶中失败，{} 将接管至下次行驶。"

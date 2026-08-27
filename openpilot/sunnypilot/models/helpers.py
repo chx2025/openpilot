@@ -277,12 +277,13 @@ def get_active_model_runner(params: Params | None = None, force_check: bool = Fa
   return runner_type
 
 
-def select_default_model(params: Params | None = None) -> None:
+def select_default_model(params: Params | None = None, source: str | None = None) -> None:
   """Atomically make the built-in stock runner win over pending bundle work."""
   params = params or Params()
   params.remove("ModelManager_DownloadRef")
   params.remove("ModelManager_DownloadIndex")
-  source = get_active_source(params)
+  source = source or get_active_source(params)
+  params.put("ModelManager_ActiveSource", source, block=True)
   params.remove(ACTIVE_BUNDLE_KEYS[source])
   params.remove("ModelManager_ActiveBundleRequiresUsbGpu")
   params.put("ModelRunnerTypeCache", int(custom.ModelManagerSP.Runner.stock), block=True)

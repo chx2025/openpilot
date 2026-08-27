@@ -25,6 +25,10 @@ from openpilot.sunnypilot.models.helpers import (ACTIVE_BUNDLE_KEYS, bundle_requ
 DOWNLOAD_TIMEOUT = (30, 30)
 
 
+class DownloadCancelled(Exception):
+  pass
+
+
 class ModelManagerSP:
   """Manages model downloads and status reporting"""
 
@@ -38,23 +42,17 @@ class ModelManagerSP:
     self.active_bundle: custom.ModelManagerSP.ModelBundle = get_active_bundle(self.params)
     self._chunk_size = 128 * 1000  # 128 KB chunks
     self._download_start_times: dict[str, float] = {}  # Track start time per model
+    self._download_ref: bytes | str | None = None
 
-  def _download_requested(self) -> bool:
-    requested_ref = self.params.get("ModelManager_DownloadRef")
-    if requested_ref is not None:
-      return self.selected_bundle is None or not self.selected_bundle.ref or requested_ref == self.selected_bundle.ref
+  def _download_interrupted(self) -> bool:
+    # Removing the ref means cancel. Replacing it queues another selection;
+    # the current transfer finishes and leaves the newer ref untouched.
+    return self.params.get("ModelManager_DownloadRef") is None
 
-    # One-release compatibility for a request created by the previous UI
-    # before params migration runs.
-    requested_index = self.params.get("ModelManager_DownloadIndex")
-    if requested_index is None:
-      return False
-    if self.selected_bundle is None:
-      return True
-    try:
-      return int(requested_index) == int(self.selected_bundle.index)
-    except (TypeError, ValueError):
-      return False
+  def _release_download_ref(self) -> None:
+    if self.params.get("ModelManager_DownloadRef") == self._download_ref:
+      self.params.remove("ModelManager_DownloadRef")
+    self._download_ref = None
 
   def _sync_artifact_progress(self, source_artifact) -> None:
     """Mirror download progress to all artifacts sharing the same filename in the selected bundle."""
@@ -96,8 +94,8 @@ class ModelManagerSP:
           f.write(chunk)
           bytes_downloaded += len(chunk)
 
-          if not self._download_requested():
-            raise Exception("Download cancelled")
+          if self._download_interrupted():
+            raise DownloadCancelled("Download cancelled")
 
           if total_size > 0:
             progress = (bytes_downloaded / total_size) * 100
@@ -110,7 +108,8 @@ class ModelManagerSP:
     # Clean up start time after download completes
     del self._download_start_times[model.fileName]
 
-  async def _download_chunked(self, base_url: str, base_path: str, artifact) -> None:
+  async def _download_chunked(self, base_url: str, base_path: str, artifact,
+                              skip: frozenset[int] | set[int] = frozenset()) -> None:
     from openpilot.common.file_chunker import get_chunk_name, get_manifest_path
 
     num_chunks = len(artifact.chunks)
@@ -122,8 +121,11 @@ class ModelManagerSP:
 
     # Shared connection saves a TCP+TLS handshake per chunk.
     # Keep sequential: the link saturates on one stream and Session is not thread-safe.
+    completed = len(skip)
     with requests.Session() as session:
       for i, _ in enumerate(artifact.chunks):
+        if i in skip:
+          continue
         chunk_url = get_chunk_name(base_url, i, num_chunks)
         chunk_path = get_chunk_name(base_path, i, num_chunks)
         chunk_downloaded = 0
@@ -134,15 +136,16 @@ class ModelManagerSP:
             for data in response.iter_content(chunk_size=self._chunk_size):
               f.write(data)
               chunk_downloaded += len(data)
-              if not self._download_requested():
-                raise Exception("Download cancelled")
+              if self._download_interrupted():
+                raise DownloadCancelled("Download cancelled")
               intra = chunk_downloaded / max(chunk_size, 1)
-              progress = min(99.0, ((i + intra) / num_chunks) * 100)
+              progress = min(99.0, ((completed + intra) / num_chunks) * 100)
               artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.downloading
               artifact.downloadProgress.progress = progress
               artifact.downloadProgress.eta = self._calculate_eta(artifact.fileName, progress)
               self._sync_artifact_progress(artifact)
               self._report_status()
+        completed += 1
 
     with open(manifest_path, 'w') as f:  # noqa: ASYNC230
       f.write(str(num_chunks))
@@ -153,6 +156,8 @@ class ModelManagerSP:
   async def _process_artifact(self, artifact, destination_path: str) -> None:
     if not artifact.downloadUri.uri:
       return None
+    if self._download_interrupted():
+      raise DownloadCancelled("Download cancelled")
 
     url = artifact.downloadUri.uri
     expected_hash = artifact.downloadUri.sha256
@@ -161,20 +166,20 @@ class ModelManagerSP:
 
     try:
       is_cached = False
+      valid_chunks: set[int] = set()
       if len(artifact.chunks) > 0:
         from openpilot.common.file_chunker import get_chunk_name
         num_chunks = len(artifact.chunks)
-        chunks_valid = True
         for i, chunk in enumerate(artifact.chunks):
-          chunk_path = get_chunk_name(full_path, i, num_chunks)
-          if not await verify_file(chunk_path, chunk.sha256):
-            chunks_valid = False
-            break
-          artifact.downloadProgress.progress = ((i + 1) / num_chunks) * 100
+          if self._download_interrupted():
+            raise DownloadCancelled("Download cancelled")
+          if await verify_file(get_chunk_name(full_path, i, num_chunks), chunk.sha256):
+            valid_chunks.add(i)
+          artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.verifying
+          artifact.downloadProgress.progress = (len(valid_chunks) / num_chunks) * 100
           self._sync_artifact_progress(artifact)
           self._report_status()
-        if chunks_valid and num_chunks > 0:
-          is_cached = True
+        is_cached = len(valid_chunks) == num_chunks
       else:
         if await verify_file(full_path, expected_hash):
           is_cached = True
@@ -192,7 +197,7 @@ class ModelManagerSP:
         return
 
       if len(artifact.chunks) > 0:
-        await self._download_chunked(url, full_path, artifact)
+        await self._download_chunked(url, full_path, artifact, skip=valid_chunks)
         from openpilot.common.file_chunker import get_chunk_name
         for i, chunk in enumerate(artifact.chunks):
           chunk_path = get_chunk_name(full_path, i, len(artifact.chunks))
@@ -208,6 +213,17 @@ class ModelManagerSP:
       artifact.downloadProgress.eta = 0
       self._sync_artifact_progress(artifact)
       self._report_status()
+
+    except DownloadCancelled:
+      # A cancel keeps complete chunks so the next attempt can resume.
+      self._download_start_times.pop(artifact.fileName, None)
+      artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.failed
+      artifact.downloadProgress.eta = 0
+      self._sync_artifact_progress(artifact)
+      if self.selected_bundle:
+        self.selected_bundle.status = custom.ModelManagerSP.DownloadStatus.failed
+      self._report_status()
+      raise
 
     except Exception as e:
       cloudlog.error(f"Error downloading {filename}: {str(e)}")
@@ -266,8 +282,8 @@ class ModelManagerSP:
 
       # Cached artifacts can complete without entering a transfer loop. Recheck
       # the request before activation so a simultaneous Default selection wins.
-      if not self._download_requested():
-        raise Exception("Download cancelled")
+      if self._download_interrupted():
+        raise DownloadCancelled("Download cancelled")
 
       self.active_bundle = self.selected_bundle
       self.active_bundle.status = custom.ModelManagerSP.DownloadStatus.downloaded
@@ -290,6 +306,27 @@ class ModelManagerSP:
     """Main entry point for downloading a model bundle"""
     asyncio.run(self._download_bundle(model_bundle, destination_path, source))
 
+  def _process_download_requests(self) -> None:
+    # A selection made during a transfer remains queued. Loop so it starts in
+    # the same manager tick without a one-second idle flash in the UI.
+    last_ref = None
+    while (ref_to_download := self.params.get("ModelManager_DownloadRef")) is not None:
+      if ref_to_download == last_ref:
+        return
+      last_ref = ref_to_download
+      resolved = resolve_bundle_by_ref(ref_to_download, self.source_models)
+      if not resolved:
+        return
+      model_to_download, source = resolved
+      self._download_ref = ref_to_download
+      try:
+        self.download(model_to_download, Paths.model_root(), source)
+      except Exception as e:
+        cloudlog.exception(e)
+      finally:
+        self._release_download_ref()
+        self.selected_bundle = None
+
   def main_thread(self) -> None:
     """Main thread for model management"""
     rk = Ratekeeper(1, print_delay_threshold=None)
@@ -304,25 +341,10 @@ class ModelManagerSP:
         validate_active_bundles(self.params, self.source_models)
         self.active_bundle = get_active_bundle(self.params)
 
-        if (ref_to_download := self.params.get("ModelManager_DownloadRef")) is not None:
-          if resolved := resolve_bundle_by_ref(ref_to_download, self.source_models):
-            model_to_download, source = resolved
-            try:
-              selected = get_selected_bundle(self.params, source)
-              if selected is not None and selected.ref == ref_to_download:
-                self.params.put("ModelManager_ActiveSource", source, block=True)
-                self.active_bundle = selected
-              else:
-                self.download(model_to_download, Paths.model_root(), source)
-            except Exception as e:
-              cloudlog.exception(e)
-            finally:
-              if self.params.get("ModelManager_DownloadRef") == ref_to_download:
-                self.params.remove("ModelManager_DownloadRef")
-              self.selected_bundle = None
+        self._process_download_requests()
 
         # One-release compatibility for a request left by the previous UI.
-        elif (index_to_download := self.params.get("ModelManager_DownloadIndex")) is not None:
+        if (index_to_download := self.params.get("ModelManager_DownloadIndex")) is not None:
           if model_to_download := next((model for model in self.available_models if model.index == index_to_download), None):
             source = "usbgpu" if bundle_requires_usbgpu(model_to_download) else "qcom"
             try:

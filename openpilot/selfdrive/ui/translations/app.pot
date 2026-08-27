@@ -2758,3 +2758,99 @@ msgstr ""
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
 msgid "Tesla Turn Signal CAN Test"
 msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big Model"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big model unavailable until the next drive."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big model unavailable, {} is driving until the next drive."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Cancel Verification"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Getting the big model ready."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "No models are available for this hardware yet. Connect to the internet and refresh the model list."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "No models available"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Small Model"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "active"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "big"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "big model"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "big models"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "cancel verification"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "downloaded"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "getting ready"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "queued"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "small"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "small model"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "small models"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "unavailable"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py openpilot/selfdrive/ui/sunnypilot/mici/layouts/models.py
+msgid "verifying"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} drives until the big model is ready."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} will drive when the eGPU is ready."
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} will drive. If it fails during a drive, {} takes over until the next drive."
+msgstr ""
