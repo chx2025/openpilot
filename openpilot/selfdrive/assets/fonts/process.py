@@ -20,7 +20,7 @@ SOURCE_DIRS = [
   ROOT_DIR / "dragonpilot",
 ]
 
-GLYPH_PADDING = 6
+GLYPH_PADDING = 2
 EXTRA_CHARS = "–‑✓×°§•X⚙✕◀▶✔⌫⇧␣○●↳çêüñ–‑✓×°§•€£¥"
 UNIFONT_LANGUAGES = {"th", "zh-CHT", "zh-CHS", "ko", "ja"}
 
@@ -138,7 +138,7 @@ def _write_bmfont(path: Path, font_size: int, face: str, atlas_name: str, line_h
 
 def _process_font(font_path: Path, codepoints: tuple[int, ...], output_name: str | None = None):
   stem = output_name or font_path.stem
-  font_size = 48 if font_path.stem.lower().startswith("opfont") else 200
+  font_size = 48 if font_path.stem.lower().startswith("opfont") else 100
   print(f"Processing {font_path.name} -> {stem} ({len(codepoints)} glyphs @ {font_size}px)...")
 
   data = font_path.read_bytes()
