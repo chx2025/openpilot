@@ -28,7 +28,7 @@ class TeslaSettings(BrandSettings):
       param="TeslaMadsScreenButton",
       inline=False,
     )
-    self.items = [self.control_profile.browser_driving_information, self.control_profile.radar_backend, self.coop_steering_toggle,
+    self.items = [self.control_profile.radar_backend, self.coop_steering_toggle,
                   self.mads_screen_button, self.control_profile.traffic_control_mode,
                   self.control_profile.traffic_stop_reference,
                   self.control_profile.traffic_control_max_speed,

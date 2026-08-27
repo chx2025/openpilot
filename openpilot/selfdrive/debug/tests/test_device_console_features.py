@@ -35,6 +35,19 @@ def test_driving_status_route_returns_snapshot(monkeypatch, server):
     assert json.loads(response.read()) == snapshot
 
 
+def test_driving_page_contains_oem_sp_comparison_charts(monkeypatch):
+  monkeypatch.setattr(device_console, "driving_status_enabled", lambda: True)
+
+  page = device_console.render_page().decode()
+
+  for chart_id in ("lateral-chart", "accel-chart", "speed-chart", "lane-chart"):
+    assert f'id="{chart_id}"' in page
+  assert "0x488" in page
+  assert "0x2B9" in page
+  assert "0x209" in page
+  assert "SP / FSD 车道线" in page
+
+
 def test_turn_signal_route_starts_requested_direction(monkeypatch, server):
   requested = []
   monkeypatch.setattr(device_console, "_ACTIVE_WEB_TEST_ID", None)

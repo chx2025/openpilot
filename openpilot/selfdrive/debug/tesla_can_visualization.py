@@ -13,6 +13,8 @@ from opendbc.can import CANParser
 
 
 DBC_NAME = "tesla_modely_hw4_perception"
+CONTROL_DBC_NAME = "tesla_model3_party"
+CONTROL_MESSAGES = ("DAS_steeringControl", "DAS_control")
 VEH_MESSAGES = (
   "UI_driverAssistMapData",
   "PARK_oocStatus",
@@ -170,7 +172,14 @@ class TeslaCanVisualization:
       bus: CANParser(DBC_NAME, [(name, math.nan) for name in names], bus)
       for bus, names in message_buses.items()
     }
+    self.control_parsers = {
+      bus: CANParser(CONTROL_DBC_NAME, [(name, math.nan) for name in CONTROL_MESSAGES], bus)
+      # Deterministic order makes AP-PARTY (2) win over PARTY (0) when the
+      # harness mirrors one wire frame onto both sources with one timestamp.
+      for bus in sorted(enabled_buses.intersection((0, 2)))
+    }
     self.frames: dict[str, tuple[dict[str, float], int, int]] = {}
+    self.control_frames: dict[str, tuple[dict[str, float], int, int]] = {}
     self.object_frames: dict[int, tuple[dict[str, float], int, int]] = {}
     self.road_sign_frames: dict[int, tuple[dict[str, float], int, int]] = {}
     self.long_control_frames: dict[int, tuple[dict[str, float], int, int]] = {}
@@ -181,6 +190,7 @@ class TeslaCanVisualization:
 
   def reset(self) -> None:
     self.frames.clear()
+    self.control_frames.clear()
     self.object_frames.clear()
     self.road_sign_frames.clear()
     self.long_control_frames.clear()
@@ -284,6 +294,17 @@ class TeslaCanVisualization:
           if timestamp and (previous is None or timestamp >= previous[1]):
             self.veh_mux_frames[name][mux] = (values, timestamp, bus)
 
+    for bus, parser in self.control_parsers.items():
+      updated = parser.update(can_packets)
+      for name in CONTROL_MESSAGES:
+        message = parser.dbc.name_to_msg[name]
+        if message.address not in updated:
+          continue
+        timestamp = max(parser.ts_nanos[name].values(), default=0)
+        previous = self.control_frames.get(name)
+        if timestamp and (previous is None or timestamp >= previous[1]):
+          self.control_frames[name] = (dict(parser.vl[name]), timestamp, bus)
+
   @staticmethod
   def _fresh(frame: tuple[dict[str, float], int, int] | None, now_ns: int, stale_ns: int = FRAME_STALE_NS) -> bool:
     return frame is not None and frame[1] > 0 and 0 <= now_ns - frame[1] <= stale_ns
@@ -291,6 +312,37 @@ class TeslaCanVisualization:
   def _frame(self, name: str, now_ns: int, stale_ns: int = FRAME_STALE_NS) -> tuple[dict[str, float], int, int] | None:
     frame = self.frames.get(name)
     return frame if self._fresh(frame, now_ns, stale_ns) else None
+
+  def _control_frame(self, name: str, now_ns: int) -> tuple[dict[str, float], int, int] | None:
+    frame = self.control_frames.get(name)
+    return frame if self._fresh(frame, now_ns) else None
+
+  def _actuation_commands(self, now_ns: int) -> dict[str, Any]:
+    steering_frame = self._control_frame("DAS_steeringControl", now_ns)
+    cruise_frame = self._control_frame("DAS_control", now_ns)
+    steering = steering_frame[0] if steering_frame else {}
+    cruise = cruise_frame[0] if cruise_frame else {}
+    return {
+      "steering": {
+        "available": bool(steering_frame),
+        "address": "0x488",
+        "bus": self._bus(steering_frame),
+        "angle_request_deg": _measurement(steering, "DAS_steeringAngleRequest"),
+        "control_type": _int(steering, "DAS_steeringControlType") if steering_frame else None,
+        "haptic_request": _bool(steering, "DAS_steeringHapticRequest") if steering_frame else False,
+      },
+      "cruise": {
+        "available": bool(cruise_frame),
+        "address": "0x2B9",
+        "bus": self._bus(cruise_frame),
+        "set_speed_kph": _measurement(cruise, "DAS_setSpeed", (409.5,)),
+        "accel_min_mps2": _measurement(cruise, "DAS_accelMin", (5.44,)),
+        "accel_max_mps2": _measurement(cruise, "DAS_accelMax", (5.44,)),
+        "jerk_min_mps3": _measurement(cruise, "DAS_jerkMin", (0.098,)),
+        "jerk_max_mps3": _measurement(cruise, "DAS_jerkMax", (8.67,)),
+        "acc_state": _int(cruise, "DAS_accState") if cruise_frame else None,
+      },
+    }
 
   def _object_frame(self, mux: int, now_ns: int) -> tuple[dict[str, float], int, int] | None:
     frame = self.object_frames.get(mux)
@@ -1065,6 +1117,7 @@ class TeslaCanVisualization:
     blind_spot = self._blind_spot(now_ns)
     front_safety = self._front_safety(now_ns)
     longitudinal_shadow = self._longitudinal_shadow(now_ns)
+    actuation_commands = self._actuation_commands(now_ns)
     proximity_safety = self._proximity_safety(now_ns)
     parking_obstacle = self._parking_obstacle(now_ns)
     road_disturbance = self._road_disturbance(now_ns)
@@ -1089,6 +1142,8 @@ class TeslaCanVisualization:
       *([blind_spot["bus"]] if blind_spot.get("bus") else []),
       *([front_safety["bus"]] if front_safety.get("bus") else []),
       *([longitudinal_shadow["bus"]] if longitudinal_shadow.get("bus") else []),
+      *([actuation_commands["steering"]["bus"]] if actuation_commands["steering"].get("bus") else []),
+      *([actuation_commands["cruise"]["bus"]] if actuation_commands["cruise"].get("bus") else []),
       *([proximity_safety["bus"]] if proximity_safety.get("bus") else []),
       *([parking_obstacle["bus"]] if parking_obstacle.get("bus") else []),
       *([road_disturbance["bus"]] if road_disturbance.get("bus") else []),
@@ -1102,7 +1157,8 @@ class TeslaCanVisualization:
     return {
       "available": bool(navigation["available"] or lanes["available"] or vehicles or traffic["available"] or driver_assist["available"]
                         or road_sign["available"] or pedestrian_detection["available"] or blind_spot["available"] or front_safety["available"]
-                        or longitudinal_shadow["available"] or proximity_safety["available"] or parking_obstacle["available"]
+                        or longitudinal_shadow["available"] or actuation_commands["steering"]["available"]
+                        or actuation_commands["cruise"]["available"] or proximity_safety["available"] or parking_obstacle["available"]
                         or road_disturbance["available"] or battery_diagnostics["available"] or tpms["available"]
                         or drive_power["available"] or drive_temperatures["available"] or vehicle_totals["available"]
                         or ambient_lighting["available"]),
@@ -1125,6 +1181,7 @@ class TeslaCanVisualization:
       "blind_spot": blind_spot,
       "front_safety": front_safety,
       "longitudinal_shadow": longitudinal_shadow,
+      "actuation_commands": actuation_commands,
       "proximity_safety": proximity_safety,
       "parking_obstacle": parking_obstacle,
       "road_disturbance": road_disturbance,

@@ -172,12 +172,6 @@ class TeslaControlSettingsAdapter:
       param="TeslaARS408Radar",
       inline=False,
     )
-    self.browser_driving_information = toggle_item_sp(
-      title=tr("Browser Driving Information"),
-      description=tr("Allow the local browser on port 8088 to read and display live SP model and Tesla CAN information."),
-      param="TeslaWebDrivingVisualization",
-      enabled=ui_state.is_offroad,
-    )
     self.traffic_control_mode = toggle_item_sp(
       title=tr("Traffic Light Control (Experimental)"),
       description=tr("When off, traffic-light data is recorded in the background without changing control. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."),  # noqa: E501
@@ -210,7 +204,6 @@ class TeslaControlSettingsAdapter:
     )
 
   def update_settings(self) -> None:
-    self.browser_driving_information.action_item.set_enabled(ui_state.is_offroad())
     self.radar_backend.action_item.set_enabled(ui_state.is_offroad())
     planner_stopped = not planner_session_is_active(ui_state.sm)
     self.traffic_control_mode.action_item.set_enabled(planner_stopped and ui_state.has_longitudinal_control)

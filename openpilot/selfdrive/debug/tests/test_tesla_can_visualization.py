@@ -7,6 +7,66 @@ def _frame(packer, message, bus, values):
   return packer.make_can_msg(message, bus, values)
 
 
+def test_tesla_can_visualization_decodes_party_lateral_and_cruise_commands():
+  packer = CANPacker("tesla_model3_party")
+  frames = [
+    _frame(packer, "DAS_steeringControl", 2, {
+      "DAS_steeringAngleRequest": 12.5,
+      "DAS_steeringControlType": 1,
+      "DAS_steeringHapticRequest": 0,
+    }),
+    _frame(packer, "DAS_control", 2, {
+      "DAS_setSpeed": 88.0,
+      "DAS_accelMin": -1.2,
+      "DAS_accelMax": 1.6,
+      "DAS_jerkMin": -2.0,
+      "DAS_jerkMax": 2.5,
+      "DAS_accState": 4,
+    }),
+  ]
+  visualization = TeslaCanVisualization()
+  visualization.update([(1_000_000_000, frames)])
+
+  commands = visualization.snapshot(1_100_000_000)["actuation_commands"]
+
+  assert commands["steering"] == {
+    "available": True,
+    "address": "0x488",
+    "bus": "AP-PARTY",
+    "angle_request_deg": 12.45,
+    "control_type": 1,
+    "haptic_request": False,
+  }
+  assert commands["cruise"] == {
+    "available": True,
+    "address": "0x2B9",
+    "bus": "AP-PARTY",
+    "set_speed_kph": 88.0,
+    "accel_min_mps2": -1.2,
+    "accel_max_mps2": 1.6,
+    "jerk_min_mps3": -2.01,
+    "jerk_max_mps3": 2.52,
+    "acc_state": 4,
+  }
+  stale = visualization.snapshot(4_000_000_000)["actuation_commands"]
+  assert not stale["steering"]["available"]
+  assert not stale["cruise"]["available"]
+
+
+def test_party_control_addresses_are_not_decoded_from_vehicle_bus() -> None:
+  packer = CANPacker("tesla_model3_party")
+  visualization = TeslaCanVisualization()
+  visualization.update([(1_000_000_000, [
+    _frame(packer, "DAS_steeringControl", 1, {"DAS_steeringAngleRequest": 10.0}),
+    _frame(packer, "DAS_control", 1, {"DAS_setSpeed": 80.0}),
+  ])])
+
+  commands = visualization.snapshot(1_100_000_000)["actuation_commands"]
+
+  assert not commands["steering"]["available"]
+  assert not commands["cruise"]["available"]
+
+
 def test_tesla_can_visualization_builds_scene_from_multiple_buses():
   packer = CANPacker("tesla_modely_hw4_perception")
   frames = [

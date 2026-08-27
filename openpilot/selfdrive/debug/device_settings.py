@@ -116,7 +116,6 @@ def _translate_option(text: str, key: str) -> str:
 # console whitelist narrow: it is not a generic Params editor.
 EXTRA_SETTINGS: tuple[dict[str, Any], ...] = (
   {"key": "Brightness", "widget": "option", "title": "停车界面亮度", "category": "Display", "group": "显示", "min": 10, "max": 100, "step": 10, "unit": "%", "offroad_only": True},
-  {"key": "TeslaWebDrivingVisualization", "widget": "toggle", "title": "浏览器行驶信息", "category": "Tesla", "group": "Tesla", "offroad_only": True},
   {"key": "TeslaARS408Radar", "widget": "multiple_button", "title": "Tesla 雷达后端", "category": "Tesla", "group": "Tesla", "options": [{"value": 0, "label": "原车"}, {"value": 1, "label": "ARS408"}, {"value": 2, "label": "关闭"}], "offroad_only": True},
   {"key": "DynamicAutoStock", "widget": "toggle", "title": "动态原车 ACC", "category": "Tesla", "group": "Tesla", "offroad_only": True},
   {"key": "TeslaApHybrid", "widget": "toggle", "title": "Tesla AP 混合控制", "category": "Tesla", "group": "Tesla", "offroad_only": True},
