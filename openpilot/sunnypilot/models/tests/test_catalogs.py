@@ -7,6 +7,7 @@ from openpilot.sunnypilot.models.helpers import (
   bundle_requires_usbgpu,
   is_bundle_version_compatible,
   migrate_active_bundle_metadata,
+  resolve_bundle_by_ref,
   usbgpu_model_ready,
 )
 from openpilot.sunnypilot.models.tests.test_selection import FakeParams
@@ -51,6 +52,14 @@ def test_catalogs_use_unique_indices_and_explicit_platform_overrides():
   assert bundle_requires_usbgpu(big)
   assert bundle_catalog_folder(small).startswith("QCOM · ")
   assert bundle_catalog_folder(big).startswith("eGPU · ")
+
+
+def test_download_ref_resolves_bundle_and_owning_catalog():
+  small = ModelParser.parse_models({"bundles": [bundle_json(ref="small-ref")]}, platform="qcom")[0]
+  big = ModelParser.parse_models({"bundles": [bundle_json(ref="big-ref", is_big=True)]}, platform="usbgpu")[0]
+
+  assert resolve_bundle_by_ref("big-ref", {"qcom": [small], "usbgpu": [big]}) == (big, "usbgpu")
+  assert resolve_bundle_by_ref("missing", {"qcom": [small], "usbgpu": [big]}) is None
 
 
 def test_parsing_catalog_does_not_create_fake_download_manifests(monkeypatch, tmp_path):

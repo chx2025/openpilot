@@ -84,6 +84,32 @@ def _migrate_tesla_mads_screen_button(_params):
     cloudlog.exception(f"Error migrating TeslaMadsScreenButton: {e}")
 
 
+def _migrate_model_bundle_slots(_params):
+  """Split the legacy active bundle without changing the user's selected platform."""
+  try:
+    legacy_bundle = _params.get("ModelManager_ActiveBundle")
+    if not isinstance(legacy_bundle, dict) or not legacy_bundle:
+      return
+
+    overrides = legacy_bundle.get("overrides", [])
+    override_map = ({item.get("key"): item.get("value") for item in overrides if isinstance(item, dict)}
+                    if isinstance(overrides, list) else overrides)
+    requires_usbgpu = (_params.get_bool("ModelManager_ActiveBundleRequiresUsbGpu") or
+                       override_map.get("model_platform") == "usbgpu")
+
+    if requires_usbgpu:
+      if _params.get("ModelManager_ActiveBundleUSBGPU") is None:
+        _params.put("ModelManager_ActiveBundleUSBGPU", legacy_bundle, block=True)
+      _params.remove("ModelManager_ActiveBundle")
+      _params.put("ModelManager_ActiveSource", "usbgpu", block=True)
+      cloudlog.info("params_migration: moved legacy active bundle to the usbgpu slot")
+    elif _params.get("ModelManager_ActiveSource") is None:
+      _params.put("ModelManager_ActiveSource", "qcom", block=True)
+      cloudlog.info("params_migration: kept legacy active bundle in the qcom slot")
+  except Exception as e:
+    cloudlog.exception(f"Error migrating model bundle slots: {e}")
+
+
 def run_migration(_params):
   # migrate OnroadScreenOffBrightness
   if _params.get("OnroadScreenOffBrightnessMigrated") != ONROAD_BRIGHTNESS_MIGRATION_VERSION:
@@ -120,3 +146,6 @@ def run_migration(_params):
 
   # seed TeslaMadsScreenButton for existing Tesla installs
   _migrate_tesla_mads_screen_button(_params)
+
+  # split model selection into QCOM and USBGPU slots without hardware-driven switching
+  _migrate_model_bundle_slots(_params)

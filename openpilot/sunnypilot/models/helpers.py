@@ -28,7 +28,12 @@ MIGRATION_JSON_VERSIONS = frozenset((17, REQUIRED_JSON_VERSION))
 CUSTOM_MODEL_PATH = Paths.model_root()
 METADATA_PATH = Path(__file__).parent / '../models/supercombo_metadata.pkl'
 ModelManager = custom.ModelManagerSP
-_LAST_VALIDATED_RAW = None
+_LAST_VALIDATED_RAW: dict[str, dict | None] = {}
+
+ACTIVE_BUNDLE_KEYS = {
+  "qcom": "ModelManager_ActiveBundle",
+  "usbgpu": "ModelManager_ActiveBundleUSBGPU",
+}
 
 
 def _compute_hash(file_path: str) -> str | None:
@@ -98,10 +103,10 @@ def _bundle_is_valid_locally(bundle: custom.ModelManagerSP.ModelBundle) -> bool:
              for file_name, expected_hash in _bundle_artifacts(bundle))
 
 
-def migrate_active_bundle_metadata(params: Params, available_bundles: list[custom.ModelManagerSP.ModelBundle]) -> bool:
-  global _LAST_VALIDATED_RAW
-
-  raw_bundle = params.get("ModelManager_ActiveBundle")
+def migrate_active_bundle_metadata(params: Params, available_bundles: list[custom.ModelManagerSP.ModelBundle],
+                                   source: str | None = None) -> bool:
+  key = ACTIVE_BUNDLE_KEYS[source or get_active_source(params)]
+  raw_bundle = params.get(key)
   if not isinstance(raw_bundle, dict) or not raw_bundle:
     return False
   try:
@@ -119,9 +124,10 @@ def migrate_active_bundle_metadata(params: Params, available_bundles: list[custo
   if not _bundle_is_valid_locally(active_bundle):
     return False
 
-  params.put("ModelManager_ActiveBundle", matching_bundle.to_dict(), block=True)
-  params.put_bool("ModelManager_ActiveBundleRequiresUsbGpu", bundle_requires_usbgpu(matching_bundle), block=True)
-  _LAST_VALIDATED_RAW = None
+  params.put(key, matching_bundle.to_dict(), block=True)
+  if source is None or source == get_active_source(params):
+    params.put_bool("ModelManager_ActiveBundleRequiresUsbGpu", bundle_requires_usbgpu(matching_bundle), block=True)
+  _LAST_VALIDATED_RAW.pop(key, None)
   return True
 
 
@@ -157,29 +163,66 @@ def _bundle_needs_reset(active_bundle: custom.ModelManagerSP.ModelBundle, availa
   return not _bundle_is_valid_locally(active_bundle)
 
 
-def validate_active_bundle(params: Params, available_bundles: list[custom.ModelManagerSP.ModelBundle] | None = None) -> None:
-  global _LAST_VALIDATED_RAW
-
-  raw_bundle = params.get("ModelManager_ActiveBundle")
+def _validate_active_bundle(params: Params, source: str,
+                            available_bundles: list[custom.ModelManagerSP.ModelBundle] | None = None) -> None:
+  key = ACTIVE_BUNDLE_KEYS[source]
+  raw_bundle = params.get(key)
   if not raw_bundle:
     return
 
-  if raw_bundle == _LAST_VALIDATED_RAW:
+  if raw_bundle == _LAST_VALIDATED_RAW.get(key):
     return
 
   active_bundle = get_active_bundle(params, raw_bundle_dict=raw_bundle)
   if active_bundle is None or _bundle_needs_reset(active_bundle, available_bundles):
-    cloudlog.warning("Active model bundle invalid; resetting to default")
-    params.remove("ModelManager_ActiveBundle")
-    params.remove("ModelManager_ActiveBundleRequiresUsbGpu")
-    params.put("ModelRunnerTypeCache", int(custom.ModelManagerSP.Runner.stock), block=True)
-    _LAST_VALIDATED_RAW = None
+    cloudlog.warning(f"Active model bundle invalid for {source}; resetting that slot to default")
+    params.remove(key)
+    if source == get_active_source(params):
+      params.put("ModelRunnerTypeCache", int(custom.ModelManagerSP.Runner.stock), block=True)
+    _LAST_VALIDATED_RAW[key] = None
   else:
-    _LAST_VALIDATED_RAW = raw_bundle
+    _LAST_VALIDATED_RAW[key] = raw_bundle
 
 
-def get_active_bundle(params: Params | None = None, raw_bundle_dict: dict | bytes | None = None) -> custom.ModelManagerSP.ModelBundle | None:
+def validate_active_bundle(params: Params, available_bundles: list[custom.ModelManagerSP.ModelBundle] | None = None) -> None:
+  """Compatibility wrapper validating the user's selected slot."""
+  _validate_active_bundle(params, get_active_source(params), available_bundles)
+
+
+def validate_active_bundles(params: Params,
+                            source_bundles: dict[str, list[custom.ModelManagerSP.ModelBundle]]) -> None:
+  for source, bundles in source_bundles.items():
+    migrate_active_bundle_metadata(params, bundles, source)
+    # An empty list normally means a fetch failure; do not delete a working
+    # selection merely because the network was unavailable for one tick.
+    _validate_active_bundle(params, source, bundles or None)
+  get_active_model_runner(params, force_check=True)
+
+
+def get_active_source(params: Params | None = None) -> str:
   params = params or Params()
+  source = params.get("ModelManager_ActiveSource")
+  return source if source in ACTIVE_BUNDLE_KEYS else "qcom"
+
+
+def get_selected_bundle(params: Params | None = None, source: str = "qcom") -> custom.ModelManagerSP.ModelBundle | None:
+  params = params or Params()
+  try:
+    active_bundle_dict = params.get(ACTIVE_BUNDLE_KEYS[source]) or {}
+    if isinstance(active_bundle_dict, dict) and active_bundle_dict and is_bundle_version_compatible(active_bundle_dict):
+      return custom.ModelManagerSP.ModelBundle(**active_bundle_dict)
+  except (KeyError, TypeError, ValueError):
+    pass
+  return None
+
+
+def get_active_bundle(params: Params | None = None, raw_bundle_dict: dict | bytes | None = None,
+                      *, usbgpu: bool | None = None) -> custom.ModelManagerSP.ModelBundle | None:
+  params = params or Params()
+  if raw_bundle_dict is None and params.get("ModelManager_ActiveSource") in ACTIVE_BUNDLE_KEYS:
+    # Physical eGPU presence deliberately does not choose the model catalog.
+    # The user's last explicit catalog selection remains authoritative.
+    return get_selected_bundle(params, get_active_source(params))
   try:
     active_bundle_dict = raw_bundle_dict if raw_bundle_dict is not None else (params.get("ModelManager_ActiveBundle") or {})
     if isinstance(active_bundle_dict, dict) and active_bundle_dict and is_bundle_version_compatible(active_bundle_dict):
@@ -189,11 +232,24 @@ def get_active_bundle(params: Params | None = None, raw_bundle_dict: dict | byte
   return None
 
 
+def resolve_bundle_by_ref(
+  ref: str, source_bundles: dict[str, list[custom.ModelManagerSP.ModelBundle]],
+) -> tuple[custom.ModelManagerSP.ModelBundle, str] | None:
+  for source, bundles in source_bundles.items():
+    for bundle in bundles:
+      if bundle.ref == ref:
+        return bundle, source
+  return None
+
+
 def usbgpu_model_ready(params: Params | None = None) -> bool:
   if usbgpu_compiled():
     return True
   params = params or Params()
-  bundle = get_active_bundle(params)
+  bundle = get_selected_bundle(params, "usbgpu")
+  if bundle is None:
+    legacy_bundle = get_active_bundle(params)
+    bundle = legacy_bundle if bundle_requires_usbgpu(legacy_bundle) else None
   return bool(bundle is not None and bundle_requires_usbgpu(bundle) and bundle.runner == custom.ModelManagerSP.Runner.tinygrad and
               bundle_artifacts_ready(bundle, Paths.model_root()))
 
@@ -206,7 +262,9 @@ def get_active_model_runner(params: Params | None = None, force_check: bool = Fa
     return cached_runner_type
   runner_type = custom.ModelManagerSP.Runner.stock
   if active_bundle := get_active_bundle(params):
-    requires_usbgpu = params.get_bool("ModelManager_ActiveBundleRequiresUsbGpu")
+    explicit_source = params.get("ModelManager_ActiveSource")
+    requires_usbgpu = ((explicit_source == "usbgpu") if explicit_source in ACTIVE_BUNDLE_KEYS
+                       else params.get_bool("ModelManager_ActiveBundleRequiresUsbGpu"))
     if usbgpu_connected is None:
       from openpilot.selfdrive.modeld.helpers import usbgpu_present
       usbgpu_connected = usbgpu_present()
@@ -222,8 +280,10 @@ def get_active_model_runner(params: Params | None = None, force_check: bool = Fa
 def select_default_model(params: Params | None = None) -> None:
   """Atomically make the built-in stock runner win over pending bundle work."""
   params = params or Params()
+  params.remove("ModelManager_DownloadRef")
   params.remove("ModelManager_DownloadIndex")
-  params.remove("ModelManager_ActiveBundle")
+  source = get_active_source(params)
+  params.remove(ACTIVE_BUNDLE_KEYS[source])
   params.remove("ModelManager_ActiveBundleRequiresUsbGpu")
   params.put("ModelRunnerTypeCache", int(custom.ModelManagerSP.Runner.stock), block=True)
 

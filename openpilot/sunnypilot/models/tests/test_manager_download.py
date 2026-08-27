@@ -149,6 +149,18 @@ class TestManagerDownload(ManagerDownloadTestBase):
       self.base_url = f'http://{host}:{port}'
       return fn()
 
+  def test_download_request_is_bound_to_stable_bundle_ref(self):
+    bundle = custom.ModelManagerSP.ModelBundle.new_message()
+    bundle.ref = "lm-usbgpu"
+    self.manager.selected_bundle = bundle
+    self.manager.params.get.side_effect = lambda key: "other-ref" if key == "ModelManager_DownloadRef" else None
+
+    assert not self.manager._download_requested()
+
+    self.manager.params.get.side_effect = lambda key: "lm-usbgpu" if key == "ModelManager_DownloadRef" else None
+
+    assert self.manager._download_requested()
+
   def test_download_file_writes_exact_bytes(self):
     def body():
       artifact = self.make_artifact(chunked=False)
@@ -292,6 +304,27 @@ class TestManagerDownload(ManagerDownloadTestBase):
 
     self.manager.params.put_bool.assert_any_call("ModelManager_ActiveBundleRequiresUsbGpu", True, block=True)
 
+  def test_activated_usbgpu_bundle_uses_its_slot_and_becomes_user_selected_source(self):
+    bundle = custom.ModelManagerSP.ModelBundle.new_message()
+    bundle.index = 1004
+    bundle.ref = "lm-usbgpu"
+    bundle.init('models', 1)
+    bundle.init('overrides', 1)
+    bundle.overrides[0].key = "model_platform"
+    bundle.overrides[0].value = "usbgpu"
+    bundle.models[0].artifact.fileName = 'already_cached.pkl'
+
+    async def cached(*args, **kwargs):
+      return None
+
+    self.manager._process_artifact = cached
+    self.manager.params.get.side_effect = lambda key: "lm-usbgpu" if key == "ModelManager_DownloadRef" else 1004
+
+    asyncio.run(self.manager._download_bundle(bundle, self.dest))
+
+    self.manager.params.put.assert_any_call("ModelManager_ActiveBundleUSBGPU", bundle.to_dict(), block=True)
+    self.manager.params.put.assert_any_call("ModelManager_ActiveSource", "usbgpu", block=True)
+
   def test_bundle_marks_artifacts_downloading_before_cache_verification(self):
     bundle = custom.ModelManagerSP.ModelBundle.new_message()
     bundle.index = 0
@@ -320,17 +353,23 @@ class TestManagerDownload(ManagerDownloadTestBase):
 
     bundle = custom.ModelManagerSP.ModelBundle.new_message()
     bundle.index = 4
-    self.manager.model_fetcher.get_available_bundles.return_value = [bundle]
+    bundle.ref = "active-ref"
+    bundle.minimumSelectorVersion = 18
+    self.manager.model_fetcher.get_bundles_for_source.side_effect = lambda source: [bundle] if source == "qcom" else []
     self.manager.download = mock.MagicMock()
-    self.manager.params.get.side_effect = lambda key: 4 if key == "ModelManager_DownloadIndex" else None
+    self.manager.params.get.side_effect = lambda key: {
+      "ModelManager_DownloadRef": "active-ref",
+      "ModelManager_ActiveSource": "qcom",
+      "ModelManager_ActiveBundle": bundle.to_dict(),
+    }.get(key)
 
     with mock.patch.object(manager_module, "Ratekeeper", OneLoopRatekeeper), \
-         mock.patch.object(manager_module, "validate_active_bundle"), \
+         mock.patch.object(manager_module, "validate_active_bundles"), \
          mock.patch.object(manager_module, "get_active_bundle", return_value=bundle), \
          self.assertRaises(StopLoop):
       self.manager.main_thread()
 
-    self.manager.params.remove.assert_any_call("ModelManager_DownloadIndex")
+    self.manager.params.remove.assert_any_call("ModelManager_DownloadRef")
     self.manager.download.assert_not_called()
 
   def test_repeat_downloads_are_stable(self):
@@ -345,6 +384,31 @@ class TestManagerDownload(ManagerDownloadTestBase):
             assert f.read() == expected
         assert self.manager._download_start_times == {}
     self.run_with_server(body)
+
+  def test_cache_cleanup_preserves_both_selected_slots(self):
+    qcom = custom.ModelManagerSP.ModelBundle.new_message()
+    qcom.minimumSelectorVersion = 18
+    qcom.init('models', 1)
+    qcom.models[0].artifact.fileName = "qcom.pkl"
+    usbgpu = custom.ModelManagerSP.ModelBundle.new_message()
+    usbgpu.minimumSelectorVersion = 18
+    usbgpu.init('models', 1)
+    usbgpu.models[0].artifact.fileName = "usbgpu.pkl"
+    self.manager.params.get.side_effect = lambda key: {
+      "ModelManager_ActiveBundle": qcom.to_dict(),
+      "ModelManager_ActiveBundleUSBGPU": usbgpu.to_dict(),
+      "ModelManager_ActiveSource": "qcom",
+    }.get(key)
+    for filename in ("qcom.pkl", "usbgpu.pkl", "unused.pkl"):
+      with open(os.path.join(self.dest, filename), "wb") as f:
+        f.write(filename.encode())
+
+    with mock.patch.object(manager_module.Paths, "model_root", return_value=self.dest):
+      self.manager.clear_model_cache()
+
+    assert os.path.isfile(os.path.join(self.dest, "qcom.pkl"))
+    assert os.path.isfile(os.path.join(self.dest, "usbgpu.pkl"))
+    assert not os.path.exists(os.path.join(self.dest, "unused.pkl"))
 
 
 class TestManagerImports(OpenpilotTestCase):

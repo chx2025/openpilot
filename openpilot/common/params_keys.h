@@ -201,9 +201,15 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     // Model Manager params
     {"ModelManager_ActiveBundle", {PERSISTENT, JSON}},
+    {"ModelManager_ActiveBundleUSBGPU", {PERSISTENT, JSON}},
+    {"ModelManager_ActiveSource", {PERSISTENT | BACKUP, STRING, "qcom"}},
+    // Deprecated compatibility key. Removed after the dual-slot migration has
+    // shipped on every maintained device.
     {"ModelManager_ActiveBundleRequiresUsbGpu", {PERSISTENT, BOOL, "0"}},
-    {"ModelManager_ActiveJson", {CLEAR_ON_MANAGER_START, STRING}},
+    {"ModelManager_ActiveJson", {CLEAR_ON_MANAGER_START, JSON}},
     {"ModelManager_ClearCache", {CLEAR_ON_MANAGER_START, BOOL}},
+    {"ModelManager_DownloadRef", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
+    // Deprecated compatibility key for requests created by the previous UI.
     {"ModelManager_DownloadIndex", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, INT}},
     {"ModelManager_Favs", {PERSISTENT | BACKUP, STRING}},
     {"ModelManager_LastSyncTime", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},

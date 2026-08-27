@@ -3,7 +3,7 @@ import hashlib
 from openpilot.cereal import custom
 from openpilot.common.hardware.hw import Paths
 from openpilot.sunnypilot.models.default_model import get_default_model, get_stock_default_model
-from openpilot.sunnypilot.models.helpers import get_active_model_runner, select_default_model, usbgpu_model_ready, validate_active_bundle
+from openpilot.sunnypilot.models.helpers import get_active_bundle, get_active_model_runner, select_default_model, usbgpu_model_ready, validate_active_bundle
 
 
 class FakeParams:
@@ -26,6 +26,26 @@ class FakeParams:
     self.values.pop(key, None)
 
 
+def test_user_selected_model_source_wins_over_usbgpu_presence():
+  params = FakeParams({
+    "ModelManager_ActiveSource": "qcom",
+    "ModelManager_ActiveBundle": {
+      "internalName": "QCOM",
+      "minimumSelectorVersion": 18,
+    },
+    "ModelManager_ActiveBundleUSBGPU": {
+      "internalName": "LM",
+      "minimumSelectorVersion": 18,
+    },
+  })
+
+  assert get_active_bundle(params, usbgpu=True).internalName == "QCOM"
+
+  params.put("ModelManager_ActiveSource", "usbgpu")
+
+  assert get_active_bundle(params, usbgpu=False).internalName == "LM"
+
+
 def test_select_default_is_atomic_from_ui_perspective():
   params = FakeParams({
     "ModelManager_DownloadIndex": 0,
@@ -40,6 +60,24 @@ def test_select_default_is_atomic_from_ui_perspective():
   assert params.get("ModelManager_ActiveBundle") is None
   assert params.get("ModelManager_ActiveBundleRequiresUsbGpu") is None
   assert params.get("ModelRunnerTypeCache") == int(custom.ModelManagerSP.Runner.stock)
+
+
+def test_default_clears_only_the_user_selected_slot():
+  qcom = {"internalName": "QCOM", "minimumSelectorVersion": 18}
+  usbgpu = {"internalName": "LM", "minimumSelectorVersion": 18}
+  params = FakeParams({
+    "ModelManager_ActiveSource": "usbgpu",
+    "ModelManager_ActiveBundle": qcom,
+    "ModelManager_ActiveBundleUSBGPU": usbgpu,
+    "ModelManager_DownloadRef": "other-big-model",
+  })
+
+  select_default_model(params)
+
+  assert params.get("ModelManager_DownloadRef") is None
+  assert params.get("ModelManager_ActiveBundleUSBGPU") is None
+  assert params.get("ModelManager_ActiveBundle") == qcom
+  assert params.get("ModelManager_ActiveSource") == "usbgpu"
 
 
 def test_default_model_name_matches_connected_hardware():

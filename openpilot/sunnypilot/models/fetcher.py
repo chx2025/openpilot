@@ -132,34 +132,54 @@ class ModelFetcher:
   MODEL_URL = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_v21.json"
   MODEL_URL_USBGPU = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_usbgpu_v22.json"
 
+  MODEL_SOURCES = {
+    "qcom": (MODEL_URL, "", 0),
+    "usbgpu": (MODEL_URL_USBGPU, "_USBGPU", USBGPU_INDEX_OFFSET),
+  }
+
   def __init__(self, params: Params):
     self.params = params
     self.model_parser = ModelParser()
-    self.model_cache = ModelCache(params)
-    self.usbgpu_model_cache = ModelCache(params, suffix="_USBGPU")
-    self.model_url = self.MODEL_URL
-    self.params.put("ModelManager_ActiveJson", f"{self.MODEL_URL};{self.MODEL_URL_USBGPU}", block=True)
+    self.model_url = self.MODEL_URL  # compatibility for tinygrad-ref tooling
+    self.model_caches = {
+      source: ModelCache(params, suffix=suffix)
+      for source, (_, suffix, _) in self.MODEL_SOURCES.items()
+    }
+    self._refetched: set[str] = set()
+    active_json = {
+      "qcom": self.MODEL_URL,
+      "usbgpu": self.MODEL_URL_USBGPU,
+    }
+    try:
+      self.params.put("ModelManager_ActiveJson", active_json, block=True)
+    except TypeError:
+      # Source checkouts may still have a pre-change params_pyx binary until
+      # the target device rebuilds. Keep the manager importable during that
+      # one-build schema transition.
+      self.params.put("ModelManager_ActiveJson", f"{self.MODEL_URL};{self.MODEL_URL_USBGPU}", block=True)
 
-  def _fetch_and_cache_models(self, model_url: str, model_cache: ModelCache, *,
-                              index_offset: int, platform: str) -> list[custom.ModelManagerSP.ModelBundle] | None:
+  def _fetch_and_cache_models(self, source: str) -> list[custom.ModelManagerSP.ModelBundle] | None:
     """Fetches fresh model data from remote and updates cache.
     Returns None on transport errors. Raises on 404 and other fatal HTTP errors.
     """
+    model_url, _, index_offset = self.MODEL_SOURCES[source]
     try:
       response = requests.get(model_url, timeout=10)
 
       # Explicitly handle 404 differently
       if response.status_code == 404:
-        cloudlog.error(f"Models URL returned 404 Not Found: {self.model_url}")
-        raise HTTPError(f"404 Not Found: {self.model_url}", response=response)
+        cloudlog.error(f"Models URL returned 404 Not Found: {model_url}")
+        raise HTTPError(f"404 Not Found: {model_url}", response=response)
 
       # Raise for any other 4xx/5xx
       response.raise_for_status()
 
       json_data = response.json()
-      model_cache.set(json_data)
-      cloudlog.debug("Successfully updated models cache")
-      return self.model_parser.parse_models(json_data, index_offset=index_offset, platform=platform)
+      parsed = self.model_parser.parse_models(json_data, index_offset=index_offset, platform=source)
+      if parsed:
+        self.model_caches[source].set(json_data)
+        cloudlog.debug(f"Successfully updated models cache for {source}")
+      return parsed
 
     except ConnectionError as e:
       cloudlog.warning(f"DNS/connection error while fetching models: {e}")
@@ -172,15 +192,37 @@ class ModelFetcher:
 
     return None
 
-  def _get_catalog(self, model_url: str, model_cache: ModelCache, *,
-                   index_offset: int, platform: str) -> list[custom.ModelManagerSP.ModelBundle]:
-    cached_data, is_expired = model_cache.get()
+  @staticmethod
+  def _cache_matches_source(source: str, cached_data: dict) -> bool:
+    bundles = cached_data.get("bundles", [])
+    if source == "usbgpu":
+      return any(bundle.get("is_big") is True for bundle in bundles)
+    return not any(bundle.get("is_big") is True for bundle in bundles)
+
+  def get_bundles_for_source(self, source: str) -> list[custom.ModelManagerSP.ModelBundle]:
+    if source not in self.MODEL_SOURCES:
+      cloudlog.warning(f"Unknown model source: {source}")
+      return []
+
+    _, _, index_offset = self.MODEL_SOURCES[source]
+    cached_data, is_expired = self.model_caches[source].get()
 
     if cached_data and not is_expired:
-      cloudlog.debug("Using valid cached models data")
-      return self.model_parser.parse_models(cached_data, index_offset=index_offset, platform=platform)
+      if self._cache_matches_source(source, cached_data) or source in self._refetched:
+        try:
+          parsed = self.model_parser.parse_models(cached_data, index_offset=index_offset, platform=source)
+        except Exception:
+          cloudlog.warning(f"Failed to parse cached models for {source}; refetching", exc_info=True)
+        else:
+          if parsed:
+            cloudlog.debug(f"Using valid cached models data for source {source}")
+            return parsed
+          cloudlog.warning(f"Cached models for {source} have no valid bundles; refetching")
+      else:
+        self._refetched.add(source)
+        cloudlog.warning(f"Cached models for {source} not valid; refetching once")
 
-    fetched_bundles = self._fetch_and_cache_models(model_url, model_cache, index_offset=index_offset, platform=platform)
+    fetched_bundles = self._fetch_and_cache_models(source)
     if fetched_bundles is not None:
       return fetched_bundles
 
@@ -188,14 +230,29 @@ class ModelFetcher:
       cloudlog.warning("Failed to fetch fresh data and no cache available")
 
     cloudlog.warning("Failed to fetch fresh data. Using expired cache as fallback")
-    return self.model_parser.parse_models(cached_data, index_offset=index_offset, platform=platform)
+    try:
+      return self.model_parser.parse_models(cached_data, index_offset=index_offset, platform=source)
+    except Exception:
+      return []
 
   def get_available_bundles(self) -> list[custom.ModelManagerSP.ModelBundle]:
-    """Return QCOM and USBGPU catalogs together with stable, non-overlapping indices."""
-    small = self._get_catalog(self.MODEL_URL, self.model_cache, index_offset=0, platform="qcom")
-    big = self._get_catalog(self.MODEL_URL_USBGPU, self.usbgpu_model_cache,
-                            index_offset=USBGPU_INDEX_OFFSET, platform="usbgpu")
-    return [*small, *big]
+    """Return both catalogs; hardware presence never hides a user choice."""
+    return [bundle for source in self.MODEL_SOURCES for bundle in self.get_bundles_for_source(source)]
+
+
+def get_cached_bundles(params: Params, source: str) -> list[custom.ModelManagerSP.ModelBundle]:
+  if source not in ModelFetcher.MODEL_SOURCES:
+    cloudlog.warning(f"Unknown model source: {source}")
+    return []
+  _, suffix, index_offset = ModelFetcher.MODEL_SOURCES[source]
+  cached_data = params.get(f"ModelManager_ModelsCache{suffix}")
+  if not cached_data:
+    return []
+  try:
+    return ModelParser.parse_models(cached_data, index_offset=index_offset, platform=source)
+  except Exception as e:
+    cloudlog.warning(f"Failed to parse cached models for source {source}: {e}")
+    return []
 
 if __name__ == "__main__":
   params = Params()

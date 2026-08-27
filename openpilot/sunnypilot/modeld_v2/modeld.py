@@ -57,7 +57,10 @@ BIG_MODEL_TIMEOUT = 75
 
 def should_use_usbgpu(params: Params, hardware_present: bool | None = None) -> bool:
   present = usbgpu_present() if hardware_present is None else hardware_present
-  return bool(present and params.get_bool("ModelManager_ActiveBundleRequiresUsbGpu"))
+  selected_source = params.get("ModelManager_ActiveSource")
+  requires_usbgpu = ((selected_source == "usbgpu") if selected_source in ("qcom", "usbgpu")
+                     else params.get_bool("ModelManager_ActiveBundleRequiresUsbGpu"))
+  return bool(present and requires_usbgpu)
 
 
 def _pkl_exists(path):

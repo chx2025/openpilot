@@ -18,3 +18,21 @@ def test_big_bundle_does_not_request_amd_when_hardware_is_absent():
   params = FakeParams({"ModelManager_ActiveBundleRequiresUsbGpu": True})
 
   assert not should_use_usbgpu(params, hardware_present=False)
+
+
+def test_explicit_qcom_selection_overrides_stale_legacy_usbgpu_flag():
+  params = FakeParams({
+    "ModelManager_ActiveSource": "qcom",
+    "ModelManager_ActiveBundleRequiresUsbGpu": True,
+  })
+
+  assert not should_use_usbgpu(params, hardware_present=True)
+
+
+def test_explicit_usbgpu_selection_overrides_stale_legacy_qcom_flag():
+  params = FakeParams({
+    "ModelManager_ActiveSource": "usbgpu",
+    "ModelManager_ActiveBundleRequiresUsbGpu": False,
+  })
+
+  assert should_use_usbgpu(params, hardware_present=True)
