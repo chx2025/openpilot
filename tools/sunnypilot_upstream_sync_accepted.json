@@ -29,5 +29,9 @@
   "da28afca91a1ec0e5919a483d99508512886105c": {
     "reason": "semantically ported dual-slot ref downloads while preserving explicit user-selected QCOM/USBGPU routing",
     "local_commits": ["fbe1a3a1fc"]
+  },
+  "2d6cc4c065c4d1833dc267fff60ebae48b444817": {
+    "reason": "semantically ported model selector upgrades, verification state, resumable downloads, and UI while preserving explicit user-selected QCOM/USBGPU routing",
+    "local_commits": ["5faa388d99"]
   }
 }
