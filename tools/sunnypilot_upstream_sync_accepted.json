@@ -25,5 +25,9 @@
   "c783f2225adc7b1bf9515fb35cf225cf9f90e59b": {
     "reason": "dependency and opendbc changes were split to preserve the local Tesla submodule history",
     "local_commits": ["6920192fbe", "5a87209dd9", "86a80e5abc"]
+  },
+  "da28afca91a1ec0e5919a483d99508512886105c": {
+    "reason": "semantically ported dual-slot ref downloads while preserving explicit user-selected QCOM/USBGPU routing",
+    "local_commits": ["fbe1a3a1fc"]
   }
 }
