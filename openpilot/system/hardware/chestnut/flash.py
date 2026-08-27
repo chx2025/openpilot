@@ -15,7 +15,10 @@ import time
 import zlib
 from pathlib import Path
 
+from openpilot.common.hardware.usb import is_chestnut_runtime_device
+
 VID_PIDS = (("add1", "0001"), ("3801", "0001"))
+RUNTIME_VID_PIDS = VID_PIDS + (("add1", "0002"),)
 ROM_VID_PIDS = (("174c", "2464"), ("174c", "2463"))
 ROM_PRODUCT = "USB 3.2 PCIe TinyEnclosure"
 FIRMWARE_PATH = Path(__file__).with_name("firmware_wrapped.bin")
@@ -59,18 +62,35 @@ class RomFallback(Exception):
   pass
 
 
-def find_chestnut():
+def _find_chestnut(vid_pids, *, runtime: bool = False):
   found = []
   for d in glob.glob("/sys/bus/usb/devices/*"):
     try:
       vid_pid = (open(d + "/idVendor").read().strip(), open(d + "/idProduct").read().strip())
-      if vid_pid in VID_PIDS + ROM_VID_PIDS:
-        found.append((d, vid_pid, open(d + "/product").read().strip()))
+      if vid_pid in vid_pids:
+        product = open(d + "/product").read().strip()
+        if runtime:
+          manufacturer = open(d + "/manufacturer").read().strip()
+          device = {"vendorId": int(vid_pid[0], 16), "productId": int(vid_pid[1], 16),
+                    "manufacturer": manufacturer, "product": product}
+          if not is_chestnut_runtime_device(device):
+            continue
+        found.append((d, vid_pid, product))
     except OSError:
       pass
   if len(found) > 1:
     raise RuntimeError(f"expected one chestnut, found {len(found)}")
   return found[0] if found else (None, None, None)
+
+
+def find_chestnut():
+  """Find only devices owned by comma's persistent official updater."""
+  return _find_chestnut(VID_PIDS + ROM_VID_PIDS)
+
+
+def find_runtime_chestnut():
+  """Find an exact official or UT3G-dual runtime device, never ROM."""
+  return _find_chestnut(RUNTIME_VID_PIDS, runtime=True)
 
 
 def in_rom_bootloader(vid_pid, product):
@@ -108,7 +128,7 @@ def open_device(path):
 def link_up() -> bool:
   # asm enumerates on USB-C alone, gpu is only usable once pcie link is up
   try:
-    path, _, _ = find_chestnut()
+    path, _, _ = find_runtime_chestnut()
     if path is None:
       return False
     fd = open_device(path)

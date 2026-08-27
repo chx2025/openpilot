@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.sunnylink.api import UNREGISTERED_SUNNYLINK_DONGLE_ID
 from openpilot.system.ui.lib.application import gui_app
-from openpilot.system.ui.lib.multilang import tr_noop
+from openpilot.system.ui.lib.multilang import tr, tr_noop
+from openpilot.system.ui.widgets import DialogResult
+from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
 
 
 PING_TIMEOUT_NS = 80_000_000_000  # 80 seconds in nanoseconds
@@ -110,6 +112,33 @@ class SidebarSP:
     x = HOME_BTN.x + (HOME_BTN.width - icon.width) / 2
     y = HOME_BTN.y + (HOME_BTN.height - icon.height) / 2
     return icon, rl.Vector2(x, y), opacity
+
+  def _handle_egpu_click(self, mouse_pos) -> bool:
+    """Offroad click on the home-button eGPU icon triggers the safe-eject flow."""
+    if ui_state.started or not rl.check_collision_point_rec(mouse_pos, HOME_BTN):
+      return False
+    if not ui_state.sm["deviceState"].chestnutPresent:
+      return False
+
+    status = ui_state.params.get("UsbGpuEjectStatus")
+    if status == "ejecting":
+      gui_app.push_widget(alert_dialog(tr("Ejecting eGPU...")))
+      return True
+    if status == "safe":
+      gui_app.push_widget(alert_dialog(tr("eGPU is safe to unplug.")))
+      return True
+
+    def confirm(result: DialogResult):
+      if result == DialogResult.CONFIRM:
+        ui_state.params.put_bool("UsbGpuEjectRequest", True)
+
+    error = ui_state.params.get("UsbGpuEjectError")
+    if status == "error" and error:
+      message = f"{tr('eGPU eject failed')}: {error}\n{tr('Try again?')}"
+    else:
+      message = tr("Safely eject the eGPU before unplugging it?")
+    gui_app.push_widget(ConfirmDialog(message, tr("Eject"), callback=confirm))
+    return True
 
   def _draw_metrics_w_sunnylink(self, rect: rl.Rectangle, _temp, _panda, _connect):
     metrics = [_temp, _panda, _connect, self._sunnylink_status]

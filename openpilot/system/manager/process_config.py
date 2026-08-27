@@ -188,6 +188,9 @@ procs = [
 
 # sunnypilot
 procs += [
+  # eGPU
+  PythonProcess("chestnut_statusd", "openpilot.system.hardware.chestnut.statusd", only_offroad),
+
   # Models
   PythonProcess("models_manager", "openpilot.sunnypilot.models.manager", only_offroad),
   NativeProcess("modeld_tinygrad", "openpilot/sunnypilot/modeld_v2", ["./modeld"], and_(or_(only_onroad, onroad_preview), is_tinygrad_model)),
