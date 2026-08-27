@@ -131,10 +131,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UptimeOffroad", {PERSISTENT, FLOAT, "0.0"}},
     {"UptimeOnroad", {PERSISTENT, FLOAT, "0.0"}},
     {"UsbGpuActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
+    {"UsbGpuLoading", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"UsbGpuEjectError", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, STRING}},
     {"UsbGpuEjectRequest", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, BOOL}},
     {"UsbGpuEjectStatus", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, STRING}},
-    {"UsbGpuLoading", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"Version", {PERSISTENT, STRING}},
 
     // --- sunnypilot params --- //
@@ -198,10 +198,12 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     // Model Manager params
     {"ModelManager_ActiveBundle", {PERSISTENT, JSON}},
-    {"ModelManager_ActiveJson", {CLEAR_ON_MANAGER_START, STRING}},
+    {"ModelManager_ActiveBundleUSBGPU", {PERSISTENT, JSON}},
+    {"ModelManager_ActiveJson", {CLEAR_ON_MANAGER_START, JSON}},
     {"ModelManager_PrevBundle", {PERSISTENT, JSON}},
     {"ModelManager_PrevBundle_USBGPU", {PERSISTENT, JSON}},
     {"ModelManager_ClearCache", {CLEAR_ON_MANAGER_START, BOOL}},
+    {"ModelManager_DownloadRef", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"ModelManager_DownloadIndex", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, INT}},
     {"ModelManager_Favs", {PERSISTENT | BACKUP, STRING}},
     {"ModelManager_LastSyncTime", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},
@@ -279,7 +281,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"MapTargetVelocities", {CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"SmartCruiseControlMap", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"SmartCruiseControlVision", {PERSISTENT | BACKUP, BOOL, "0"}},
-
+    
     // Traffic Stop (red light / stop sign virtual stop-line obstacle)
     {"TrafficStopEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TrafficStopDistanceAdjust", {PERSISTENT | BACKUP, INT, "0"}},
@@ -304,4 +306,9 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SpDevBeep", {PERSISTENT, BOOL, "0"}},
     {"WebuiHeadlessMode", {PERSISTENT | BACKUP, STRING, "auto"}},
     {"IsOnroadPreview", {CLEAR_ON_MANAGER_START, BOOL}},
+    
+    {"ImuCalibrationEnabled", {PERSISTENT, BOOL}},
+    {"ImuCalibrationMatrix", {PERSISTENT, BYTES}},
+    {"ImuCalibrationRequested", {CLEAR_ON_MANAGER_START, BOOL}},
+    {"ImuCalibrationStatus", {PERSISTENT, STRING}},
 };
