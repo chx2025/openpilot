@@ -27,6 +27,7 @@ from tinygrad.tensor import Tensor
 from openpilot.common.file_chunker import open_file_chunked
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
+from openpilot.common.dm import is_dm_disabled
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
@@ -452,7 +453,7 @@ def main(demo=False):
 
     sm.update(0)
     desire = DH.desire
-    is_rhd = sm["driverMonitoringState"].isRHD
+    is_rhd = False if is_dm_disabled(params) else sm["driverMonitoringState"].isRHD
     frame_id = sm["narrowRoadCameraState"].frameId
     v_ego = max(sm["carState"].vEgo, 0.)
     if sm.frame % 60 == 0:

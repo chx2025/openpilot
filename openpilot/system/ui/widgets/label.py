@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import Union
 import pyray as rl
 
-from openpilot.system.ui.lib.application import gui_app, FontWeight, DEFAULT_TEXT_SIZE, DEFAULT_TEXT_COLOR, FONT_SCALE
+from openpilot.system.ui.lib.application import gui_app, FontWeight, DEFAULT_TEXT_SIZE, DEFAULT_TEXT_COLOR, FONT_SCALE, font_fallback
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.utils import GuiStyleContext
@@ -71,7 +71,7 @@ def gui_label(
 
   # Draw the text in the specified rectangle
   # TODO: add wrapping and proper centering for multiline text
-  rl.draw_text_ex(font, display_text, rl.Vector2(text_x, text_y), font_size, 0, color)
+  rl.draw_text_ex(font_fallback(font), display_text, rl.Vector2(text_x, text_y), font_size, 0, color)
 
 
 def gui_text_box(
@@ -215,7 +215,7 @@ class Label(Widget):
       elif self._text_alignment == rl.GuiTextAlignment.TEXT_ALIGN_RIGHT:
         line_pos.x += self._rect.width - text_size.x - self._text_padding
 
-      rl.draw_text_ex(self._font, text, line_pos, self._font_size, 0, self._text_color)
+      rl.draw_text_ex(font_fallback(self._font), text, line_pos, self._font_size, 0, self._text_color)
       text_pos.y += (text_size.y or self._font_size * FONT_SCALE) * self._line_scale
 
 
@@ -657,7 +657,8 @@ class UnifiedLabel(Widget):
 
   def _render_line_normal(self, line, line_x, current_y):
     line_pos = rl.Vector2(line_x, current_y)
-    rl.draw_text_ex(self._font, line, line_pos, self._font_size, self._spacing_pixels, self._text_color)
+    font = font_fallback(self._font)
+    rl.draw_text_ex(font, line, line_pos, self._font_size, self._spacing_pixels, self._text_color)
 
   def _render_line_shimmer(self, line, line_x, current_y):
     # Shimmer range based on widest line so sweep is even across all lines
@@ -671,10 +672,11 @@ class UnifiedLabel(Widget):
 
     base_a = self._text_color.a / 255.0
     cursor_x = line_x
+    font = font_fallback(self._font)
     for ch in line:
       char_width = measure_text_cached(self._font, ch, self._font_size, self._spacing_pixels).x
       char_center_x = cursor_x + char_width / 2.0
       alpha = int(255 * self._shimmer_alpha(char_center_x, shimmer_left, max_width) * base_a)
       color = rl.Color(self._text_color.r, self._text_color.g, self._text_color.b, alpha)
-      rl.draw_text_ex(self._font, ch, rl.Vector2(cursor_x, current_y), self._font_size, 0, color)
+      rl.draw_text_ex(font, ch, rl.Vector2(cursor_x, current_y), self._font_size, 0, color)
       cursor_x += char_width + self._spacing_pixels

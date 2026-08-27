@@ -166,12 +166,14 @@ class UIState(UIStateSP):
     # Handle wide road camera state updates
     if self.sm.updated["wideRoadCameraState"]:
       cam_state = self.sm["wideRoadCameraState"]
-      self.light_sensor = max(100.0 - cam_state.exposureValPercent, 0.0)
+      # rick - for c3: Scale factor based on sensor type
+      scale = 6.0 if cam_state.sensor == 'ar0231' else 1.0
+      self.light_sensor = max(100.0 - scale * cam_state.exposureValPercent, 0.0)
     elif not self.sm.alive["wideRoadCameraState"] or not self.sm.valid["wideRoadCameraState"]:
       self.light_sensor = -1
 
-    # Update started state
-    self.started = self.sm["deviceState"].started and self.ignition
+    # Update started state (onroad preview allows rendering the onroad UI while parked)
+    self.started = (self.sm["deviceState"].started and self.ignition) or self.params.get_bool("IsOnroadPreview")
 
     # Update body state
     if self.CP is not None and self.is_body != self.CP.notCar:
@@ -269,8 +271,8 @@ class Device(DeviceSP):
     if gui_app.sunnypilot_ui() and ui_state.custom_interactive_timeout != 0:
       return ui_state.custom_interactive_timeout
 
-    ignition_timeout = 10 if gui_app.big_ui() else 5
-    return ignition_timeout if ui_state.ignition else 30
+    ignition_timeout = 30 if gui_app.big_ui() else 5
+    return ignition_timeout if ui_state.ignition else 60
 
   def _reset_interactive_timeout(self) -> None:
     self._interaction_time = time.monotonic() + self.interactive_timeout
@@ -285,6 +287,7 @@ class Device(DeviceSP):
     if self._interaction_time <= 0:
       self._reset_interactive_timeout()
 
+    self._sync_offroad_brightness_from_params()
     self._update_brightness()
     self._update_wakefulness()
 
@@ -304,6 +307,13 @@ class Device(DeviceSP):
     if brightness is None:
       brightness = BACKLIGHT_OFFROAD
     self._offroad_brightness = min(max(brightness, 0), 100)
+
+  def _sync_offroad_brightness_from_params(self):
+    val = ui_state.params.get("Brightness", return_default=True)
+    if val is None or int(val) == 0:
+      self.set_offroad_brightness(None)
+    else:
+      self.set_offroad_brightness(int(val))
 
   def _update_brightness(self):
     clipped_brightness = self._offroad_brightness
