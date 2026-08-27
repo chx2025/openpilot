@@ -46,6 +46,8 @@ def test_driving_page_contains_oem_sp_comparison_charts(monkeypatch):
   assert "0x2B9" in page
   assert "0x209" in page
   assert "SP / FSD 车道线" in page
+  assert 'id="unknown-export"' in page
+  assert "exportUnknownCan" in page
 
 
 def test_turn_signal_route_starts_requested_direction(monkeypatch, server):

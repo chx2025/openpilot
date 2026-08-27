@@ -6,10 +6,12 @@ from opendbc.car.structs import car
 from openpilot.cereal import messaging
 from openpilot.common.params import Params
 from openpilot.selfdrive.debug.tesla_can_visualization import TeslaCanVisualization
+from openpilot.selfdrive.debug.unknown_can_observer import unknown_can_snapshot
 
 
 SERVICES = ("carState", "carStateSP", "carControl", "carOutput", "controlsState", "selfdriveState", "selfdriveStateSP",
             "longitudinalPlan", "modelV2")
+COMPARISON_SERVICES = ("carState", "carControl", "carOutput", "controlsState", "longitudinalPlan", "modelV2")
 MAX_TRAJECTORY_DISTANCE_M = 100.0
 TRAJECTORY_STRIDE = 3
 MAX_CAN_EVENTS_PER_SNAPSHOT = 250
@@ -42,6 +44,10 @@ def discover_ch_bus(packets: list[tuple[int, list[tuple[int, bytes, int]]]]) -> 
       if address == TESLA_CH_LANE_ADDRESS and source not in (0, 1, 2):
         return source
   return None
+
+
+def comparison_services_available(alive: dict[str, bool]) -> bool:
+  return all(bool(alive.get(service, False)) for service in COMPARISON_SERVICES)
 
 
 def _line_points(line: object) -> list[list[float]]:
@@ -194,7 +200,11 @@ class DrivingStatus:
       sp_state = self.sm["selfdriveStateSP"]
       model = self.sm["modelV2"]
       oem_can = self._update_tesla_can()
+      oem_can["unknown_frames"] = unknown_can_snapshot()
       geometry = _model_geometry(model, car_state_sp, oem_can)
+      comparison = (control_comparison(car_state, self.sm["carControl"], self.sm["carOutput"], controls_state,
+                                       self.sm["longitudinalPlan"], geometry)
+                    if comparison_services_available(self.sm.alive) else None)
 
       alert = " ".join(text for text in (selfdrive_state.alertText1, selfdrive_state.alertText2) if text)
       cruise_speed = _set_speed_kph(float(car_state.vCruiseCluster), float(controls_state.deprecated.vCruise))
@@ -207,8 +217,7 @@ class DrivingStatus:
         "mads_enabled": bool(sp_state.mads.enabled),
         "alert": alert,
         "geometry": geometry,
-        "comparison": control_comparison(car_state, self.sm["carControl"], self.sm["carOutput"], controls_state,
-                                          self.sm["longitudinalPlan"], geometry),
+        "comparison": comparison,
         "updated_at": int(time.monotonic()),
       }
 
