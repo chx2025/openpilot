@@ -15,24 +15,6 @@ SPARSE_CHUNK_FMT = struct.Struct('H2xI4x')
 _COMMA_HW_DIR = os.path.dirname(os.path.abspath(__file__))
 AGNOS_MANIFEST_FILE = os.path.join("openpilot", "common", "hardware", "comma", "agnos.json")
 
-# ---------------------------------------------------------------------------
-# Tunables for slow / flaky networks (sp260827-c3l)
-#   Problem: at ~500 KB/s the original 60s read-timeout on the streaming
-#   download tripped constantly, and every retry restarted the whole 4 GB
-#   AGNOS image from byte 0 (no resume). This forked version downloads each
-#   partition to a local cache file *with HTTP Range resume*, then flashes
-#   it. A dropped connection now continues where it left off instead of
-#   restarting. Tune the numbers below to taste.
-# ---------------------------------------------------------------------------
-DOWNLOAD_CONNECT_TIMEOUT = 30     # seconds to establish the TCP/TLS connection
-DOWNLOAD_READ_TIMEOUT = 600      # seconds of silence between data chunks before giving up
-DOWNLOAD_TIMEOUT = (DOWNLOAD_CONNECT_TIMEOUT, DOWNLOAD_READ_TIMEOUT)
-DOWNLOAD_RETRIES = 30             # max download attempts (each resumes from where it stopped)
-DOWNLOAD_BACKOFF = 10             # seconds to wait before retrying a failed attempt
-DOWNLOAD_CHUNK = 1024 * 1024      # stream chunk size
-AGNOS_CACHE_DIR_ENV = "AGNOS_CACHE_DIR"
-AGNOS_CACHE_DIR_DEFAULT = "/data/agnos_cache"
-
 
 def is_tizi_device() -> bool:
   try:
@@ -67,62 +49,12 @@ def default_agnos_manifest_path(repo_root: str) -> str:
   return os.path.join(_COMMA_HW_DIR, "agnos.json")
 
 
-def download_partition(url: str, dest: str, label: str, cloudlog,
-                       max_retries: int = DOWNLOAD_RETRIES,
-                       backoff: int = DOWNLOAD_BACKOFF) -> None:
-  """Download `url` to `dest` with resume support (HTTP Range).
-
-  On a network drop the partial file is kept and the next attempt resumes
-  from its current size, so a 4 GB image does not restart from zero every
-  time the link stutters. Raises after `max_retries` exhausted attempts.
-  """
-  os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-  for attempt in range(1, max_retries + 1):
-    existing = os.path.getsize(dest) if os.path.exists(dest) else 0
-    headers = {'Accept-Encoding': 'identity'}
-    if existing > 0:
-      headers['Range'] = f'bytes={existing}-'
-
-    try:
-      with requests.get(url, stream=True, headers=headers, timeout=DOWNLOAD_TIMEOUT) as r:
-        r.raise_for_status()
-        # Server honored the Range request -> append; otherwise start fresh.
-        if r.status_code == 206:
-          mode = 'ab'
-        else:
-          mode = 'wb'
-          existing = 0
-
-        cloudlog.info(f"Downloading {label} (attempt {attempt}/{max_retries}, "
-                      f"resuming from {existing // 1024 // 1024} MB)")
-        written = existing
-        last_log = written // (100 * 1024 * 1024)
-        with open(dest, mode) as f:
-          for data in r.iter_content(chunk_size=DOWNLOAD_CHUNK):
-            if data:
-              f.write(data)
-              written += len(data)
-              tick = written // (100 * 1024 * 1024)
-              if tick > last_log:
-                last_log = tick
-                cloudlog.info(f"  {label} downloaded {written // 1024 // 1024} MB")
-        cloudlog.info(f"Download of {label} complete ({written // 1024 // 1024} MB)")
-        return
-
-    except (requests.exceptions.RequestException, IOError) as e:
-      cloudlog.warning(f"Download attempt {attempt}/{max_retries} for {label} failed: {e}")
-      if attempt < max_retries:
-        time.sleep(backoff)
-
-  raise Exception(f"Failed to download {url} after {max_retries} attempts")
-
-
 class StreamingDecompressor:
-  """Legacy streaming reader (kept for compatibility). Prefer LocalImageReader."""
   def __init__(self, url: str) -> None:
     self.buf = b""
-    self.req = requests.get(url, stream=True, headers={'Accept-Encoding': 'identity'}, timeout=DOWNLOAD_TIMEOUT)
-    self.it = self.req.iter_content(chunk_size=DOWNLOAD_CHUNK)
+
+    self.req = requests.get(url, stream=True, headers={'Accept-Encoding': 'identity'}, timeout=60)
+    self.it = self.req.iter_content(chunk_size=1024 * 1024)
     self.decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_AUTO)
     self.eof = False
     self.sha256 = hashlib.sha256()
@@ -131,6 +63,7 @@ class StreamingDecompressor:
     while len(self.buf) < length and not self.eof:
       if self.decompressor.needs_input:
         self.req.raise_for_status()
+
         try:
           compressed = next(self.it)
         except StopIteration:
@@ -152,44 +85,7 @@ class StreamingDecompressor:
     return result
 
 
-class LocalImageReader:
-  """Reads an already-downloaded .lzma partition image and decompresses on the fly.
-
-  Provides the same `.read()` / `.sha256` API as StreamingDecompressor but
-  sources the compressed bytes from a local file, so the network-fragile
-  download step can be retried independently of flashing.
-  """
-  def __init__(self, path: str) -> None:
-    self.buf = b""
-    self.f = open(path, 'rb')
-    self.decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_AUTO)
-    self.eof = False
-    self.sha256 = hashlib.sha256()
-
-  def read(self, length: int) -> bytes:
-    while len(self.buf) < length and not self.eof:
-      if self.decompressor.needs_input:
-        compressed = self.f.read(DOWNLOAD_CHUNK)
-        if not compressed:
-          self.eof = True
-          break
-      else:
-        compressed = b''
-
-      self.buf += self.decompressor.decompress(compressed, max_length=length)
-
-      if self.decompressor.eof:
-        self.eof = True
-        break
-
-    result = self.buf[:length]
-    self.buf = self.buf[length:]
-
-    self.sha256.update(result)
-    return result
-
-
-def unsparsify(f: LocalImageReader | StreamingDecompressor) -> Generator[bytes, None, None]:
+def unsparsify(f: StreamingDecompressor) -> Generator[bytes, None, None]:
   # https://source.android.com/devices/bootloader/images#sparse-format
   magic = struct.unpack("I", f.read(4))[0]
   assert(magic == 0xed26ff3a)
@@ -211,6 +107,7 @@ def unsparsify(f: LocalImageReader | StreamingDecompressor) -> Generator[bytes, 
     chunk_type, out_blocks = SPARSE_CHUNK_FMT.unpack(f.read(12))
 
     if chunk_type == 0xcac1:  # Raw
+      # TODO: yield in smaller chunks. Yielding only block_sz is too slow. Largest observed data chunk is 252 MB.
       yield f.read(out_blocks * block_sz)
     elif chunk_type == 0xcac2:  # Fill
       filler = f.read(4) * (block_sz // 4)
@@ -223,7 +120,7 @@ def unsparsify(f: LocalImageReader | StreamingDecompressor) -> Generator[bytes, 
 
 
 # noop wrapper with same API as unsparsify() for non sparse images
-def noop(f: LocalImageReader | StreamingDecompressor) -> Generator[bytes, None, None]:
+def noop(f: StreamingDecompressor) -> Generator[bytes, None, None]:
   while len(chunk := f.read(1024 * 1024)) > 0:
     yield chunk
 
@@ -294,44 +191,31 @@ def clear_partition_hash(target_slot_number: int, partition: dict) -> None:
 
 def extract_compressed_image(target_slot_number: int, partition: dict, cloudlog):
   path = get_partition_path(target_slot_number, partition)
+  downloader = StreamingDecompressor(partition['url'])
 
-  cache_dir = os.environ.get(AGNOS_CACHE_DIR_ENV, AGNOS_CACHE_DIR_DEFAULT)
-  tmp = os.path.join(cache_dir, f"{partition['name']}.lzma")
+  with open(path, 'wb+') as out:
+    # Flash partition
+    last_p = 0
+    raw_hash = hashlib.sha256()
+    f = unsparsify if partition['sparse'] else noop
+    for chunk in f(downloader):
+      raw_hash.update(chunk)
+      out.write(chunk)
+      p = int(out.tell() / partition['size'] * 100)
+      if p != last_p:
+        last_p = p
+        print(f"Installing {partition['name']}: {p}", flush=True)
 
-  try:
-    # 1) Resumable download to a local cache file (network-fragile step).
-    download_partition(partition['url'], tmp, partition['name'], cloudlog)
+    if raw_hash.hexdigest().lower() != partition['hash_raw'].lower():
+      raise Exception(f"Raw hash mismatch '{raw_hash.hexdigest().lower()}'")
 
-    # 2) Decompress from the local file and flash to the partition.
-    downloader = LocalImageReader(tmp)
-    with open(path, 'wb+') as out:
-      last_p = 0
-      raw_hash = hashlib.sha256()
-      f = unsparsify if partition['sparse'] else noop
-      for chunk in f(downloader):
-        raw_hash.update(chunk)
-        out.write(chunk)
-        p = int(out.tell() / partition['size'] * 100)
-        if p != last_p:
-          last_p = p
-          print(f"Installing {partition['name']}: {p}", flush=True)
+    if downloader.sha256.hexdigest().lower() != partition['hash'].lower():
+      raise Exception("Uncompressed hash mismatch")
 
-      if raw_hash.hexdigest().lower() != partition['hash_raw'].lower():
-        raise Exception(f"Raw hash mismatch '{raw_hash.hexdigest().lower()}'")
+    if out.tell() != partition['size']:
+      raise Exception("Uncompressed size mismatch")
 
-      if downloader.sha256.hexdigest().lower() != partition['hash'].lower():
-        raise Exception("Uncompressed hash mismatch")
-
-      if out.tell() != partition['size']:
-        raise Exception("Uncompressed size mismatch")
-
-      os.sync()
-  finally:
-    # Always clean up the temp download so /data does not fill up.
-    try:
-      os.remove(tmp)
-    except OSError:
-      pass
+    os.sync()
 
 
 def flash_partition(target_slot_number: int, partition: dict, cloudlog, standalone=False):
@@ -399,6 +283,8 @@ def flash_agnos_update(manifest_path: str, target_slot_number: int, cloudlog, st
     if not success:
       cloudlog.info(f"Failed to flash {partition['name']}, aborting")
       raise Exception("Maximum retries exceeded")
+
+  cloudlog.info(f"AGNOS ready on slot {target_slot_number}")
 
 
 def verify_agnos_update(manifest_path: str, target_slot_number: int) -> bool:
