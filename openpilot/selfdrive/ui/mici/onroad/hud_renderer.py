@@ -231,6 +231,14 @@ class HudRenderer(Widget):
                      rect.y + rect.height - 14 - (self._txt_wheel.height + icon.height) / 2)
     rl.draw_texture_ex(icon, pos, 0.0, 1.0, rl.Color(255, 255, 255, int(255 * opacity * alpha)))
 
+    if loading:
+      text = f"LOAD {ui_state.usbgpu_loading_progress}%"
+      font_size = 44
+      text_size = rl.measure_text_ex(self._font_semi_bold, text, font_size, 0)
+      text_pos = rl.Vector2(pos.x - 20 - text_size.x, pos.y + (icon.height - text_size.y) / 2)
+      rl.draw_text_ex(self._font_semi_bold, text, text_pos, font_size, 0,
+                      rl.Color(0, 134, 233, int(255 * opacity * alpha)))
+
   def _draw_steering_wheel(self, rect: rl.Rectangle) -> None:
     wheel_txt = self._txt_wheel_critical if self._show_wheel_critical else self._txt_wheel
 

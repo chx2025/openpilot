@@ -1,0 +1,45 @@
+"""
+Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
+
+This file is part of sunnypilot and is licensed under the MIT License.
+See the LICENSE.md file in the root directory for more details.
+"""
+
+from pathlib import Path
+
+
+def bundle_artifacts_ready(bundle, model_root: str | Path) -> bool:
+  root = Path(model_root)
+  seen_artifact = False
+
+  for model in getattr(bundle, "models", ()) or ():
+    artifact = getattr(model, "artifact", None)
+    file_name = getattr(artifact, "fileName", "") if artifact is not None else ""
+    if not file_name:
+      continue
+    seen_artifact = True
+
+    chunks = tuple(getattr(artifact, "chunks", ()) or ())
+    if chunks:
+      manifest = root / f"{file_name}.chunkmanifest"
+      try:
+        if int(manifest.read_text().strip()) != len(chunks):
+          return False
+      except (FileNotFoundError, OSError, ValueError):
+        return False
+
+      for index, chunk in enumerate(chunks, 1):
+        chunk_name = getattr(chunk, "fileName", "") or f"{file_name}.chunk{index:02d}of{len(chunks):02d}"
+        try:
+          if (root / chunk_name).stat().st_size <= 0:
+            return False
+        except OSError:
+          return False
+    else:
+      try:
+        if (root / file_name).stat().st_size <= 0:
+          return False
+      except OSError:
+        return False
+
+  return seen_artifact

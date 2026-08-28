@@ -14,6 +14,8 @@ from openpilot.system.ui.lib.application import FontWeight
 from openpilot.system.ui.widgets.icon_widget import IconWidget
 from openpilot.system.ui.widgets.label import UnifiedLabel
 
+EGPU_LOADING_COLOR = rl.Color(0, 134, 233, 255)
+
 
 class MiciHomeLayoutSP(MiciHomeLayout):
   def __init__(self):
@@ -26,6 +28,8 @@ class MiciHomeLayoutSP(MiciHomeLayout):
     gray_idx = self._status_bar_layout.widgets.index(self._egpu_icon_gray)
     self._status_bar_layout.widgets.insert(gray_idx + 1, self._egpu_icon_default)
     self._status_bar_layout.widgets.insert(gray_idx + 2, self._egpu_icon_orange)
+    self._egpu_loading_label = UnifiedLabel("", font_size=36, text_color=EGPU_LOADING_COLOR,
+                                            font_weight=FontWeight.MEDIUM, max_width=480, wrap_text=False)
 
   def _set_egpu_visibility(self):
     chestnut = ui_state.sm["deviceState"].chestnutPresent
@@ -34,6 +38,7 @@ class MiciHomeLayoutSP(MiciHomeLayout):
       self._egpu_icon_default.set_visible(False)
       self._egpu_icon_orange.set_visible(False)
       self._egpu_icon_gray.set_visible(False)
+      self._egpu_loading_label.set_text("")
       return
 
     big_model_selected = ui_state.usbgpu_compiled or ui_state.model_runner_tinygrad
@@ -46,8 +51,19 @@ class MiciHomeLayoutSP(MiciHomeLayout):
       self._egpu_icon.set_visible(False)
       self._egpu_icon_orange.set_visible(False)
       self._egpu_icon_gray.set_visible(False)
+      if ui_state.usbgpu_loading:
+        self._egpu_loading_label.set_text(f"eGPU {ui_state.usbgpu_loading_progress}%")
+      else:
+        self._egpu_loading_label.set_text("eGPU ...")
     else:
       self._egpu_icon_default.set_visible(False)
       self._egpu_icon.set_visible(big_model_selected and not big_model_failed)
       self._egpu_icon_orange.set_visible(big_model_selected and big_model_failed)
       self._egpu_icon_gray.set_visible(not big_model_selected)
+      self._egpu_loading_label.set_text("")
+
+  def _render(self, rect):
+    super()._render(rect)
+    if self._egpu_loading_label.text:
+      self._egpu_loading_label.set_position(rect.x + 20, rect.y + rect.height - 110)
+      self._egpu_loading_label.render()

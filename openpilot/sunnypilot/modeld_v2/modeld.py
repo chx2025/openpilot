@@ -24,7 +24,7 @@ from opendbc.car.car_helpers import get_demo_car_params
 
 from tinygrad.tensor import Tensor
 
-from openpilot.common.file_chunker import open_file_chunked
+from openpilot.common.file_chunker import open_file_chunked, get_chunked_file_size
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.params import Params
 from openpilot.common.dm import is_dm_disabled
@@ -48,8 +48,10 @@ from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
+from openpilot.sunnypilot.modeld_v2.egpu_loader import load_with_timeout
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
+BIG_MODEL_TIMEOUT = float(os.environ.get("BIG_MODEL_TIMEOUT", "300"))  # 5 min default, allow env override
 
 
 def _pkl_exists(path):
@@ -85,7 +87,7 @@ class ModelState(ModelStateBase):
   inputs: dict[str, np.ndarray]
   prev_desire: np.ndarray
 
-  def __init__(self, cam_w: int, cam_h: int, usbgpu: bool = False):
+  def __init__(self, cam_w: int, cam_h: int, usbgpu: bool = False, loading_progress_callback=None):
     ModelStateBase.__init__(self)
 
     env_pkl = os.environ.get('COMBINED_MODEL_PKL')
@@ -104,11 +106,19 @@ class ModelState(ModelStateBase):
 
     pkl_path = _find_driving_pkl(model_bundle)
     assert pkl_path is not None, "No driving pkl found — all models must be compiled with compile_modeld.py"
-    self._init_combined(pkl_path, cam_w, cam_h, model_bundle)
+    self._init_combined(pkl_path, cam_w, cam_h, model_bundle, loading_progress_callback)
 
-  def _init_combined(self, pkl_path, cam_w, cam_h, bundle):
+  def _init_combined(self, pkl_path, cam_w, cam_h, bundle, loading_progress_callback=None):
     cloudlog.warning(f"loading combined pkl: {pkl_path}")
-    jits = load_oob(open_file_chunked(pkl_path))
+    def report_read_progress(value: float):
+      if loading_progress_callback is not None:
+        loading_progress_callback(5 + int(value * 70))
+
+    total_size = get_chunked_file_size(pkl_path)
+    jits = load_oob(open_file_chunked(pkl_path), total_size=total_size, progress_callback=report_read_progress)
+
+    if loading_progress_callback is not None:
+      loading_progress_callback(80)
 
     self.WARP_DEV = 'QCOM' if COMMA_HARDWARE else 'CPU'
     self.DEV = 'AMD' if self.usbgpu else self.WARP_DEV
@@ -188,6 +198,8 @@ class ModelState(ModelStateBase):
 
     if self.usbgpu:
       self.warmup()
+      if loading_progress_callback is not None:
+        loading_progress_callback(95)
 
   def warmup(self) -> None:
     dummy_frames = {k: np.zeros(self.frame_buf_params[k][3], dtype=np.uint8) for k in self._vision_input_names}
@@ -334,7 +346,16 @@ def main(demo=False):
 
   params = Params()
   params.put_bool("UsbGpuLoading", USBGPU)
+  params.put("UsbGpuLoadingProgress", 1 if USBGPU else 0, block=True)
   params.remove("UsbGpuActive")
+
+  last_loading_progress = -1
+  def update_loading_progress(progress: int):
+    nonlocal last_loading_progress
+    progress = max(0, min(100, int(progress)))
+    if progress != last_loading_progress:
+      params.put("UsbGpuLoadingProgress", progress, block=True)
+      last_loading_progress = progress
 
   # visionipc clients
   while True:
@@ -364,17 +385,19 @@ def main(demo=False):
 
   model = None
   if USBGPU:
-    import threading
-    def load():
-      nonlocal model
-      model = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=True)
-    t = threading.Thread(target=load, daemon=True)
-    t.start()
-    t.join(60)
-    if model is None:
+    try:
+      model = load_with_timeout(
+        lambda: ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=True,
+                           loading_progress_callback=update_loading_progress),
+        BIG_MODEL_TIMEOUT,
+      )
+    except Exception:
       params.put_bool("UsbGpuActive", False)
-      raise RuntimeError("eGPU model load failed or timed out (60s)")
+      params.put_bool("UsbGpuLoading", False)
+      params.put("UsbGpuLoadingProgress", 0, block=True)
+      raise
     params.put_bool("UsbGpuActive", True)
+    update_loading_progress(100)
   else:
     model = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=False)
 

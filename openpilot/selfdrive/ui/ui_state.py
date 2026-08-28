@@ -12,7 +12,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.prime_state import PrimeState
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.hardware import HARDWARE, PC
-from openpilot.selfdrive.modeld.helpers import usbgpu_compiled
+from openpilot.sunnypilot.models.helpers import usbgpu_model_ready
 
 from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP, DeviceSP
 
@@ -83,9 +83,10 @@ class UIState(UIStateSP):
     self.experimental_mode: bool = self.params.get_bool("ExperimentalMode")
     self.experimental_mode_confirmed: bool = self.params.get_bool("ExperimentalModeConfirmed")
     self.usbgpu: bool = False
-    self.usbgpu_compiled: bool = usbgpu_compiled()
+    self.usbgpu_compiled: bool = usbgpu_model_ready(self.params)
     self.usbgpu_active: bool | None = self.params.get("UsbGpuActive")
     self.usbgpu_loading: bool = self.params.get_bool("UsbGpuLoading")
+    self.usbgpu_loading_progress: int = 0
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
@@ -230,9 +231,16 @@ class UIState(UIStateSP):
     # keep usbgpu UI active until offroad transition when gpu disappears
     self.usbgpu = self.sm["deviceState"].chestnutPresent or (self.usbgpu and self.started)
     if not self.usbgpu_compiled:
-      self.usbgpu_compiled = usbgpu_compiled()
+      self.usbgpu_compiled = usbgpu_model_ready(self.params)
     self.usbgpu_active = self.params.get("UsbGpuActive")
     self.usbgpu_loading = self.params.get_bool("UsbGpuLoading")
+    if self.usbgpu_loading:
+      try:
+        self.usbgpu_loading_progress = max(0, min(100, int(self.params.get("UsbGpuLoadingProgress") or 0)))
+      except (TypeError, ValueError):
+        self.usbgpu_loading_progress = 0
+    else:
+      self.usbgpu_loading_progress = 0
 
     UIStateSP.update_params(self)
 

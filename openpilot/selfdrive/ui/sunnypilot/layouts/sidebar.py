@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.sunnylink.api import UNREGISTERED_SUNNYLINK_DONGLE_ID
-from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog, alert_dialog
@@ -112,6 +112,18 @@ class SidebarSP:
     x = HOME_BTN.x + (HOME_BTN.width - icon.width) / 2
     y = HOME_BTN.y + (HOME_BTN.height - icon.height) / 2
     return icon, rl.Vector2(x, y), opacity
+
+  def _draw_egpu_loading_progress(self):
+    """Draw the eGPU model loading percentage below the home button while loading."""
+    if not ui_state.usbgpu_loading:
+      return
+    text = f"{ui_state.usbgpu_loading_progress}%"
+    font = gui_app.font(FontWeight.SEMI_BOLD)
+    font_size = 44
+    text_size = rl.measure_text_ex(font, text, font_size, 0)
+    pos = rl.Vector2(HOME_BTN.x + (HOME_BTN.width - text_size.x) / 2,
+                     HOME_BTN.y + HOME_BTN.height + 14)
+    rl.draw_text_ex(font, text, pos, font_size, 0, Colors.PROGRESS)
 
   def _handle_egpu_click(self, mouse_pos) -> bool:
     """Offroad click on the home-button eGPU icon triggers the safe-eject flow."""

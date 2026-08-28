@@ -16,7 +16,8 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.models.constants import Meta, MetaSimPose, MetaTombRaider
 from openpilot.common.hardware.hw import Paths
-from openpilot.selfdrive.modeld.helpers import usbgpu_present
+from openpilot.selfdrive.modeld.helpers import usbgpu_present, usbgpu_compiled
+from openpilot.sunnypilot.models.artifact_status import bundle_artifacts_ready
 
 # SET ME TO THE EXACT JSON VERSION WE SET IN SUNNYPILOT_MODELS REPO
 REQUIRED_JSON_VERSION = 18
@@ -133,6 +134,26 @@ def get_active_source(usbgpu: bool | None = None, usbgpu_active: bool | None = N
   state_valid = usbgpu_active is not None or usbgpu_loading is not None or offroad is not None
   big_active = usbgpu and (not state_valid or usbgpu_active or usbgpu_loading or offroad)
   return "usbgpu" if big_active else "qcom"
+
+
+def bundle_requires_usbgpu(bundle: custom.ModelManagerSP.ModelBundle | None) -> bool:
+  if bundle is None:
+    return False
+  overrides = {override.key: override.value for override in getattr(bundle, "overrides", [])}
+  return overrides.get("model_platform") == "usbgpu"
+
+
+def usbgpu_model_ready(params: Params | None = None) -> bool:
+  """True when a eGPU (chestnut-class) model bundle is selected and fully downloaded."""
+  if usbgpu_compiled():
+    return True
+  params = params or Params()
+  bundle = get_selected_bundle(params, "usbgpu")
+  if bundle is None:
+    legacy_bundle = get_active_bundle(params)
+    bundle = legacy_bundle if bundle_requires_usbgpu(legacy_bundle) else None
+  return bool(bundle is not None and bundle_requires_usbgpu(bundle) and bundle.runner == ModelManager.Runner.tinygrad and
+              bundle_artifacts_ready(bundle, Paths.model_root()))
 
 
 def get_active_bundle(params: Params | None = None, *, usbgpu: bool | None = None) -> "custom.ModelManagerSP.ModelBundle | None":

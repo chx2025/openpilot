@@ -182,6 +182,9 @@ class Sidebar(Widget, SidebarSP):
       tint = rl.Color(tint[0], tint[1], tint[2], int(255 * icon_opacity))
     rl.draw_texture_ex(button_img, button_pos, 0.0, 1.0, tint)
 
+    if gui_app.sunnypilot_ui() and not ui_state.started:
+      SidebarSP._draw_egpu_loading_progress(self)
+
     # Microphone button
     if self._recording_audio:
       self._mic_indicator_rect = rl.Rectangle(rect.x + rect.width - 130, rect.y + 245, 75, 40)
