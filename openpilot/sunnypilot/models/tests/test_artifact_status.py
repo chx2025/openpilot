@@ -2,7 +2,7 @@ import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from openpilot.sunnypilot.models.artifact_status import bundle_artifacts_ready
+from openpilot.sunnypilot.models.artifact_status import bundle_artifacts_ready, chestnut_model_ready
 
 
 @dataclass
@@ -26,7 +26,60 @@ class Bundle:
   models: list[Model]
 
 
+class FakeParams:
+  def __init__(self, values=None):
+    self.values = values or {}
+
+  def get(self, key):
+    return self.values.get(key)
+
+
 class TestArtifactStatus(unittest.TestCase):
+  def test_downloaded_chestnut_bundle_is_ready_without_builtin_big(self):
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as directory:
+      root = Path(directory)
+      name = "driving_lebowski_tinygrad.pkl"
+      chunk_name = f"{name}.chunk01of01"
+      (root / f"{name}.chunkmanifest").write_text("1")
+      (root / chunk_name).write_bytes(b"compiled model")
+      params = FakeParams({
+        "ModelManager_ActiveBundleChestnut": {
+          "index": 0,
+          "internalName": "LM",
+          "displayName": "Lebowski",
+          "models": [{
+            "type": "chunked",
+            "artifact": {
+              "fileName": name,
+              "downloadUri": {"uri": "", "sha256": ""},
+              "chunks": [{"fileName": chunk_name, "sha256": ""}],
+            },
+          }],
+          "generation": 12,
+          "environment": "development",
+          "runner": "tinygrad",
+          "is20hz": True,
+          "ref": "lm",
+          "minimumSelectorVersion": 18,
+        },
+      })
+
+      self.assertTrue(chestnut_model_ready(params, model_root=root, builtin_ready=False))
+
+  def test_qcom_bundle_does_not_make_chestnut_ready(self):
+    params = FakeParams({
+      "ModelManager_ActiveBundle": {
+        "internalName": "QCOM",
+        "minimumSelectorVersion": 18,
+      },
+    })
+
+    self.assertFalse(chestnut_model_ready(params, model_root=Path("/missing"), builtin_ready=False))
+
+  def test_builtin_big_is_ready_without_a_downloaded_bundle(self):
+    self.assertTrue(chestnut_model_ready(FakeParams(), model_root=Path("/missing"), builtin_ready=True))
+
   def test_chunked_bundle_is_ready_only_after_all_chunks_exist(self):
     from tempfile import TemporaryDirectory
     with TemporaryDirectory() as directory:

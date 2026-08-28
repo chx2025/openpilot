@@ -23,6 +23,10 @@ def is_chestnut_runtime_device(device: dict) -> bool:
   return False
 
 
+def chestnut_runtime_present(devices: list[dict]) -> bool:
+  return any(is_chestnut_runtime_device(device) for device in devices)
+
+
 def chestnut_official_flash_mismatch(devices: list[dict]) -> bool:
   """Return whether comma's updater owns and needs to update a device.
 
@@ -105,7 +109,7 @@ def set_usb_state(device_state, devices: list[dict]) -> None:
     entry.linkErrorCount = device["linkErrorCount"]
     entry.usb3Lane = device.get("usb3Lane", "unknown")
 
-    if (entry.vendorId, entry.productId) in CHESTNUT_USB_IDS:
+    if is_chestnut_runtime_device(device):
       chestnut_present = True
 
   device_state.chestnutPresent = chestnut_present

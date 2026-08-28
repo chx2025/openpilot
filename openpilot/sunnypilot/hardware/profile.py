@@ -41,6 +41,11 @@ def power_down_requested(*, automatic: bool, manual: bool,
   return manual or (automatic and allows_automatic_power_down(profile))
 
 
+def model_compile_cpu(cpu_count: int) -> int:
+  """Return the upstream isolated CPU when present, otherwise the highest available CPU."""
+  return min(7, max(0, cpu_count - 1))
+
+
 def resolve_internal_panda_type(raw_type: bytes, profile: HardwareProfile | None = None) -> bytes:
   """Resolve the effective type for an already-identified internal Panda."""
   selected_profile = profile or get_hardware_profile()

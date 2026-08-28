@@ -8,7 +8,7 @@ import pyray as rl
 
 from openpilot.cereal import custom
 from openpilot.selfdrive.ui.mici.widgets.dialog import BigDialog
-from openpilot.sunnypilot.models.helpers import get_selected_bundle, select_default_model
+from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_selected_bundle
 from openpilot.selfdrive.ui.mici.widgets.button import BigButton
 from openpilot.selfdrive.ui.ui_state import ui_state, device
 from openpilot.selfdrive.ui.sunnypilot.model_info import (active_source, big_model_state, bundles_for_source, carrying_model,
@@ -27,14 +27,14 @@ def _model_info() -> tuple[str, str, str]:
   state = big_model_state()
   _, _, carry_display = carrying_model()
   if carry_display is None:
-    big = get_selected_bundle(ui_state.params, "usbgpu")
-    carry_display = big.displayName if big else default_model_name("usbgpu")
+    big = get_selected_bundle(ui_state.params, "chestnut")
+    carry_display = big.displayName if big else default_model_name("chestnut")
   active_text = (carry_display or active_name).lower()
   if state == 'failed':
     return active_text, tr("big model"), tr("unavailable")
   if state == 'loading':
     return active_text, tr("big model"), tr("getting ready")
-  header = tr("small model") if source == "usbgpu" else tr("big model")
+  header = tr("small model") if source == "chestnut" else tr("big model")
   return active_text, header, other_name.lower()
 
 
@@ -113,7 +113,7 @@ class ModelsLayoutMici(NavScroller):
 
     hardware_btns = []
     active = active_source()
-    for source, label in (("qcom", tr("small models")), ("usbgpu", tr("big models"))):
+    for source, label in (("qcom", tr("small models")), ("chestnut", tr("big models"))):
       bundle = get_selected_bundle(ui_state.params, source)
       value = (bundle.internalName if bundle else default_model_name(source)).lower()
       if source == active:
@@ -159,7 +159,7 @@ class ModelsLayoutMici(NavScroller):
     self._pop_to_main()
 
   def _select_default(self, source):
-    select_default_model(ui_state.params, source)
+    ui_state.params.remove(ACTIVE_BUNDLE_KEYS[source])
     self._pop_to_main()
 
   def _select_folder(self, folder_name):

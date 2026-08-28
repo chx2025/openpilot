@@ -1,9 +1,7 @@
 from openpilot.selfdrive.ui.egpu_status import (
-  active_bundle_requires_usbgpu,
   build_egpu_sidebar_status,
   build_egpu_status,
   build_compact_egpu_status,
-  big_model_failed,
   classify_egpu_link_state,
   egpu_icon_visible,
   egpu_panel_style,
@@ -14,44 +12,6 @@ from openpilot.selfdrive.ui.egpu_status import (
 class FakeDeviceState:
   def __init__(self, present: bool):
     self.chestnutPresent = present
-
-
-def test_active_bundle_platform_identifies_only_usbgpu_models():
-  assert active_bundle_requires_usbgpu({"overrides": [{"key": "model_platform", "value": "usbgpu"}]})
-  assert not active_bundle_requires_usbgpu({"overrides": [{"key": "model_platform", "value": "qcom"}]})
-  assert not active_bundle_requires_usbgpu(None)
-
-
-def test_required_big_model_reports_failure_when_seen_stream_dies():
-  assert big_model_failed(
-    requires_usbgpu=True,
-    started=True,
-    chestnut_present=True,
-    active=True,
-    model_seen=True,
-    model_alive=False,
-  )
-
-
-def test_qcom_model_never_reports_usbgpu_failure():
-  assert not big_model_failed(
-    requires_usbgpu=False,
-    started=True,
-    chestnut_present=False,
-    active=False,
-    model_seen=True,
-    model_alive=False,
-  )
-
-
-def test_required_big_model_failure_respects_startup_and_loading_boundaries():
-  base = {"requires_usbgpu": True, "chestnut_present": True, "model_alive": False}
-
-  assert not big_model_failed(**base, started=False, active=False, model_seen=True)
-  assert not big_model_failed(**base, started=True, active=None, model_seen=False)
-  assert big_model_failed(**base, started=True, active=False, model_seen=False)
-  assert big_model_failed(**base, started=True, active=None, model_seen=True)
-  assert big_model_failed(**{**base, "chestnut_present": False}, started=True, active=True, model_seen=False)
 
 
 def test_physical_disconnect_immediately_clears_egpu_connection():

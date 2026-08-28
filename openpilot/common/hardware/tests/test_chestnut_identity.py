@@ -1,5 +1,6 @@
 from openpilot.common.hardware.usb import (
   CHESTNUT_FW_VERSION,
+  chestnut_runtime_present,
   chestnut_official_flash_mismatch,
   is_chestnut_runtime_device,
 )
@@ -32,6 +33,16 @@ def test_invalid_dual_is_neither_runnable_nor_owned_by_official_flasher():
   for entry in invalid:
     assert not is_chestnut_runtime_device(entry)
     assert not chestnut_official_flash_mismatch([entry])
+
+  assert not chestnut_runtime_present(list(invalid))
+
+
+def test_runtime_presence_uses_the_same_identity_as_modeld():
+  official = device(0x3801, 0x0001, f"custom {CHESTNUT_FW_VERSION}-CLEAN")
+  dirty_dual = device(0xADD1, 0x0002, "custom d1377a01-UT3G-DUAL-DIRTY")
+
+  assert chestnut_runtime_present([dirty_dual, official])
+  assert not chestnut_runtime_present([dirty_dual])
 
 
 def test_factory_is_ignored_and_official_rom_remains_owned():

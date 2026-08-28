@@ -26,5 +26,6 @@ Planner Backend, Plan Constraint, and Device Query/Device Command.
 - UI defaults are a separate Local Defaults policy. Any changed Param default is
   explicit, tested, and limited to a confirmed product decision (for example,
   Simplified Chinese on this local build).
-- eGPU/model routing remains out of scope until these source-mode Modules pass
-  device validation.
+- eGPU/model routing was deferred until the source-mode Modules passed device
+  validation. Its current official Model Platform and C3XL Model Adapter are
+  governed by ADR-0006.

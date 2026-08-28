@@ -59,7 +59,7 @@ def test_safe_eject_does_not_detach_when_claim_fails(chestnut_path, monkeypatch)
 
 
 def test_safe_eject_requires_connected_device(monkeypatch):
-  monkeypatch.setattr(eject, "find_chestnut", lambda: (None, None, None))
+  monkeypatch.setattr(eject, "find_runtime_chestnut", lambda: (None, None, None))
   with pytest.raises(RuntimeError, match="not connected"):
     eject.safe_eject()
 
@@ -69,7 +69,7 @@ def test_wait_disconnected_allows_slow_c3xl_teardown(monkeypatch):
 
   monkeypatch.setattr(eject.time, "monotonic", lambda: clock[0])
   monkeypatch.setattr(eject.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-  monkeypatch.setattr(eject, "find_chestnut", lambda: (("/sys/4-1", None, None) if clock[0] < 8.0 else (None, None, None)))
+  monkeypatch.setattr(eject, "find_runtime_chestnut", lambda: (("/sys/4-1", None, None) if clock[0] < 8.0 else (None, None, None)))
 
   assert eject._wait_disconnected()
 
@@ -169,7 +169,8 @@ def test_ejector_rejects_unknown_poweroff_state(monkeypatch):
 def test_safe_status_clears_only_after_disconnect_and_5gbps_return():
   params = FakeParams({"UsbGpuEjectStatus": "safe"})
   ejector = ChestnutEjector(params)
-  present = [{"vendorId": 0x3801, "productId": 0x0001, "speedMbps": 5000}]
+  present = [{"vendorId": 0x3801, "productId": 0x0001, "manufacturer": "tiny",
+              "product": "custom ed4e39b7-CLEAN", "speedMbps": 5000}]
 
   ejector.update(True, present)
   assert params.get("UsbGpuEjectStatus") == "safe"

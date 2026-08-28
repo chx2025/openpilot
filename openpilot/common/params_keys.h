@@ -132,10 +132,14 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UpdaterLastFetchTime", {PERSISTENT, TIME}},
     {"UptimeOffroad", {PERSISTENT, FLOAT, "0.0"}},
     {"UptimeOnroad", {PERSISTENT, FLOAT, "0.0"}},
-    {"UsbGpuActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
+    {"ChestnutActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
+    {"ChestnutLoading", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
+    {"ChestnutLoadingProgress", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, INT, "0"}},
     {"UsbGpuEjectError", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, STRING}},
     {"UsbGpuEjectRequest", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, BOOL}},
     {"UsbGpuEjectStatus", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, STRING}},
+    // One-release compatibility for rollback to the pre-Chestnut local build.
+    {"UsbGpuActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"UsbGpuLoading", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, BOOL}},
     {"UsbGpuLoadingProgress", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION | CLEAR_ON_IGNITION_ON, INT, "0"}},
     {"Version", {PERSISTENT, STRING}},
@@ -201,10 +205,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     // Model Manager params
     {"ModelManager_ActiveBundle", {PERSISTENT, JSON}},
+    // Legacy USBGPU slot remains registered for one migration release.
     {"ModelManager_ActiveBundleUSBGPU", {PERSISTENT, JSON}},
-    {"ModelManager_ActiveSource", {PERSISTENT | BACKUP, STRING, "qcom"}},
-    // Deprecated compatibility key. Removed after the dual-slot migration has
-    // shipped on every maintained device.
+    {"ModelManager_ActiveBundleChestnut", {PERSISTENT, JSON}},
+    {"ModelManager_ActiveSource", {PERSISTENT | BACKUP, STRING, "qcom"}},  // deprecated, no longer authoritative
     {"ModelManager_ActiveBundleRequiresUsbGpu", {PERSISTENT, BOOL, "0"}},
     {"ModelManager_ActiveJson", {CLEAR_ON_MANAGER_START, JSON}},
     {"ModelManager_ClearCache", {CLEAR_ON_MANAGER_START, BOOL}},
@@ -214,8 +218,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"ModelManager_Favs", {PERSISTENT | BACKUP, STRING}},
     {"ModelManager_LastSyncTime", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},
     {"ModelManager_LastSyncTime_USBGPU", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},
+    {"ModelManager_LastSyncTime_Chestnut", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},
     {"ModelManager_ModelsCache", {PERSISTENT | BACKUP, JSON}},
     {"ModelManager_ModelsCache_USBGPU", {PERSISTENT | BACKUP, JSON}},
+    {"ModelManager_ModelsCache_Chestnut", {PERSISTENT | BACKUP, JSON}},
 
     // Neural Network Lateral Control
     {"NeuralNetworkLateralControl", {PERSISTENT | BACKUP, BOOL, "0"}},

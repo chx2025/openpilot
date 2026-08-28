@@ -3,7 +3,9 @@ from openpilot.system.hardware.chestnut.status import (
   ChestnutLinkState,
   classify_chestnut_link,
 )
-from openpilot.system.hardware.chestnut.statusd import PcieLinkProbe
+from types import SimpleNamespace
+
+from openpilot.system.hardware.chestnut.statusd import PcieLinkProbe, _chestnut_usb
 
 
 def chestnut(speed_mbps: int) -> list[dict]:
@@ -41,3 +43,13 @@ def test_status_daemon_probe_does_not_touch_pcie_on_degraded_usb():
   assert reads == []
   assert valid
   assert ltssm == 0
+
+
+def test_status_daemon_only_accepts_runtime_chestnut_identity():
+  def state(product):
+    device = SimpleNamespace(vendorId=0xADD1, productId=0x0002, manufacturer="tiny",
+                             product=product, speedMbps=5000)
+    return SimpleNamespace(usbState=SimpleNamespace(devices=[device]))
+
+  assert _chestnut_usb(state("custom d1377a01-UT3G-DUAL")) == (True, 5000)
+  assert _chestnut_usb(state("custom d1377a01-UT3G-DUAL-DIRTY")) == (False, 0)

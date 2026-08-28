@@ -3,7 +3,7 @@ import subprocess
 import threading
 
 from openpilot.common.basedir import BASEDIR
-from openpilot.common.hardware.usb import CHESTNUT_ROM_USB_IDS, CHESTNUT_USB_IDS
+from openpilot.common.hardware.usb import CHESTNUT_ROM_USB_IDS, CHESTNUT_USB_IDS, is_chestnut_runtime_device
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
@@ -59,7 +59,7 @@ class ChestnutEjector:
 
   def update(self, offroad: bool, usb_state: list[dict]) -> None:
     detected = any((d["vendorId"], d["productId"]) in CHESTNUT_USB_IDS + CHESTNUT_ROM_USB_IDS for d in usb_state)
-    ready = any((d["vendorId"], d["productId"]) in CHESTNUT_USB_IDS and d.get("speedMbps", 0) == 5000 for d in usb_state)
+    ready = any(is_chestnut_runtime_device(d) and d.get("speedMbps", 0) == 5000 for d in usb_state)
     status = self.params.get("UsbGpuEjectStatus")
 
     if status == "safe" and not detected:

@@ -12,9 +12,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.ui.lib.prime_state import PrimeState
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.hardware import HARDWARE, PC
-from openpilot.selfdrive.ui.egpu_status import (active_bundle_requires_usbgpu, big_model_failed as evaluate_big_model_failed,
-                                                resolve_egpu_connection)
-from openpilot.sunnypilot.models.helpers import usbgpu_model_ready
+from openpilot.sunnypilot.models.artifact_status import chestnut_model_ready
 
 from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP, DeviceSP
 
@@ -28,6 +26,15 @@ class UIStatus(Enum):
   OVERRIDE = "override"
   LAT_ONLY = "lat_only"
   LONG_ONLY = "long_only"
+
+
+class ChestnutState(Enum):
+  DISCONNECTED = "disconnected"
+  UNCOMPILED = "uncompiled"
+  READY = "ready"
+  LOADING = "loading"
+  ACTIVE = "active"
+  FAILED = "failed"
 
 
 class UIState(UIStateSP):
@@ -85,14 +92,12 @@ class UIState(UIStateSP):
     self.always_on_dm: bool = self.params.get_bool("AlwaysOnDM")
     self.experimental_mode: bool = self.params.get_bool("ExperimentalMode")
     self.experimental_mode_confirmed: bool = self.params.get_bool("ExperimentalModeConfirmed")
-    self.usbgpu: bool = False
-    self.usbgpu_compiled: bool = usbgpu_model_ready(self.params)
-    self.usbgpu_active: bool | None = self.params.get("UsbGpuActive")
-    self.usbgpu_loading: bool = self.params.get_bool("UsbGpuLoading")
-    try:
-      self.usbgpu_loading_progress = int(self.params.get("UsbGpuLoadingProgress", return_default=True) or 0)
-    except UnknownKeyName:
-      self.usbgpu_loading_progress = 0
+    self.chestnut_present: bool = False
+    self.chestnut_compiled: bool = chestnut_model_ready(self.params)
+    self.chestnut_active: bool | None = self.params.get("ChestnutActive")
+    self.chestnut_loading: bool = self.params.get_bool("ChestnutLoading")
+    self.chestnut_loading_progress = self._read_chestnut_loading_progress()
+    self.chestnut_state = ChestnutState.DISCONNECTED
     self.started: bool = False
     self.ignition: bool = False
     self.recording_audio: bool = False
@@ -121,15 +126,38 @@ class UIState(UIStateSP):
 
   @property
   def big_model_failed(self) -> bool:
-    model_seen = self.sm.recv_frame["modelV2"] > self.started_frame
-    return evaluate_big_model_failed(
-      requires_usbgpu=active_bundle_requires_usbgpu(self.active_bundle),
-      started=self.started,
-      chestnut_present=bool(self.sm["deviceState"].chestnutPresent),
-      active=self.usbgpu_active,
-      model_seen=model_seen,
-      model_alive=bool(self.sm.alive["modelV2"]),
-    )
+    return self.chestnut_state == ChestnutState.FAILED
+
+  # The eGPU overlay remains a local Adapter while the model Interface uses
+  # official Chestnut terminology.
+  @property
+  def usbgpu(self) -> bool:
+    return self.chestnut_present
+
+  @property
+  def usbgpu_compiled(self) -> bool:
+    return self.chestnut_compiled
+
+  @property
+  def usbgpu_active(self) -> bool | None:
+    return self.chestnut_active
+
+  @property
+  def usbgpu_loading(self) -> bool:
+    return self.chestnut_loading
+
+  @property
+  def usbgpu_loading_progress(self) -> int:
+    return self.chestnut_loading_progress
+
+  def _read_chestnut_loading_progress(self) -> int:
+    try:
+      return int(self.params.get("ChestnutLoadingProgress", return_default=True) or 0)
+    except UnknownKeyName:
+      try:
+        return int(self.params.get("UsbGpuLoadingProgress", return_default=True) or 0)
+      except UnknownKeyName:
+        return 0
 
   @property
   def engaged(self) -> bool:
@@ -150,6 +178,7 @@ class UIState(UIStateSP):
     self.sm.update(0)
     self._update_state()
     self._update_status()
+    self._update_chestnut_state()
     device.update()
     UIStateSP.update(self)
 
@@ -213,11 +242,34 @@ class UIState(UIStateSP):
         self.status = UIStatus.DISENGAGED
         self.started_frame = self.sm.frame
         self.started_time = time.monotonic()
+        self.chestnut_present = self.sm["deviceState"].chestnutPresent
 
       for callback in self._offroad_transition_callbacks:
         callback()
 
       self._started_prev = self.started
+
+  def _update_chestnut_state(self) -> None:
+    detected = self.sm["deviceState"].chestnutPresent
+    if not self.started:
+      self.chestnut_present = detected
+      self.chestnut_state = (ChestnutState.READY if detected and self.chestnut_compiled else
+                             ChestnutState.UNCOMPILED if detected else ChestnutState.DISCONNECTED)
+      return
+
+    model_seen = self.sm.recv_frame["modelV2"] > self.started_frame
+    if not self.chestnut_present:
+      self.chestnut_state = ChestnutState.DISCONNECTED
+    elif not self.chestnut_compiled:
+      self.chestnut_state = ChestnutState.UNCOMPILED
+    elif self.chestnut_state == ChestnutState.FAILED or not detected or (model_seen and (not self.sm.alive["modelV2"] or not self.sm["modelV2"].big)):
+      self.chestnut_state = ChestnutState.FAILED
+    elif self.chestnut_loading or not model_seen:
+      self.chestnut_state = ChestnutState.LOADING
+    elif self.chestnut_active is False:
+      self.chestnut_state = ChestnutState.FAILED
+    else:
+      self.chestnut_state = ChestnutState.ACTIVE
 
   def update_params(self) -> None:
     # For slower operations
@@ -235,15 +287,11 @@ class UIState(UIStateSP):
     self.always_on_dm = self.params.get_bool("AlwaysOnDM")
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
     self.experimental_mode_confirmed = self.params.get_bool("ExperimentalModeConfirmed")
-    self.usbgpu = resolve_egpu_connection(self.sm["deviceState"])
-    if not self.usbgpu_compiled:
-      self.usbgpu_compiled = usbgpu_model_ready(self.params)
-    self.usbgpu_active = self.params.get("UsbGpuActive")
-    self.usbgpu_loading = self.params.get_bool("UsbGpuLoading")
-    try:
-      self.usbgpu_loading_progress = int(self.params.get("UsbGpuLoadingProgress", return_default=True) or 0)
-    except UnknownKeyName:
-      self.usbgpu_loading_progress = 0
+    if not self.chestnut_compiled:
+      self.chestnut_compiled = chestnut_model_ready(self.params)
+    self.chestnut_active = self.params.get("ChestnutActive")
+    self.chestnut_loading = self.params.get_bool("ChestnutLoading")
+    self.chestnut_loading_progress = self._read_chestnut_loading_progress()
 
     UIStateSP.update_params(self)
 

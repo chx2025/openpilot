@@ -65,3 +65,16 @@ longitudinal plan without becoming a Planner Backend. The direct Stop Profile
 is a Plan Constraint; the Traffic Radar strategy uses the same producer through
 the planner's optional target seam.
 _Avoid_: traffic planner, duplicated traffic controller
+
+**Model Platform**:
+The official hardware-driven QCOM/Chestnut selection. Each platform keeps an
+independent selected bundle; a healthy connected Chestnut activates Big Model,
+otherwise QCOM activates Small Model.
+_Avoid_: explicit model source, USBGPU model selector
+
+**C3XL Model Adapter**:
+The narrow model-runtime Adapter that preserves C3XL hardware capability:
+downloaded Chestnut bundle readiness, 75-second loading, loading progress,
+available compile CPU, UT3G identity, telemetry, and safe eject. It never
+chooses between QCOM and Chestnut.
+_Avoid_: C3XL model manager, alternate model selector

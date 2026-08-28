@@ -5,7 +5,7 @@ from openpilot.common.hardware.comma.hardware import HardwareComma
 from openpilot.sunnypilot.hardware.panda import InternalPanda
 from openpilot.sunnypilot.hardware.profile import (
   HardwareProfile, allows_automatic_power_down, get_hardware_profile, has_amplifier, has_driver_camera, power_down_requested,
-  resolve_internal_panda_type,
+  model_compile_cpu, resolve_internal_panda_type,
 )
 
 
@@ -24,6 +24,12 @@ def test_driver_camera_capability_is_profile_scoped() -> None:
 
 def test_amplifier_capability_is_profile_scoped() -> None:
   assert has_amplifier(HardwareProfile.STANDARD)
+
+
+def test_model_compile_cpu_never_exceeds_available_hardware() -> None:
+  assert model_compile_cpu(8) == 7
+  assert model_compile_cpu(4) == 3
+  assert model_compile_cpu(1) == 0
   assert not has_amplifier(HardwareProfile.C3XL)
 
 

@@ -85,27 +85,29 @@ def _migrate_tesla_mads_screen_button(_params):
 
 
 def _migrate_model_bundle_slots(_params):
-  """Split the legacy active bundle without changing the user's selected platform."""
+  """Seed the official Chestnut slot and retire local explicit-source state."""
   try:
-    legacy_bundle = _params.get("ModelManager_ActiveBundle")
-    if not isinstance(legacy_bundle, dict) or not legacy_bundle:
-      return
+    if _params.get("ModelManager_ActiveBundleChestnut") is None:
+      chestnut_bundle = _params.get("ModelManager_ActiveBundleUSBGPU")
+      if chestnut_bundle is None:
+        chestnut_bundle = _params.get("ModelManager_ActiveBundle")
+      if chestnut_bundle is not None:
+        _params.put("ModelManager_ActiveBundleChestnut", chestnut_bundle, block=True)
+        cloudlog.info("params_migration: seeded ModelManager_ActiveBundleChestnut")
 
-    overrides = legacy_bundle.get("overrides", [])
-    override_map = ({item.get("key"): item.get("value") for item in overrides if isinstance(item, dict)}
-                    if isinstance(overrides, list) else overrides)
-    requires_usbgpu = (_params.get_bool("ModelManager_ActiveBundleRequiresUsbGpu") or
-                       override_map.get("model_platform") == "usbgpu")
+    legacy_cache = _params.get("ModelManager_ModelsCache_USBGPU")
+    legacy_bundles = legacy_cache.get("bundles", []) if isinstance(legacy_cache, dict) else []
+    legacy_cache_is_chestnut = any(isinstance(bundle, dict) and bundle.get("is_big") is True
+                                    for bundle in legacy_bundles)
+    if (_params.get("ModelManager_ModelsCache_Chestnut") is None and legacy_cache_is_chestnut):
+      _params.put("ModelManager_ModelsCache_Chestnut", legacy_cache, block=True)
+      _params.put("ModelManager_LastSyncTime_Chestnut", 0, block=True)
+      cloudlog.info("params_migration: seeded Chestnut catalog cache from USBGPU cache")
 
-    if requires_usbgpu:
-      if _params.get("ModelManager_ActiveBundleUSBGPU") is None:
-        _params.put("ModelManager_ActiveBundleUSBGPU", legacy_bundle, block=True)
-      _params.remove("ModelManager_ActiveBundle")
-      _params.put("ModelManager_ActiveSource", "usbgpu", block=True)
-      cloudlog.info("params_migration: moved legacy active bundle to the usbgpu slot")
-    elif _params.get("ModelManager_ActiveSource") is None:
-      _params.put("ModelManager_ActiveSource", "qcom", block=True)
-      cloudlog.info("params_migration: kept legacy active bundle in the qcom slot")
+    # These keys remain registered for one transition release so an older
+    # native Params build can boot, but no longer choose the active platform.
+    _params.remove("ModelManager_ActiveSource")
+    _params.remove("ModelManager_ActiveBundleRequiresUsbGpu")
   except Exception as e:
     cloudlog.exception(f"Error migrating model bundle slots: {e}")
 
@@ -147,5 +149,5 @@ def run_migration(_params):
   # seed TeslaMadsScreenButton for existing Tesla installs
   _migrate_tesla_mads_screen_button(_params)
 
-  # split model selection into QCOM and USBGPU slots without hardware-driven switching
+  # Seed official QCOM/Chestnut slots and retire explicit platform selection.
   _migrate_model_bundle_slots(_params)

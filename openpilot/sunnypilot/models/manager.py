@@ -17,9 +17,8 @@ from openpilot.common.hardware.hw import Paths
 
 from openpilot.cereal import messaging, custom
 from openpilot.sunnypilot.models.fetcher import ModelFetcher
-from openpilot.sunnypilot.models.helpers import (ACTIVE_BUNDLE_KEYS, bundle_requires_usbgpu, get_active_bundle,
-                                                  get_selected_bundle, resolve_bundle_by_ref, validate_active_bundles,
-                                                  verify_file)
+from openpilot.sunnypilot.models.helpers import (ACTIVE_BUNDLE_KEYS, get_active_bundle, get_selected_bundle,
+                                                  resolve_bundle_by_ref, validate_active_bundles, verify_file)
 
 # (connect, read) seconds. read is per-request inactivity, not a total cap
 DOWNLOAD_TIMEOUT = (30, 30)
@@ -36,17 +35,19 @@ class ModelManagerSP:
     self.params = Params()
     self.model_fetcher = ModelFetcher(self.params)
     self.pm = messaging.PubMaster(["modelManagerSP"])
+    self.sm = messaging.SubMaster(["deviceState"])
+    self.chestnut_present = False
     self.available_models: list[custom.ModelManagerSP.ModelBundle] = []
     self.source_models: dict[str, list[custom.ModelManagerSP.ModelBundle]] = {}
     self.selected_bundle: custom.ModelManagerSP.ModelBundle = None
-    self.active_bundle: custom.ModelManagerSP.ModelBundle = get_active_bundle(self.params)
+    self.active_bundle: custom.ModelManagerSP.ModelBundle = get_active_bundle(self.params, chestnut=self.chestnut_present)
     self._chunk_size = 128 * 1000  # 128 KB chunks
     self._download_start_times: dict[str, float] = {}  # Track start time per model
     self._download_ref: bytes | str | None = None
 
   def _download_interrupted(self) -> bool:
-    # Removing the ref means cancel. Replacing it queues another selection;
-    # the current transfer finishes and leaves the newer ref untouched.
+    # only removal cancels: a different ref is a queued selection that
+    # _release_download_ref leaves in place for the next tick
     return self.params.get("ModelManager_DownloadRef") is None
 
   def _release_download_ref(self) -> None:
@@ -108,8 +109,7 @@ class ModelManagerSP:
     # Clean up start time after download completes
     del self._download_start_times[model.fileName]
 
-  async def _download_chunked(self, base_url: str, base_path: str, artifact,
-                              skip: frozenset[int] | set[int] = frozenset()) -> None:
+  async def _download_chunked(self, base_url: str, base_path: str, artifact, skip: frozenset[int] | set[int] = frozenset()) -> None:
     from openpilot.common.file_chunker import get_chunk_name, get_manifest_path
 
     num_chunks = len(artifact.chunks)
@@ -165,6 +165,8 @@ class ModelManagerSP:
     full_path = os.path.join(destination_path, filename)
 
     try:
+      # progress counts only valid chunks so a resumed download continues the
+      # bar from where verification left it, instead of falling back to zero
       is_cached = False
       valid_chunks: set[int] = set()
       if len(artifact.chunks) > 0:
@@ -185,6 +187,9 @@ class ModelManagerSP:
           is_cached = True
 
       if is_cached:
+        # A cached chunk set is only loadable when open_file_chunked can find
+        # its manifest. Files copied from a Mac may have every valid chunk but
+        # no manifest, so repair that small piece of local metadata here.
         if len(artifact.chunks) > 0:
           from openpilot.common.file_chunker import get_manifest_path
           with open(get_manifest_path(full_path), 'w') as f:  # noqa: ASYNC230
@@ -215,7 +220,7 @@ class ModelManagerSP:
       self._report_status()
 
     except DownloadCancelled:
-      # A cancel keeps complete chunks so the next attempt can resume.
+      # a cancel keeps whatever is on disk: complete chunks resume the next attempt
       self._download_start_times.pop(artifact.fileName, None)
       artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.failed
       artifact.downloadProgress.eta = 0
@@ -256,9 +261,7 @@ class ModelManagerSP:
     model_manager_state.availableBundles = self.available_models
     self.pm.send('modelManagerSP', msg)
 
-  async def _download_bundle(self, model_bundle: custom.ModelManagerSP.ModelBundle, destination_path: str,
-                             source: str | None = None) -> None:
-    """Downloads all models in a bundle"""
+  async def _download_bundle(self, model_bundle: custom.ModelManagerSP.ModelBundle, destination_path: str, source: str) -> None:
     self.selected_bundle = model_bundle
     self.selected_bundle.status = custom.ModelManagerSP.DownloadStatus.downloading
     for model in self.selected_bundle.models:
@@ -280,18 +283,11 @@ class ModelManagerSP:
           seen_artifacts.add(artifact.fileName)
           await self._process_artifact(artifact, destination_path)
 
-      # Cached artifacts can complete without entering a transfer loop. Recheck
-      # the request before activation so a simultaneous Default selection wins.
       if self._download_interrupted():
         raise DownloadCancelled("Download cancelled")
-
-      self.active_bundle = self.selected_bundle
-      self.active_bundle.status = custom.ModelManagerSP.DownloadStatus.downloaded
-      source = source or ("usbgpu" if bundle_requires_usbgpu(self.active_bundle) else "qcom")
-      self.params.put_bool("ModelManager_ActiveBundleRequiresUsbGpu", source == "usbgpu", block=True)
-      self.params.put(ACTIVE_BUNDLE_KEYS[source], self.active_bundle.to_dict(), block=True)
-      self.params.put("ModelManager_ActiveSource", source, block=True)
-      self.selected_bundle = None
+      self.selected_bundle.status = custom.ModelManagerSP.DownloadStatus.downloaded
+      self.params.put(ACTIVE_BUNDLE_KEYS[source], model_bundle.to_dict(), block=True)
+      self.active_bundle = get_active_bundle(self.params, chestnut=self.chestnut_present)
 
     except Exception:
       if self.selected_bundle is not None:
@@ -301,17 +297,16 @@ class ModelManagerSP:
     finally:
       self._report_status()
 
-  def download(self, model_bundle: custom.ModelManagerSP.ModelBundle, destination_path: str,
-               source: str | None = None) -> None:
+  def download(self, model_bundle: custom.ModelManagerSP.ModelBundle, destination_path: str, source: str) -> None:
     """Main entry point for downloading a model bundle"""
     asyncio.run(self._download_bundle(model_bundle, destination_path, source))
 
   def _process_download_requests(self) -> None:
-    # A selection made during a transfer remains queued. Loop so it starts in
-    # the same manager tick without a one-second idle flash in the UI.
+    # loops so a ref queued during a download starts in the same tick, without
+    # the bar dropping to idle for a tick between the two transfers
     last_ref = None
     while (ref_to_download := self.params.get("ModelManager_DownloadRef")) is not None:
-      if ref_to_download == last_ref:
+      if ref_to_download == last_ref:  # a repeating ref falls back to the next tick instead of spinning
         return
       last_ref = ref_to_download
       resolved = resolve_bundle_by_ref(ref_to_download, self.source_models)
@@ -333,28 +328,14 @@ class ModelManagerSP:
 
     while True:
       try:
-        self.source_models = {
-          source: self.model_fetcher.get_bundles_for_source(source)
-          for source in ModelFetcher.MODEL_SOURCES
-        }
-        self.available_models = [bundle for source in ModelFetcher.MODEL_SOURCES for bundle in self.source_models[source]]
+        self.sm.update(0)
+        self.chestnut_present = self.sm['deviceState'].chestnutPresent
+        self.source_models = {source: self.model_fetcher.get_bundles_for_source(source) for source in ModelFetcher.MODEL_SOURCES}
+        self.available_models = self.source_models[ModelFetcher.active_source(self.chestnut_present)]
         validate_active_bundles(self.params, self.source_models)
-        self.active_bundle = get_active_bundle(self.params)
+        self.active_bundle = get_active_bundle(self.params, chestnut=self.chestnut_present)
 
         self._process_download_requests()
-
-        # One-release compatibility for a request left by the previous UI.
-        if (index_to_download := self.params.get("ModelManager_DownloadIndex")) is not None:
-          if model_to_download := next((model for model in self.available_models if model.index == index_to_download), None):
-            source = "usbgpu" if bundle_requires_usbgpu(model_to_download) else "qcom"
-            try:
-              self.download(model_to_download, Paths.model_root(), source)
-            except Exception as e:
-              cloudlog.exception(e)
-            finally:
-              if self.params.get("ModelManager_DownloadIndex") == index_to_download:
-                self.params.remove("ModelManager_DownloadIndex")
-              self.selected_bundle = None
 
         if self.params.get("ModelManager_ClearCache"):
           self.clear_model_cache()
@@ -372,12 +353,13 @@ class ModelManagerSP:
     Clears the model cache directory of all files except those in the active model bundle.
     """
 
-    # Keep both slots: either remains a valid explicit user choice.
+    # Get list of files used by both slots' selected bundles (either may become
+    # the truly active bundle depending on hardware availability)
     active_files = []
     for source in ACTIVE_BUNDLE_KEYS:
       if selected_bundle := get_selected_bundle(self.params, source):
         for model in selected_bundle.models:
-          if hasattr(model, 'artifact') and model.artifact.fileName:
+          if model.artifact.fileName:
             active_files.append(model.artifact.fileName)
 
     # Remove all files except active ones (including their chunk files)

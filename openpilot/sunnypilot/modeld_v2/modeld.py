@@ -9,7 +9,7 @@ See the LICENSE.md file in the root directory for more details.
 import os
 os.environ['GMMU'] = '0'
 from openpilot.common.hardware import COMMA_HARDWARE
-from openpilot.selfdrive.modeld.helpers import usbgpu_present, load_oob
+from openpilot.selfdrive.modeld.helpers import chestnut_present, load_oob
 from openpilot.sunnypilot.modeld_v2.egpu_loader import configure_default_device, load_with_timeout
 configure_default_device(COMMA_HARDWARE)
 import time
@@ -55,14 +55,6 @@ PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
 BIG_MODEL_TIMEOUT = 75
 
 
-def should_use_usbgpu(params: Params, hardware_present: bool | None = None) -> bool:
-  present = usbgpu_present() if hardware_present is None else hardware_present
-  selected_source = params.get("ModelManager_ActiveSource")
-  requires_usbgpu = ((selected_source == "usbgpu") if selected_source in ("qcom", "usbgpu")
-                     else params.get_bool("ModelManager_ActiveBundleRequiresUsbGpu"))
-  return bool(present and requires_usbgpu)
-
-
 def _pkl_exists(path):
   from openpilot.common.file_chunker import get_manifest_path
   return os.path.exists(path) or os.path.exists(get_manifest_path(path))
@@ -96,14 +88,14 @@ class ModelState(ModelStateBase):
   inputs: dict[str, np.ndarray]
   prev_desire: np.ndarray
 
-  def __init__(self, cam_w: int, cam_h: int, usbgpu: bool = False, loading_progress_callback=None):
+  def __init__(self, cam_w: int, cam_h: int, chestnut: bool = False, loading_progress_callback=None):
     ModelStateBase.__init__(self)
 
     env_pkl = os.environ.get('COMBINED_MODEL_PKL')
     if env_pkl and os.path.exists(env_pkl):
       model_bundle = None
     else:
-      model_bundle = get_active_bundle()
+      model_bundle = get_active_bundle(chestnut=chestnut)
     self.generation = model_bundle.generation if model_bundle is not None else None
     overrides = {override.key: override.value for override in model_bundle.overrides} if model_bundle else {}
 
@@ -111,7 +103,7 @@ class ModelState(ModelStateBase):
     self.LONG_SMOOTH_SECONDS = float(overrides.get('long', ".0"))
     self.MIN_LAT_CONTROL_SPEED = 0.3
     self.PLANPLUS_CONTROL: float = 1.0
-    self.usbgpu = usbgpu
+    self.chestnut = chestnut
 
     pkl_path = _find_driving_pkl(model_bundle)
     assert pkl_path is not None, "No driving pkl found — all models must be compiled with compile_modeld.py"
@@ -124,17 +116,16 @@ class ModelState(ModelStateBase):
         loading_progress_callback(5 + int(value * 70))
 
     total_size = get_chunked_file_size(pkl_path)
-    if self.usbgpu:
+    if self.chestnut:
       with Context(DEV="USB+AMD:LLVM"):
         jits = load_oob(open_file_chunked(pkl_path), total_size=total_size, progress_callback=report_read_progress)
     else:
       jits = load_oob(open_file_chunked(pkl_path), total_size=total_size, progress_callback=report_read_progress)
-
     if loading_progress_callback is not None:
       loading_progress_callback(80)
 
     self.WARP_DEV = 'QCOM' if COMMA_HARDWARE else 'CPU'
-    self.DEV = 'AMD' if self.usbgpu else self.WARP_DEV
+    self.DEV = 'AMD' if self.chestnut else self.WARP_DEV
     self.QUEUE_DEV = self.DEV
     metadata = jits['metadata']
 
@@ -209,7 +200,7 @@ class ModelState(ModelStateBase):
     else:
       self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=frame_tensor, big_frame=big_frame_tensor)
 
-    if self.usbgpu:
+    if self.chestnut:
       self.warmup()
       if loading_progress_callback is not None:
         loading_progress_callback(95)
@@ -313,7 +304,7 @@ class ModelState(ModelStateBase):
       buf[0, :-1] = buf[0, 1:]
       buf[0, -1, :] = outputs['desired_curvature'][0, :] if not self.mlsim else 0
 
-    if self.usbgpu and not np.all(np.isfinite(outputs.get('plan', np.array([0.])))):
+    if self.chestnut and not np.all(np.isfinite(outputs.get('plan', np.array([0.])))):
       cloudlog.error("model output not finite, dropping frame")
       return None
 
@@ -353,21 +344,21 @@ def main(demo=False):
   setproctitle(PROCESS_NAME)
   config_realtime_process(7, 54)
 
-  params = Params()
-  USBGPU = should_use_usbgpu(params)
-  if USBGPU:
+  CHESTNUT = chestnut_present()
+  if CHESTNUT:
     os.environ['HCQDEV_WAIT_TIMEOUT_MS'] = '3000'
 
-  params.put_bool("UsbGpuLoading", USBGPU)
-  params.put("UsbGpuLoadingProgress", 1 if USBGPU else 0, block=True)
-  params.remove("UsbGpuActive")
+  params = Params()
+  params.put_bool("ChestnutLoading", CHESTNUT)
+  params.put("ChestnutLoadingProgress", 1 if CHESTNUT else 0, block=True)
+  params.remove("ChestnutActive")
 
   last_loading_progress = -1
   def update_loading_progress(progress: int):
     nonlocal last_loading_progress
     progress = max(0, min(100, int(progress)))
     if progress != last_loading_progress:
-      params.put("UsbGpuLoadingProgress", progress, block=True)
+      params.put("ChestnutLoadingProgress", progress, block=True)
       last_loading_progress = progress
 
   # visionipc clients
@@ -397,33 +388,33 @@ def main(demo=False):
   st = time.monotonic()
 
   model = None
-  if USBGPU:
+  if CHESTNUT:
     try:
       model = load_with_timeout(
-        lambda: ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=True,
+        lambda: ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=True,
                            loading_progress_callback=update_loading_progress),
         BIG_MODEL_TIMEOUT,
       )
     except Exception:
-      params.put_bool("UsbGpuActive", False)
-      params.put_bool("UsbGpuLoading", False)
-      params.put("UsbGpuLoadingProgress", 0, block=True)
+      params.put_bool("ChestnutActive", False)
+      params.put_bool("ChestnutLoading", False)
+      params.put("ChestnutLoadingProgress", 0, block=True)
       raise
-    params.put_bool("UsbGpuActive", True)
+    params.put_bool("ChestnutActive", True)
     update_loading_progress(100)
   else:
-    model = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, usbgpu=False)
+    model = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=False)
 
-  params.put_bool("UsbGpuLoading", False)
+  params.put_bool("ChestnutLoading", False)
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
   # messaging
-  pub_socks = ["modelV2", "drivingModelData", "cameraOdometry", "modelDataV2SP"] + (["chestnutState"] if USBGPU else [])
+  pub_socks = ["modelV2", "drivingModelData", "cameraOdometry", "modelDataV2SP"] + (["chestnutState"] if CHESTNUT else [])
   pm = PubMaster(pub_socks)
   sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay"])
 
   publish_state = PublishState()
-  chestnut_state = ChestnutState(pm, USBGPU) if USBGPU else None
+  chestnut_state = ChestnutState(pm, CHESTNUT) if CHESTNUT else None
 
   # setup filter to track dropped frames
   frame_dropped_filter = FirstOrderFilter(0., 10., 1. / model.constants.MODEL_FREQ)
@@ -569,7 +560,7 @@ def main(demo=False):
       fill_model_msg(drivingdata_send, modelv2_send, model_output, action,
                      publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id,
                      frame_drop_ratio, meta_main.timestamp_eof, model_execution_time, live_calib_seen, meta_constants)
-      modelv2_send.modelV2.big = model.usbgpu
+      modelv2_send.modelV2.big = model.chestnut
 
       desire_state = modelv2_send.modelV2.meta.desireState
       l_lane_change_prob = desire_state[log.Desire.laneChangeLeft]

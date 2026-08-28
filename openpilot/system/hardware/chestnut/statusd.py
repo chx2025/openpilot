@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 import openpilot.cereal.messaging as messaging
-from openpilot.common.hardware.usb import CHESTNUT_USB_IDS
+from openpilot.common.hardware.usb import is_chestnut_runtime_device
 from openpilot.common.realtime import Ratekeeper
 from openpilot.system.hardware.chestnut.status import read_pcie_ltssm
 
@@ -42,7 +42,12 @@ class PcieLinkProbe:
 
 def _chestnut_usb(device_state) -> tuple[bool, int]:
   speeds = [int(device.speedMbps) for device in device_state.usbState.devices
-            if (int(device.vendorId), int(device.productId)) in CHESTNUT_USB_IDS]
+            if is_chestnut_runtime_device({
+              "vendorId": int(device.vendorId),
+              "productId": int(device.productId),
+              "manufacturer": str(device.manufacturer),
+              "product": str(device.product),
+            })]
   return bool(speeds), max(speeds, default=0)
 
 

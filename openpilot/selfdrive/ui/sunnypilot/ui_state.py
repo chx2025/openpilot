@@ -10,8 +10,8 @@ from openpilot.cereal import messaging, log, custom
 from opendbc.car.structs import car
 from openpilot.common.params import Params
 from openpilot.selfdrive.ui.sunnypilot.layouts.settings.display import OnroadBrightness
+from openpilot.sunnypilot.models.helpers import ACTIVE_BUNDLE_KEYS, get_active_source
 from openpilot.sunnypilot.sunnylink.sunnylink_state import SunnylinkState
-from openpilot.sunnypilot.models.helpers import get_active_bundle
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.sunnypilot.widgets.screen_saver import ScreenSaverSP
 
@@ -44,6 +44,7 @@ class UIStateSP:
     self.screensaver_enabled: bool = False
 
     self.active_bundle = None
+    self.model_runner_tinygrad: bool = False
     self.blindspot: bool = False
     self.chevron_metrics = None
     self.custom_interactive_timeout: int = 0
@@ -151,8 +152,13 @@ class UIStateSP:
       self.has_icbm = self.CP_SP.intelligentCruiseButtonManagementAvailable and self.params.get_bool("IntelligentCruiseButtonManagement")
 
     self._enforce_constraints()
-    active_bundle = get_active_bundle(self.params)
-    self.active_bundle = active_bundle.to_dict() if active_bundle is not None else None
+    source = get_active_source(chestnut=self.chestnut_present, chestnut_active=self.chestnut_active,
+                               chestnut_loading=self.chestnut_loading, offroad=self.is_offroad())
+    self.active_bundle = self.params.get(ACTIVE_BUNDLE_KEYS[source])
+    self.model_runner_tinygrad = self.active_bundle is not None and self.active_bundle.get("runner") == "tinygrad"
+    # A downloaded Chestnut bundle is already compiled even when the optional
+    # built-in Default Big artifact is absent from this source deployment.
+    self.chestnut_compiled = self.chestnut_compiled or self.model_runner_tinygrad
     self.blindspot = self.params.get_bool("BlindSpot")
     self.chevron_metrics = self.params.get("ChevronInfo")
     self.custom_interactive_timeout = self.params.get("InteractivityTimeout", return_default=True)

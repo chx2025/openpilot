@@ -1,5 +1,10 @@
 # Select the model platform explicitly
 
+Status: Superseded by ADR-0006.
+
+This decision recorded the previous local USBGPU policy. It is retained as
+history only and must not be used as the current implementation requirement.
+
 The model manager keeps independent QCOM and USBGPU selections and addresses
 downloads by the catalog bundle `ref`. `ModelManager_ActiveSource` records the
 user's explicit platform choice. Physical eGPU presence is a runtime capability

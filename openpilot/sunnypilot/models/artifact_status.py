@@ -36,3 +36,19 @@ def bundle_artifacts_ready(bundle, model_root: str | Path) -> bool:
         return False
 
   return seen_artifact
+
+
+def chestnut_model_ready(params, *, model_root: str | Path | None = None,
+                         builtin_ready: bool | None = None) -> bool:
+  """Whether the official Chestnut slot has a loadable built-in or bundle artifact."""
+  if builtin_ready is None:
+    from openpilot.selfdrive.modeld.helpers import chestnut_compiled
+    builtin_ready = chestnut_compiled()
+  if builtin_ready:
+    return True
+
+  from openpilot.common.hardware.hw import Paths
+  from openpilot.sunnypilot.models.helpers import get_selected_bundle
+
+  bundle = get_selected_bundle(params, "chestnut")
+  return bool(bundle is not None and bundle_artifacts_ready(bundle, model_root or Paths.model_root()))

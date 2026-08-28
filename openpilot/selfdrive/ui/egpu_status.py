@@ -92,30 +92,6 @@ def egpu_icon_visible(*, connected: bool) -> bool:
   return connected
 
 
-def active_bundle_requires_usbgpu(active_bundle) -> bool:
-  """Read the selected model platform from Params JSON or a cereal bundle."""
-  if active_bundle is None:
-    return False
-  overrides = active_bundle.get("overrides", []) if isinstance(active_bundle, dict) else getattr(active_bundle, "overrides", [])
-  for override in overrides:
-    key = override.get("key") if isinstance(override, dict) else getattr(override, "key", None)
-    value = override.get("value") if isinstance(override, dict) else getattr(override, "value", None)
-    if key == "model_platform":
-      return value == "usbgpu"
-  return False
-
-
-def big_model_failed(*, requires_usbgpu: bool, started: bool, chestnut_present: bool,
-                     active: bool | None, model_seen: bool, model_alive: bool) -> bool:
-  """Return whether the selected USBGPU model has failed after onroad startup."""
-  if not requires_usbgpu or not started:
-    return False
-  return (active is False or
-          not chestnut_present or
-          (active is True and model_seen and not model_alive) or
-          (active is None and model_seen))
-
-
 def resolve_egpu_connection(device_state) -> bool:
   """Return the current physical Chestnut USB presence without trip latching."""
   return bool(device_state.chestnutPresent)
