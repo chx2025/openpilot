@@ -24,6 +24,9 @@ from openpilot.common.hardware.usb import CHESTNUT_FW_VERSION, chestnut_official
 from openpilot.common.linux import LinuxSystemStats
 from openpilot.system.loggerd.config import get_available_percent
 from openpilot.common.swaglog import cloudlog
+from openpilot.sunnypilot.hardware.profile import (
+  allows_automatic_power_down, get_hardware_profile, power_down_requested,
+)
 from openpilot.sunnypilot.system.statsd import statlog
 from openpilot.system.hardware.power_monitoring import PowerMonitoring
 from openpilot.system.hardware.fan_controller import FanController
@@ -248,6 +251,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   offroad_cycle_count = 0
 
   params = Params()
+  hardware_profile = get_hardware_profile()
   power_monitor = PowerMonitoring()
 
   uptime_offroad: float = params.get("UptimeOffroad", return_default=True)
@@ -460,8 +464,13 @@ def hardware_thread(end_event, hw_queue) -> None:
     statlog.sample("som_power_draw", som_power_draw)
     msg.deviceState.somPowerDrawW = som_power_draw
 
-    # Check if we need to shut down
-    if power_monitor.should_shutdown(onroad_conditions["ignition"], in_car, off_ts, started_seen):
+    # C3XL must remain available for its external-Panda wake path. Automatic
+    # battery/deadline shutdown is disabled for that profile; explicit manual
+    # ForcePowerDown and the settings UI's DoShutdown path remain available.
+    automatic_power_down = allows_automatic_power_down(hardware_profile) and \
+                           power_monitor.should_shutdown(onroad_conditions["ignition"], in_car, off_ts, started_seen)
+    if power_down_requested(automatic=automatic_power_down,
+                            manual=params.get_bool("ForcePowerDown"), profile=hardware_profile):
       cloudlog.warning(f"shutting device down, offroad since {off_ts}")
       params.put_bool("DoShutdown", True, block=True)
 

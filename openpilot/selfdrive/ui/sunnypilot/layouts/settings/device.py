@@ -8,6 +8,7 @@ from openpilot.selfdrive.ui.layouts.settings.device import DeviceLayout
 from openpilot.selfdrive.ui.onroad.cabin_camera_dialog import CabinCameraDialog
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.common.hardware import HARDWARE
+from openpilot.sunnypilot.hardware.profile import allows_automatic_power_down
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets.list_view import option_item_sp, multiple_button_item_sp, button_item_sp, \
@@ -109,6 +110,8 @@ class DeviceLayoutSP(DeviceLayout):
       right_callback=self._power_off_prompt
     )
 
+    automatic_power_items = [LineSeparator(), self._max_time_offroad] if allows_automatic_power_down() else []
+
     items = [
       text_item(lambda: tr("Dongle ID"), self._params.get("DongleId") or (lambda: tr("N/A"))),
       LineSeparator(),
@@ -121,8 +124,7 @@ class DeviceLayoutSP(DeviceLayout):
       button_item_sp(lambda: tr("Change Language"), lambda: tr("CHANGE"), callback=self._show_language_dialog),
       LineSeparator(),
       self._device_wake_mode,
-      LineSeparator(),
-      self._max_time_offroad,
+      *automatic_power_items,
       LineSeparator(height=10),
       self._quiet_mode_and_dcam,
       self._reg_and_training,

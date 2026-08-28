@@ -4,7 +4,8 @@ from panda import Panda
 from openpilot.common.hardware.comma.hardware import HardwareComma
 from openpilot.sunnypilot.hardware.panda import InternalPanda
 from openpilot.sunnypilot.hardware.profile import (
-  HardwareProfile, get_hardware_profile, has_amplifier, has_driver_camera, resolve_internal_panda_type,
+  HardwareProfile, allows_automatic_power_down, get_hardware_profile, has_amplifier, has_driver_camera, power_down_requested,
+  resolve_internal_panda_type,
 )
 
 
@@ -24,6 +25,17 @@ def test_driver_camera_capability_is_profile_scoped() -> None:
 def test_amplifier_capability_is_profile_scoped() -> None:
   assert has_amplifier(HardwareProfile.STANDARD)
   assert not has_amplifier(HardwareProfile.C3XL)
+
+
+def test_automatic_power_down_is_disabled_only_for_c3xl() -> None:
+  assert allows_automatic_power_down(HardwareProfile.STANDARD)
+  assert not allows_automatic_power_down(HardwareProfile.C3XL)
+
+
+def test_c3xl_ignores_automatic_power_down_but_keeps_manual_force() -> None:
+  assert not power_down_requested(automatic=True, manual=False, profile=HardwareProfile.C3XL)
+  assert power_down_requested(automatic=False, manual=True, profile=HardwareProfile.C3XL)
+  assert power_down_requested(automatic=True, manual=False, profile=HardwareProfile.STANDARD)
 
 
 def test_c3xl_tici_does_not_probe_absent_amplifier(monkeypatch) -> None:
