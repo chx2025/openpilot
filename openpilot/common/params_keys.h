@@ -287,4 +287,19 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TorqueParamsOverrideEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TorqueParamsOverrideFriction", {PERSISTENT | BACKUP, FLOAT, "0.1"}},
     {"TorqueParamsOverrideLatAccelFactor", {PERSISTENT | BACKUP, FLOAT, "2.5"}},
+
+    {"DistractionDetectionLevel", {PERSISTENT | BACKUP, INT, "1"}},
+    {"DisableDM", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"LivestreamActiveCamera", {CLEAR_ON_MANAGER_START | DONT_LOG, STRING}},
+    {"LivestreamEncoderLagging", {CLEAR_ON_MANAGER_START | DONT_LOG, BOOL}},
+    {"LocalDriveStats", {PERSISTENT, JSON}},
+    {"TripsDataSource", {PERSISTENT | BACKUP, STRING, "local"}},
+    {"SpDevBeep", {PERSISTENT, BOOL, "0"}},
+    {"WebuiHeadlessMode", {PERSISTENT | BACKUP, STRING, "auto"}},
+    {"IsOnroadPreview", {CLEAR_ON_MANAGER_START, BOOL}},
+    
+    {"ImuCalibrationEnabled", {PERSISTENT, BOOL}},
+    {"ImuCalibrationMatrix", {PERSISTENT, BYTES}},
+    {"ImuCalibrationRequested", {CLEAR_ON_MANAGER_START, BOOL}},
+    {"ImuCalibrationStatus", {PERSISTENT, STRING}},
 };

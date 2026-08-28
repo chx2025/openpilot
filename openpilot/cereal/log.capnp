@@ -784,6 +784,11 @@ struct ExtrinsicsCalibration @0x96df70754d8390bc {
   rpyCalibSpread @8 :List(Float32);
   wideFromDeviceEuler @10 :List(Float32);
   height @12 :List(Float32);
+  # full 3x3 IMU-to-vehicle rotation matrix (row-major), used when the device
+  # is mounted at a large arbitrary angle and a separate camera provides the
+  # vehicle-frame reference. When present and valid, this matrix supersedes
+  # rpyCalib for the device-to-calibration transformation.
+  imuCalibMatrix @13 :List(Float32);
 
 
   enum Status {
