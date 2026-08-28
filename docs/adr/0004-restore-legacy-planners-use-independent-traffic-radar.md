@@ -36,6 +36,22 @@ Tesla continuation state, and physical/vision leads do not veto or create a
 Traffic STOP. Frames beyond 200 metres remain diagnostic-only. A STOP is merged
 as a more conservative post-plan constraint.
 
+Each new `stopSessionId` owns fresh geometry derived from the confirming
+bus-2 CAN distance; it never inherits a stop station tracked while GREEN or
+owned by an earlier session. During an ordinary approach/braking/yellow STOP,
+one discontinuous RED/YELLOW tuple is evidence only. A second distinct,
+motion-consistent tuple confirms that Tesla recalculated the current control
+point, creates a new stop session, and lets the final arbitrator repeat its
+one-time feasibility decision. A stationary HOLD and a confirmed flashing
+STOP do not move to a discontinuous RED/YELLOW distance.
+
+Ordinary GREEN release is authoritative independently of stop-station geometry:
+a moving vehicle releases on the first fresh GREEN frame, while standstill
+still requires two distinct fresh GREEN frames. This color decision is made
+before a geometry-conflict early return, so a stale stop station cannot
+permanently retain STOP after Tesla reports GREEN. A confirmed flashing-green
+STOP keeps its separate stable-GREEN exit rule.
+
 The traffic-light state machine remains independent of `radarState`, but the
 post-plan bounded START uses a separate fail-closed lead gate. Any current lead
 within eight metres blocks START immediately. A selected lead within eight
@@ -87,6 +103,9 @@ current vehicle control in the UI.
   one or two pulses remain internal evidence and never become a control phase;
   stable same-track GREEN for the maximum flash interval releases a confirmed
   flashing stop.
+- A new stop session always rebases to its confirming CAN distance. A sustained
+  recalculated RED/YELLOW track creates a new session instead of being fused
+  into or permanently rejected by the previous session.
 - Yellow receives STOP ownership only when the personality-aware comfortable,
   jerk-limited stopping envelope plus a bounded uncertainty margin fits inside
   the remaining distance. A rejected yellow session cannot reacquire ownership

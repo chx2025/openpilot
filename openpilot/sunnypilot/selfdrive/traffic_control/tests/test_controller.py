@@ -118,8 +118,25 @@ def test_far_low_urgency_replacement_requires_half_second_continuous_evidence():
 
   confirmed = update(c, 2.5, observation(185.0, 1, 2.5), v_ego=10.0)
   assert c.event_id == original_event + 1
-  assert c.stop_session_id == original_session
+  assert c.stop_session_id == original_session + 1
   assert confirmed.phase in c.ACTIVE_PHASES
+
+
+def test_new_stop_session_discards_stale_green_tracking_geometry():
+  c = controller()
+  update(c, 1.0, observation(100.0, 2, 1.0), v_ego=0.0)
+  update(c, 1.5, observation(100.0, 2, 1.5), v_ego=0.0)
+  assert c.stop_station is not None
+  assert c.remaining_distance == 95.0
+
+  first_red = update(c, 2.0, observation(42.0, 1, 2.0), v_ego=0.0)
+  confirmed = update(c, 2.5, observation(42.0, 1, 2.5), v_ego=0.0)
+
+  assert first_red.phase == TrafficControlPhase.redCandidate
+  assert confirmed.phase in c.ACTIVE_PHASES
+  assert c.stop_session_id == 1
+  assert math.isclose(confirmed.remaining_distance, 37.0, abs_tol=0.1)
+  assert math.isclose(confirmed.can_remaining, 37.0, abs_tol=0.1)
 
 
 def test_internal_tesla_state_fields_do_not_change_color_decision():
@@ -250,6 +267,30 @@ def test_green_requires_two_real_frames_and_releases_same_event():
   assert one.phase == TrafficControlPhase.release
 
 
+def test_moving_green_releases_even_when_distance_was_recalculated():
+  c = controller()
+  establish_red(c, distance=100.0, speed=10.0)
+
+  released = update(c, 2.0, observation(35.0, 2, 2.0), v_ego=5.0)
+
+  assert released.phase == TrafficControlPhase.release
+  assert released.light_state == 2
+
+
+def test_stationary_recalculated_green_requires_two_distinct_frames_to_release():
+  c = controller()
+  establish_red(c, distance=100.0, speed=10.0)
+
+  first = update(c, 2.0, observation(11.0, 2, 2.0), v_ego=0.0)
+  duplicate = update(c, 2.1, observation(11.0, 2, 2.0), v_ego=0.0)
+  second = update(c, 2.5, observation(11.0, 2, 2.5), v_ego=0.0)
+
+  assert first.phase in c.ACTIVE_PHASES
+  assert duplicate.phase in c.ACTIVE_PHASES
+  assert second.phase == TrafficControlPhase.release
+  assert second.light_state == 2
+
+
 def test_stationary_green_still_requires_two_distinct_real_frames():
   c = controller()
   establish_red(c, distance=5.0, speed=0.0)
@@ -358,6 +399,29 @@ def test_irregular_third_green_off_pulse_resets_flash_candidate():
   assert decision.phase == TrafficControlPhase.off
   assert not decision.apply_constraint
   assert not c.flash_latched
+
+
+def test_discontinuous_green_cannot_bypass_confirmed_flashing_green_stop():
+  c = controller()
+  armed = None
+  for now_s, distance, light in (
+    (1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
+    (1.7, 74.4, 2), (2.2, 70.4, 0),
+    (2.7, 66.4, 2), (3.2, 62.4, 0),
+  ):
+    armed = update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
+
+  assert armed is not None
+  assert armed.phase == TrafficControlPhase.flashingGreenStop
+  assert c.flash_latched
+  session_id = c.stop_session_id
+
+  discontinuous_green = update(c, 3.7, observation(20.0, 2, 3.7), v_ego=8.0)
+
+  assert discontinuous_green.phase == TrafficControlPhase.flashingGreenStop
+  assert discontinuous_green.stop_session_id == session_id
+  assert c.flash_latched
+  assert c.release_since_ns is None
 
 
 def test_route10_single_off_then_stable_green_never_enters_a_flash_phase():
@@ -517,6 +581,22 @@ def test_early_yellow_stops_and_late_yellow_passes_once():
   assert not later_red.apply_constraint
 
 
+def test_active_yellow_promotes_a_confirmed_recalculated_yellow_track():
+  c = controller()
+  update(c, 1.0, observation(80.0, 3, 1.0), v_ego=10.0)
+  update(c, 1.5, observation(75.0, 3, 1.5), v_ego=10.0)
+  assert c.phase == TrafficControlPhase.yellowStop
+  old_session = c.stop_session_id
+
+  first = update(c, 2.0, observation(40.0, 3, 2.0), v_ego=10.0)
+  confirmed = update(c, 2.5, observation(35.0, 3, 2.5), v_ego=10.0)
+
+  assert first.stop_session_id == old_session
+  assert confirmed.phase == TrafficControlPhase.yellowStop
+  assert confirmed.stop_session_id == old_session + 1
+  assert math.isclose(confirmed.remaining_distance, 30.0, abs_tol=0.1)
+
+
 def test_green_tracking_geometry_is_preserved_when_same_target_turns_red():
   c = controller()
   update(c, 1.0, observation(80.0, 2, 1.0), v_ego=10.0)
@@ -580,26 +660,72 @@ def test_signal_event_keeps_its_identity_and_stop_geometry_across_updates():
   assert c.stop_station == before or c.remaining_distance > 10.0
 
 
-def test_active_braking_event_rejects_a_discontinuous_target_replacement():
+def test_active_braking_event_promotes_a_confirmed_recalculated_red_track():
   c = controller()
   establish_red(c, distance=100.0, speed=10.0)
   original_event = c.event_id
+  original_session = c.stop_session_id
   first = update(c, 2.0, observation(35.0, 1, 2.0), v_ego=10.0)
   assert c.event_id == original_event
   assert first.remaining_distance > 80.0
   second = update(c, 2.5, observation(30.0, 1, 2.5), v_ego=10.0)
-  assert c.event_id == original_event
-  assert second.remaining_distance <= first.remaining_distance
+  assert c.event_id == original_event + 1
+  assert c.stop_session_id == original_session + 1
+  assert second.phase in c.ACTIVE_PHASES
+  assert math.isclose(second.remaining_distance, 25.0, abs_tol=0.1)
+  assert math.isclose(second.can_remaining, 25.0, abs_tol=0.1)
 
 
-def test_rejected_active_target_replacement_preserves_the_stop_session():
+def test_route1d_recalculated_red_track_cannot_lock_out_later_green_release():
+  c = controller()
+  update(c, 1.0, observation(95.0, 1, 1.0), v_ego=10.0)
+  update(c, 1.5, observation(90.0, 1, 1.5), v_ego=10.0)
+  old_session = c.stop_session_id
+
+  first_recalculated = update(c, 2.0, observation(53.0, 1, 2.0), v_ego=10.0)
+  confirmed_recalculated = update(c, 2.1, observation(52.0, 1, 2.1), v_ego=10.0)
+
+  assert first_recalculated.stop_session_id == old_session
+  assert confirmed_recalculated.stop_session_id == old_session + 1
+  assert math.isclose(confirmed_recalculated.remaining_distance, 47.0, abs_tol=0.1)
+  assert math.isclose(confirmed_recalculated.can_remaining, 47.0, abs_tol=0.1)
+
+  first_green = update(c, 2.5, observation(11.0, 2, 2.5), v_ego=0.0)
+  second_green = update(c, 3.0, observation(11.0, 2, 3.0), v_ego=0.0)
+
+  assert first_green.phase in c.ACTIVE_PHASES
+  assert second_green.phase == TrafficControlPhase.release
+  assert not second_green.should_stop
+
+
+def test_single_active_target_jump_cannot_replace_the_stop_session():
   c = controller()
   establish_red(c, distance=100.0, speed=10.0)
   session_id = c.stop_session_id
   event_id = c.event_id
-  update(c, 2.0, observation(35.0, 1, 2.0), v_ego=10.0)
-  update(c, 2.5, observation(30.0, 1, 2.5), v_ego=10.0)
+  first = update(c, 2.0, observation(35.0, 1, 2.0), v_ego=10.0)
   assert c.event_id == event_id
+  assert c.stop_session_id == session_id
+  assert first.remaining_distance > 80.0
+
+  recovered = update(c, 2.5, observation(85.0, 1, 2.5), v_ego=10.0)
+  assert c.event_id == event_id
+  assert c.stop_session_id == session_id
+  assert recovered.phase in c.ACTIVE_PHASES
+
+
+def test_hold_cannot_move_to_a_discontinuous_red_distance():
+  c = controller()
+  establish_red(c, distance=5.0, speed=0.0)
+  update(c, 2.0, observation(5.0, 1, 2.0), v_ego=0.0)
+  assert c.phase == TrafficControlPhase.hold
+  session_id = c.stop_session_id
+
+  update(c, 2.5, observation(50.0, 1, 2.5), v_ego=0.0)
+  decision = update(c, 3.0, observation(50.0, 1, 3.0), v_ego=0.0)
+
+  assert decision.phase == TrafficControlPhase.hold
+  assert decision.should_stop
   assert c.stop_session_id == session_id
 
 
@@ -742,8 +868,11 @@ def test_same_target_red_flicker_after_release_preserves_session():
   old_session = c.stop_session_id
   update(c, 2.0, observation(20.0, 2, 2.0), v_ego=0.0)
   update(c, 2.5, observation(20.0, 2, 2.5), v_ego=0.0)
-  update(c, 3.0, observation(19.0, 1, 3.0), v_ego=0.0)
-  update(c, 3.5, observation(18.0, 1, 3.5), v_ego=0.0)
+  first_red = update(c, 3.0, observation(19.0, 1, 3.0), v_ego=0.0)
+  second_red = update(c, 3.5, observation(18.0, 1, 3.5), v_ego=0.0)
+
+  assert first_red.phase == TrafficControlPhase.release
+  assert second_red.phase in c.ACTIVE_PHASES
   assert c.stop_session_id == old_session
 
 

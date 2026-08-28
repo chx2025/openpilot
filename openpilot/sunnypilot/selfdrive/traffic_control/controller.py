@@ -284,7 +284,6 @@ class TeslaTrafficControlController:
                   phase: TrafficControlPhase, reason: str, *, preserve_session: bool = False) -> None:
     self.event_seq += 1
     self.event_id = self.event_seq
-    had_session = self.stop_session_id != 0
     new_session = not preserve_session or self.stop_session_id == 0
     if new_session:
       self.stop_session_seq += 1
@@ -296,16 +295,23 @@ class TeslaTrafficControlController:
       self.flash_pulse_count = 0
       self.flash_pattern_confirmed = False
       self.stable_green_since_ns = 0
+      self.green_count = 0
+      self.pending_distance = 0.0
+      self.pending_ego_station = self.ego_station
+      self.pending_color = 0
+      self.pending_count = 0
+      self.pending_first_ns = 0
+      self.release_since_ns = None
+      self.release_red_preserve_session = None
     self.stop_reference = self.config.default_stop_reference
-    # A new session owns fresh geometry. Replacements inside an existing stop
-    # session enter through bounded station fusion so a handoff to the next
-    # current-lane control point cannot teleport braking in one cycle.
-    # Green tracking already established the current-lane stop station. Keep
-    # that same-track geometry when the signal first becomes a confirmed STOP;
-    # reset only when no tracked geometry exists (passed/reset clears it).
-    if self.stop_station is None or (new_session and had_session):
+    # A stop session is also the ownership boundary for its geometry. Tesla can
+    # recalculate the current control-point distance when its color/track
+    # changes, so a new session must never inherit a station tracked while
+    # GREEN or owned by an earlier stop session.
+    if new_session or self.stop_station is None:
       self.stop_station = None
       self.remaining_distance = 0.0
+      self.last_distance_innovation = 0.0
     self._update_stop_station(observation)
     required = v_ego ** 2 / (2.0 * max(self.remaining_distance, 0.5))
     self.phase = (TrafficControlPhase.braking if required >= 0.5 else TrafficControlPhase.approachRed) \
@@ -316,6 +322,12 @@ class TeslaTrafficControlController:
     self.phase = TrafficControlPhase.release
     self.release_since_ns = now_ns
     self.release_red_preserve_session = None
+    self.candidate_color = 0
+    self.candidate_count = 0
+    self.candidate_first_ns = 0
+    self.candidate_last_ns = 0
+    self.candidate_distance = 0.0
+    self.candidate_ego_station = self.ego_station
     self.remaining_distance = 0.0
     self._mark_transition("green_release")
 
@@ -578,26 +590,54 @@ class TeslaTrafficControlController:
 
     same_track = self._same_track(observation)
     self.event_continuous = same_track
+    if (observation.light_state == 2 and self.phase in self.ACTIVE_PHASES
+        and not self.flash_latched):
+      # Tesla bus-2 color is authoritative for the current lane. Geometry
+      # continuity may protect a stop station from a one-frame distance jump,
+      # but it must not permanently veto an ordinary GREEN release. Moving
+      # releases on the first real GREEN; standstill still requires two
+      # distinct real frames.
+      self.green_count = self.green_count + 1 if previous_color == 2 else 1
+      self.pending_count = 0
+      self.pending_first_ns = 0
+      if (v_ego >= 0.3 or self.green_count >= 2) and not brake_pressed:
+        if not same_track:
+          self.stop_station = None
+        self.can_remaining = max(0.0, observation.distance - self.stop_reference)
+        self.last_raw_distance = observation.distance
+        self.last_distance_ego_station = self.ego_station
+        self.last_real_color = observation.light_state
+        self._set_release(now_ns)
+      else:
+        self.last_real_color = observation.light_state
+      return self._decision()
+
     if not same_track and self.phase in self.ACTIVE_PHASES:
       # A single discontinuous tuple cannot replace or release the current
-      # lane event; it may be a handoff to the next control point.
-      # Only a motion-consistent red/yellow trajectory is promoted; distant,
-      # low-urgency replacements additionally need the configured dwell time.
-      execution_locked = self.phase in (
-        TrafficControlPhase.braking, TrafficControlPhase.hold,
-        TrafficControlPhase.flashingGreenStop, TrafficControlPhase.yellowStop,
+      # lane event. A second motion-consistent RED/YELLOW tuple confirms that
+      # Tesla recalculated the one current control-point track. Start a fresh
+      # session so its geometry and feasibility are both recomputed. HOLD and
+      # flashing STOP stay latched and can only be released by their existing
+      # GREEN/driver rules.
+      replaceable_phase = self.phase in (
+        TrafficControlPhase.approachRed,
+        TrafficControlPhase.braking,
+        TrafficControlPhase.yellowStop,
       )
       replace = bool(
-        not execution_locked and observation.light_state in (1, 3)
+        replaceable_phase and observation.light_state in (1, 3)
         and self._pending_replacement_confirmed(observation, v_ego)
       )
       if not replace:
+        if observation.light_state != 2:
+          self.green_count = 0
         self.last_real_color = observation.light_state
         return self._decision()
       self.last_raw_distance = observation.distance
       replacement_phase = (TrafficControlPhase.yellowStop if observation.light_state == 3
                            else TrafficControlPhase.approachRed)
-      self._start_stop(observation, v_ego, replacement_phase, "candidate_replaced", preserve_session=True)
+      self._start_stop(observation, v_ego, replacement_phase, "candidate_replaced")
+      self.event_continuous = True
       self.last_distance_ego_station = self.ego_station
       self.stop_reconfirm_required = False
       self.stop_reconfirm_count = 0
@@ -647,11 +687,6 @@ class TeslaTrafficControlController:
           self.stable_green_since_ns = 0
           self.phase = (TrafficControlPhase.hold if v_ego < 0.3 and self._hold_distance_consistent()
                         else TrafficControlPhase.flashingGreenStop)
-      elif color == 2:
-        self.green_count = self.green_count + 1 if previous_color == 2 else 1
-        moving_release = v_ego >= 0.3
-        if (moving_release or self.green_count >= 2) and not brake_pressed:
-          self._set_release(now_ns)
       else:
         self.green_count = 0
         if color == 3:
