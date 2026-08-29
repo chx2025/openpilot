@@ -10,11 +10,12 @@
 #include "system/loggerd/encoder/encoder.h"
 #include "system/loggerd/loggerd.h"
 #include "system/loggerd/video_writer.h"
+#include "sunnypilot/hardware/profile.h"
 
 ExitHandler do_exit;
 
 struct LoggerdState {
-  LoggerState logger;
+  LoggerState logger{Path::log_root(), !sunnypilot::hardware::is_c3xl()};
   std::atomic<double> last_camera_seen_tms{0.0};
   std::atomic<int> ready_to_rotate{0};  // count of encoders ready to rotate
   int max_waiting = 0;
@@ -236,7 +237,10 @@ void loggerd_thread() {
     const bool encoder = util::ends_with(it.name, "EncodeData");
     const bool livestream_encoder = util::starts_with(it.name, "livestream");
     const bool record_audio = (it.name == "rawAudioData") && Params().getBool("RecordAudio");
-    if (it.should_log || (encoder && !livestream_encoder) || record_audio) {
+    // C3XL local feature diagnostics are written by local_diagnosticsd into a
+    // bounded stream. Standard devices retain the upstream rlog/qlog contract.
+    const bool diverted_local_diagnostic = sunnypilot::hardware::is_c3xl() && it.local_diagnostic_decimation >= 0;
+    if ((it.should_log && !diverted_local_diagnostic) || (encoder && !livestream_encoder) || record_audio) {
       LOGD("logging %s", it.name.c_str());
 
       SubSocket * sock = SubSocket::create(ctx.get(), it.name, "127.0.0.1", false, true, it.queue_size);

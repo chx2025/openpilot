@@ -163,21 +163,21 @@ static void log_sentinel(LoggerState *log, SentinelType type, int exit_signal = 
   log->write(msg.toBytes(), true);
 }
 
-LoggerState::LoggerState(const std::string &log_root) {
+LoggerState::LoggerState(const std::string &log_root, bool rlog_enabled) : rlog_enabled(rlog_enabled) {
   route_name = logger_get_identifier("RouteCount");
   route_path = log_root + "/" + route_name;
   init_data = logger_build_init_data(true);
 }
 
 LoggerState::~LoggerState() {
-  if (rlog) {
+  if (qlog) {
     log_sentinel(this, SentinelType::END_OF_ROUTE, exit_signal);
     std::remove(lock_file.c_str());
   }
 }
 
 bool LoggerState::next() {
-  if (rlog) {
+  if (qlog) {
     log_sentinel(this, SentinelType::END_OF_SEGMENT);
     std::remove(lock_file.c_str());
   }
@@ -186,10 +186,12 @@ bool LoggerState::next() {
   bool ret = util::create_directories(segment_path, 0775);
   assert(ret == true);
 
-  lock_file = segment_path + "/rlog.lock";
+  lock_file = segment_path + (rlog_enabled ? "/rlog.lock" : "/qlog.lock");
   std::ofstream{lock_file};
 
-  rlog.reset(new ZstdFileWriter(segment_path + "/rlog.zst", LOG_COMPRESSION_LEVEL));
+  if (rlog_enabled) {
+    rlog.reset(new ZstdFileWriter(segment_path + "/rlog.zst", LOG_COMPRESSION_LEVEL));
+  }
   qlog.reset(new ZstdFileWriter(segment_path + "/qlog.zst", LOG_COMPRESSION_LEVEL));
 
   // log init data & sentinel type.
@@ -199,6 +201,6 @@ bool LoggerState::next() {
 }
 
 void LoggerState::write(uint8_t* data, size_t size, bool in_qlog) {
-  rlog->write(data, size);
+  if (rlog) rlog->write(data, size);
   if (in_qlog) qlog->write(data, size);
 }

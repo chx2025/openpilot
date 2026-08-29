@@ -11,11 +11,13 @@ class QueueSize(IntEnum):
 
 class Service:
   def __init__(self, should_log: bool, frequency: float, decimation: int | None = None,
-               queue_size: QueueSize = QueueSize.SMALL):
+               queue_size: QueueSize = QueueSize.SMALL,
+               local_diagnostic_decimation: int | None = None):
     self.should_log = should_log
     self.frequency = frequency
     self.decimation = decimation
     self.queue_size = queue_size
+    self.local_diagnostic_decimation = local_diagnostic_decimation
 
 
 _services: dict[str, tuple] = {
@@ -25,7 +27,7 @@ _services: dict[str, tuple] = {
   "accelerometer": (True, 104., 104),
   "temperatureSensor": (True, 2., 200),
   "deviceState": (True, 2., 1),
-  "chestnutState": (True, 10., 10),
+  "chestnutState": (True, 10., 10, QueueSize.SMALL, 10),
   "touch": (True, 20., 1),
   "can": (True, 100., 2053, QueueSize.BIG),  # decimation gives ~3 msgs in a full segment
   "controlsState": (True, 100., 10, QueueSize.MEDIUM),
@@ -84,15 +86,15 @@ _services: dict[str, tuple] = {
   # sunnypilot
   "modelManagerSP": (False, 1., 1, QueueSize.BIG),
   "backupManagerSP": (False, 1., 1, QueueSize.BIG),
-  "selfdriveStateSP": (True, 100., 10),
-  "longitudinalPlanSP": (True, 20., 10),
+  "selfdriveStateSP": (True, 100., 10, QueueSize.SMALL, 10),
+  "longitudinalPlanSP": (True, 20., 10, QueueSize.SMALL, 2),
   "onroadEventsSP": (True, 1., 1),
   "carParamsSP": (True, 0.02, 1),
-  "carControlSP": (True, 100., 10),
-  "carStateSP": (True, 100., 10),
+  "carControlSP": (True, 100., 10, QueueSize.SMALL, 10),
+  "carStateSP": (True, 100., 10, QueueSize.SMALL, 10),
   "liveMapDataSP": (True, 1., 1),
   "modelDataV2SP": (True, 20., None, QueueSize.BIG),
-  "trafficRadarState": (True, 20., 5),
+  "trafficRadarState": (True, 20., 5, QueueSize.SMALL, 2),
   "liveLocationKalman": (True, 20.),
 
   # debug
@@ -120,12 +122,13 @@ def build_header():
   h += "#include <map>\n"
   h += "#include <string>\n"
 
-  h += "struct service { std::string name; bool should_log; float frequency; int decimation; size_t queue_size; };\n"
+  h += "struct service { std::string name; bool should_log; float frequency; int decimation; size_t queue_size; int local_diagnostic_decimation; };\n"
   h += "static std::map<std::string, service> services = {\n"
   for k, v in SERVICE_LIST.items():
     should_log = "true" if v.should_log else "false"
     decimation = -1 if v.decimation is None else v.decimation
-    h += f'  {{ "{k}", {{"{k}", {should_log}, {v.frequency:f}, {decimation:d}, {v.queue_size:d}}}}},\n'
+    local_diagnostic_decimation = -1 if v.local_diagnostic_decimation is None else v.local_diagnostic_decimation
+    h += f'  {{ "{k}", {{"{k}", {should_log}, {v.frequency:f}, {decimation:d}, {v.queue_size:d}, {local_diagnostic_decimation:d}}}}},\n'
   h += "};\n"
 
   h += "#endif\n"

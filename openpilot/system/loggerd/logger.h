@@ -15,7 +15,7 @@ typedef cereal::Sentinel::SentinelType SentinelType;
 
 class LoggerState {
 public:
-  LoggerState(const std::string& log_root = Path::log_root());
+  LoggerState(const std::string& log_root = Path::log_root(), bool rlog_enabled = true);
   ~LoggerState();
   bool next();
   void write(uint8_t* data, size_t size, bool in_qlog);
@@ -27,6 +27,7 @@ public:
 
 protected:
   int part = -1, exit_signal = 0;
+  bool rlog_enabled = true;
   std::string route_path, route_name, segment_path, lock_file;
   kj::Array<capnp::word> init_data;
   std::unique_ptr<ZstdFileWriter> rlog, qlog;

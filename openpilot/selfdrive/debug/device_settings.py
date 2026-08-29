@@ -129,7 +129,6 @@ EXTRA_SETTINGS: tuple[dict[str, Any], ...] = (
   {"key": "TeslaTurnSignalValidation", "widget": "toggle", "title": "启用 Tesla 转向 CAN 测试", "category": "Developer", "group": "Tesla 测试", "offroad_only": True},
   {"key": "TeslaSpeedButtonValidation", "widget": "toggle", "title": "启用 Tesla 速度按钮测试", "category": "Developer", "group": "Tesla 测试", "offroad_only": True},
   {"key": "WebTerminalEnabled", "widget": "toggle", "title": "启用网页终端（高风险）", "category": "Developer", "group": "本地网页控制台", "offroad_only": True},
-  {"key": "RecordRoadVideo", "widget": "toggle", "title": "录制前向道路视频", "category": "Developer", "group": "路线记录", "offroad_only": True},
   {"key": "LongitudinalPlannerMode", "widget": "multiple_button", "title": "纵向规划器", "group": "纵向 MPC", "options": [{"value": 0, "label": "官方（默认）"}, {"value": 1, "label": "实验"}, {"value": 2, "label": "TN-NoDEC"}], "offroad_only": True},
   {"key": "AccelPersonalityEnabled", "widget": "toggle", "title": "TN 加速个性控制", "group": "纵向 MPC", "offroad_only": False},
   {"key": "AccelPersonality", "widget": "multiple_button", "title": "TN 加速个性", "group": "纵向 MPC", "options": [{"value": 0, "label": "Eco"}, {"value": 1, "label": "Normal"}, {"value": 2, "label": "Sport"}], "offroad_only": False},

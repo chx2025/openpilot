@@ -13,6 +13,13 @@ from typing import BinaryIO
 import zipfile
 
 from openpilot.common.hardware.hw import Paths
+from openpilot.selfdrive.debug.local_diagnostics import (
+  LOCAL_DIAGNOSTIC_RE,
+  LocalDiagnosticFile,
+  local_diagnostic_root,
+  scan_local_diagnostics,
+)
+from openpilot.selfdrive.debug.device_system_diagnostics import DiagnosticFile
 
 
 MAX_LOG_RANGE_SECONDS = 72 * 60 * 60
@@ -48,6 +55,7 @@ class LogSelection:
   start_ms: int
   end_ms: int
   segments: tuple[LogSegment, ...]
+  diagnostic_files: tuple[LocalDiagnosticFile, ...] = ()
 
   @property
   def files(self) -> tuple[LogFile, ...]:
@@ -55,14 +63,16 @@ class LogSelection:
 
   @property
   def total_bytes(self) -> int:
-    return sum(file.size for file in self.files)
+    return sum(file.size for file in self.files) + sum(file.size for file in self.diagnostic_files)
 
   def summary(self) -> dict:
     return {
       "start_ms": self.start_ms,
       "end_ms": self.end_ms,
       "segment_count": len(self.segments),
-      "file_count": len(self.files),
+      "route_file_count": len(self.files),
+      "local_diagnostic_count": len(self.diagnostic_files),
+      "file_count": len(self.files) + len(self.diagnostic_files),
       "total_bytes": self.total_bytes,
       "segments": [segment.name for segment in self.segments],
     }
@@ -89,7 +99,14 @@ def _log_root(root: str | Path | None = None) -> Path:
   return candidate.resolve()
 
 
-def scan_log_segments(root: str | Path | None = None) -> tuple[LogSegment, ...]:
+def _diagnostic_root_for_route(root: str | Path | None,
+                               diagnostic_root: str | Path | None) -> Path:
+  if diagnostic_root is not None or root is None:
+    return local_diagnostic_root(diagnostic_root)
+  return local_diagnostic_root(Path(root).resolve().parent / "spdiagnostics")
+
+
+def scan_log_segments(root: str | Path | None = None, *, include_rlog: bool = False) -> tuple[LogSegment, ...]:
   log_root = _log_root(root)
   if not log_root.is_dir():
     return ()
@@ -109,7 +126,8 @@ def scan_log_segments(root: str | Path | None = None) -> tuple[LogSegment, ...]:
     except OSError:
       continue
     for path in paths:
-      if path.is_symlink() or not path.is_file() or not LOG_FILE_RE.fullmatch(path.name):
+      if (path.is_symlink() or not path.is_file() or not LOG_FILE_RE.fullmatch(path.name) or
+          (not include_rlog and not path.name.startswith("qlog"))):
         continue
       try:
         resolved = path.resolve()
@@ -137,39 +155,51 @@ def scan_log_segments(root: str | Path | None = None) -> tuple[LogSegment, ...]:
   return tuple(sorted(segments, key=lambda segment: (segment.start_ms, segment.name)))
 
 
-def available_log_range(root: str | Path | None = None) -> dict:
-  segments = scan_log_segments(root)
+def available_log_range(root: str | Path | None = None, *,
+                        diagnostic_root: str | Path | None = None) -> dict:
+  segments = scan_log_segments(root, include_rlog=False)
+  diagnostic_files = scan_local_diagnostics(_diagnostic_root_for_route(root, diagnostic_root))
+  starts = [segment.start_ms for segment in segments] + [file.start_ms for file in diagnostic_files]
+  ends = [segment.end_ms for segment in segments] + [file.end_ms for file in diagnostic_files]
   return {
-    "available": bool(segments),
-    "start_ms": min((segment.start_ms for segment in segments), default=None),
-    "end_ms": max((segment.end_ms for segment in segments), default=None),
+    "available": bool(segments or diagnostic_files),
+    "start_ms": min(starts, default=None),
+    "end_ms": max(ends, default=None),
     "segment_count": len(segments),
+    "local_diagnostic_count": len(diagnostic_files),
     "max_range_seconds": MAX_LOG_RANGE_SECONDS,
     "max_download_bytes": MAX_DOWNLOAD_BYTES,
     "max_download_files": MAX_DOWNLOAD_FILES,
   }
 
 
-def select_log_range(start_ms: int, end_ms: int, root: str | Path | None = None) -> LogSelection:
+def select_log_range(start_ms: int, end_ms: int, root: str | Path | None = None, *,
+                     include_rlog: bool = False, include_local_diagnostics: bool = True,
+                     diagnostic_root: str | Path | None = None) -> LogSelection:
   if start_ms <= 0 or end_ms <= 0 or end_ms <= start_ms:
     raise ValueError("日志开始时间必须早于结束时间")
   if end_ms - start_ms > MAX_LOG_RANGE_SECONDS * 1000:
     raise ValueError(f"单次最多选择 {MAX_LOG_RANGE_SECONDS // 3600} 小时")
 
   selected = tuple(
-    segment for segment in scan_log_segments(root)
+    segment for segment in scan_log_segments(root, include_rlog=include_rlog)
     if segment.end_ms >= start_ms and segment.start_ms <= end_ms
   )
-  selection = LogSelection(start_ms, end_ms, selected)
-  if len(selection.files) > MAX_DOWNLOAD_FILES:
+  diagnostics = tuple(
+    file for file in scan_local_diagnostics(_diagnostic_root_for_route(root, diagnostic_root))
+    if include_local_diagnostics and file.end_ms >= start_ms and file.start_ms <= end_ms
+  )
+  selection = LogSelection(start_ms, end_ms, selected, diagnostics)
+  if len(selection.files) + len(selection.diagnostic_files) > MAX_DOWNLOAD_FILES:
     raise ValueError(f"日志文件过多，单次最多 {MAX_DOWNLOAD_FILES} 个")
   if selection.total_bytes > MAX_DOWNLOAD_BYTES:
     raise ValueError(f"日志总大小超过 {MAX_DOWNLOAD_BYTES // (1024 ** 3)} GiB，请缩短时间范围")
   return selection
 
 
-def delete_log_selection(selection: LogSelection, root: str | Path | None = None) -> LogDeletion:
-  """Delete unchanged rlog/qlog files selected from the configured log root."""
+def delete_log_selection(selection: LogSelection, root: str | Path | None = None, *,
+                         diagnostic_root: str | Path | None = None) -> LogDeletion:
+  """Delete unchanged selected route and local-diagnostic files."""
   log_root = _log_root(root)
   deleted_segments: set[str] = set()
   deleted_files = 0
@@ -201,6 +231,25 @@ def delete_log_selection(selection: LogSelection, root: str | Path | None = None
       if directory_fd is not None:
         os.close(directory_fd)
 
+  resolved_diagnostic_root = _diagnostic_root_for_route(root, diagnostic_root)
+  for file in selection.diagnostic_files:
+    if (not LOCAL_DIAGNOSTIC_RE.fullmatch(file.name) or
+        file.path != resolved_diagnostic_root / file.name):
+      skipped_files.append(file.archive_name)
+      continue
+    try:
+      current = os.stat(file.path, follow_symlinks=False)
+      if (not stat.S_ISREG(current.st_mode) or current.st_size != file.size or
+          current.st_mtime_ns != file.modified_ns):
+        skipped_files.append(file.archive_name)
+        continue
+      file.path.unlink()
+      deleted_segments.add("local-diagnostics")
+      deleted_files += 1
+      deleted_bytes += file.size
+    except OSError:
+      skipped_files.append(file.archive_name)
+
   return LogDeletion(len(deleted_segments), deleted_files, deleted_bytes, tuple(skipped_files))
 
 
@@ -210,7 +259,7 @@ def download_filename(selection: LogSelection) -> str:
   return f"openpilot-logs-{stamp(selection.start_ms)}-{stamp(selection.end_ms)}.zip"
 
 
-def _manifest(selection: LogSelection) -> bytes:
+def _manifest(selection: LogSelection, diagnostics: tuple[DiagnosticFile, ...]) -> bytes:
   payload = {
     "generated_at": datetime.now(tz=UTC).isoformat(),
     **selection.summary(),
@@ -218,21 +267,38 @@ def _manifest(selection: LogSelection) -> bytes:
       {"path": file.archive_name, "size": file.size, "modified_ns": file.modified_ns}
       for file in selection.files
     ],
+    "local_diagnostics": [
+      {"path": file.archive_name, "size": file.size, "modified_ns": file.modified_ns,
+       "start_ms": file.start_ms, "end_ms": file.end_ms}
+      for file in selection.diagnostic_files
+    ],
+    "system_diagnostics": [
+      {"path": entry.archive_name, "size": len(entry.data)}
+      for entry in diagnostics
+    ],
   }
   return json.dumps(payload, ensure_ascii=False, indent=2).encode()
 
 
-def stream_log_zip(selection: LogSelection, output: BinaryIO) -> None:
+def stream_log_zip(selection: LogSelection, output: BinaryIO,
+                   *, diagnostics: tuple[DiagnosticFile, ...] = ()) -> None:
   # rlog/qlog are already compressed; ZIP_STORED avoids wasting device CPU.
   with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_STORED,
                        allowZip64=True, strict_timestamps=False) as archive:
-    archive.writestr("manifest.json", _manifest(selection))
+    archive.writestr("manifest.json", _manifest(selection, diagnostics))
     for file in selection.files:
       archive.write(file.path, arcname=file.archive_name)
+    for file in selection.diagnostic_files:
+      archive.write(file.path, arcname=file.archive_name)
+    for entry in diagnostics:
+      if (not entry.archive_name.startswith("system/") or ".." in Path(entry.archive_name).parts or
+          Path(entry.archive_name).is_absolute()):
+        raise ValueError("invalid system diagnostic archive path")
+      archive.writestr(entry.archive_name, entry.data)
 
 
-def build_log_zip(selection: LogSelection) -> bytes:
+def build_log_zip(selection: LogSelection, *, diagnostics: tuple[DiagnosticFile, ...] = ()) -> bytes:
   """Small in-memory helper used only by tests."""
   output = io.BytesIO()
-  stream_log_zip(selection, output)
+  stream_log_zip(selection, output, diagnostics=diagnostics)
   return output.getvalue()

@@ -9,7 +9,9 @@ import zipfile
 
 import pytest
 
+from openpilot.cereal import messaging
 from openpilot.selfdrive.debug.device_log_download import (
+  DiagnosticFile,
   LogDeletion,
   LogSelection,
   MAX_LOG_RANGE_SECONDS,
@@ -21,6 +23,7 @@ from openpilot.selfdrive.debug.device_log_download import (
   select_log_range,
 )
 from openpilot.selfdrive.debug import device_console
+from openpilot.selfdrive.debug.local_diagnostics import LocalDiagnosticWriter, scan_local_diagnostics
 
 
 def make_segment(root: Path, name: str, start_ms: int, files: dict[str, bytes], duration_ms: int = 60_000) -> Path:
@@ -50,7 +53,8 @@ def test_scans_only_structured_route_logs_and_uses_segment_interval(tmp_path):
   assert len(segments) == 1
   assert segments[0].start_ms == 1_000_000
   assert segments[0].end_ms == 1_060_000
-  assert [file.name for file in segments[0].files] == ["qlog.zst", "rlog.zst"]
+  assert [file.name for file in segments[0].files] == ["qlog.zst"]
+  assert [file.name for file in scan_log_segments(tmp_path, include_rlog=True)[0].files] == ["qlog.zst", "rlog.zst"]
 
 
 def test_selects_every_segment_overlapping_the_requested_time(tmp_path):
@@ -60,10 +64,21 @@ def test_selects_every_segment_overlapping_the_requested_time(tmp_path):
 
   selection = select_log_range(1_030_000, 1_080_000, tmp_path)
 
-  assert [segment.name for segment in selection.segments] == [
-    "00000001--123456789a--0", "00000001--123456789a--1",
-  ]
-  assert selection.total_bytes == 3
+  assert [segment.name for segment in selection.segments] == ["00000001--123456789a--0"]
+  assert selection.total_bytes == 1
+
+
+def test_qlog_only_selection_excludes_rlog_and_video(tmp_path):
+  make_segment(tmp_path, "00000001--123456789a--0", 1_000_000, {
+    "qlog.zst": b"small",
+    "rlog.zst": b"large-rlog",
+    "fcamera.hevc": b"video",
+  })
+
+  selection = select_log_range(990_000, 1_070_000, tmp_path, include_rlog=False)
+
+  assert [file.name for file in selection.files] == ["qlog.zst"]
+  assert selection.total_bytes == len(b"small")
 
 
 def test_rejects_invalid_or_excessive_ranges(tmp_path):
@@ -91,20 +106,39 @@ def test_builds_browser_friendly_zip_with_manifest_and_no_video(tmp_path):
     "rlog.zst": b"rlog-data",
     "ecamera.hevc": b"video-data",
   })
-  selection = select_log_range(990_000, 1_070_000, tmp_path)
+  diagnostic_root = tmp_path / "spdiagnostics"
+  writer = LocalDiagnosticWriter(diagnostic_root)
+  writer.write(messaging.new_message("trafficRadarState").to_bytes(), wall_time_ms=1_000_000)
+  writer.close(wall_time_ms=1_060_000)
+  local_diagnostic = scan_local_diagnostics(diagnostic_root)[0]
+  selection = select_log_range(990_000, 1_070_000, tmp_path, diagnostic_root=diagnostic_root)
+  diagnostics = (
+    DiagnosticFile("system/journal-warning-current-boot.log", b"journal error"),
+    DiagnosticFile("system/launch_log.txt", b"launch error"),
+  )
   archive_path = tmp_path / "download.zip"
-  archive_path.write_bytes(build_log_zip(selection))
+  archive_path.write_bytes(build_log_zip(selection, diagnostics=diagnostics))
 
   with zipfile.ZipFile(archive_path) as archive:
     assert archive.namelist() == [
       "manifest.json",
       "00000001--123456789a--0/qlog.zst",
-      "00000001--123456789a--0/rlog.zst",
+      local_diagnostic.archive_name,
+      "system/journal-warning-current-boot.log",
+      "system/launch_log.txt",
     ]
     manifest = json.loads(archive.read("manifest.json"))
     assert manifest["segment_count"] == 1
     assert manifest["file_count"] == 2
-    assert archive.read("00000001--123456789a--0/rlog.zst") == b"rlog-data"
+    assert manifest["route_file_count"] == 1
+    assert manifest["local_diagnostic_count"] == 1
+    assert manifest["local_diagnostics"][0]["path"] == local_diagnostic.archive_name
+    assert manifest["system_diagnostics"] == [
+      {"path": "system/journal-warning-current-boot.log", "size": len(b"journal error")},
+      {"path": "system/launch_log.txt", "size": len(b"launch error")},
+    ]
+    assert archive.read("system/journal-warning-current-boot.log") == b"journal error"
+    assert not any(name.endswith((".hevc", ".ts")) for name in archive.namelist())
 
   assert download_filename(selection).startswith("openpilot-logs-")
   assert download_filename(selection).endswith(".zip")
@@ -116,7 +150,7 @@ def test_deletes_only_selected_structured_logs_and_preserves_video(tmp_path):
     "rlog.zst": b"rlog-data",
     "fcamera.hevc": b"video-data",
   })
-  selection = select_log_range(990_000, 1_070_000, tmp_path)
+  selection = select_log_range(990_000, 1_070_000, tmp_path, include_rlog=True)
 
   result = delete_log_selection(selection, tmp_path)
 
@@ -146,6 +180,22 @@ def test_delete_skips_log_replaced_by_symlink_after_selection(tmp_path):
   assert (segment / "qlog.zst").is_symlink()
 
 
+def test_delete_removes_selected_local_diagnostics_but_not_unrelated_files(tmp_path):
+  diagnostic_root = tmp_path / "spdiagnostics"
+  writer = LocalDiagnosticWriter(diagnostic_root)
+  writer.write(messaging.new_message("chestnutState").to_bytes(), wall_time_ms=1_000_000)
+  writer.close(wall_time_ms=1_060_000)
+  unrelated = diagnostic_root / "notes.txt"
+  unrelated.write_text("keep")
+  selection = select_log_range(990_000, 1_070_000, tmp_path, diagnostic_root=diagnostic_root)
+
+  result = delete_log_selection(selection, tmp_path, diagnostic_root=diagnostic_root)
+
+  assert result.file_count == 1
+  assert not scan_local_diagnostics(diagnostic_root)
+  assert unrelated.read_text() == "keep"
+
+
 @pytest.fixture
 def console_server(monkeypatch):
   monkeypatch.setattr(device_console.DeviceConsoleHandler, "_authorize_api", lambda self: True)
@@ -171,13 +221,16 @@ def test_console_page_exposes_time_range_log_download(monkeypatch):
   assert "/api/logs/download" in page
   assert "/api/logs/delete" in page
   assert "清理所选日志" in page
-  assert "确定永久删除所选时间范围内的 rlog/qlog" in page
-  assert "仅包含 rlog/qlog，不包含视频" in page
+  assert "log-include-rlog" not in page
+  assert "系统错误日志" in page
+  assert "遗留 rlog" in page
+  assert "不包含 rlog 或视频" in page
 
 
 def test_console_log_status_and_preview_routes(monkeypatch, console_server):
   monkeypatch.setattr(device_console, "available_log_range", lambda: {
     "available": True, "start_ms": 1_000_000, "end_ms": 1_060_000, "segment_count": 1,
+    "local_diagnostic_count": 0,
   })
   monkeypatch.setattr(device_console, "console_status", lambda: {"onroad": False})
   monkeypatch.setattr(device_console, "select_log_range", lambda start, end: LogSelection(start, end, ()))
@@ -190,10 +243,13 @@ def test_console_log_status_and_preview_routes(monkeypatch, console_server):
 
   assert status["available"] is True
   assert status["onroad"] is False
-  assert status["structured_logs_only"] is True
+  assert status["export_excludes_rlog"] is True
+  assert status["export_excludes_video"] is True
   assert preview["start_ms"] == 1000
   assert preview["end_ms"] == 2000
   assert preview["file_count"] == 0
+  assert preview["includes_system_diagnostics"] is True
+  assert preview["max_system_diagnostic_bytes"] == device_console.MAX_SYSTEM_DIAGNOSTIC_BYTES
 
 
 def test_console_streams_selected_logs_as_zip(monkeypatch, console_server, tmp_path):
@@ -202,6 +258,8 @@ def test_console_streams_selected_logs_as_zip(monkeypatch, console_server, tmp_p
   })
   selection = select_log_range(990_000, 1_070_000, tmp_path)
   monkeypatch.setattr(device_console, "select_log_range", lambda start, end: selection)
+  monkeypatch.setattr(device_console, "collect_system_diagnostics",
+                      lambda: (DiagnosticFile("system/error.log", b"system error"),))
   monkeypatch.setattr(device_console, "require_offroad", lambda: None)
 
   url = f"http://127.0.0.1:{console_server.server_port}/api/logs/download?start_ms=990000&end_ms=1070000"
@@ -213,7 +271,8 @@ def test_console_streams_selected_logs_as_zip(monkeypatch, console_server, tmp_p
   archive_path.write_bytes(body)
   with zipfile.ZipFile(archive_path) as archive:
     assert "manifest.json" in archive.namelist()
-    assert not any(name.endswith(".hevc") for name in archive.namelist())
+    assert "system/error.log" in archive.namelist()
+    assert not any(name.endswith((".hevc", "/rlog.zst")) for name in archive.namelist())
   assert disposition.startswith('attachment; filename="openpilot-logs-')
 
 
@@ -221,7 +280,7 @@ def test_console_deletes_confirmed_selected_logs(monkeypatch, console_server, tm
   make_segment(tmp_path, "00000001--123456789a--0", 1_000_000, {"qlog.zst": b"selected"})
   selection = select_log_range(990_000, 1_070_000, tmp_path)
   monkeypatch.setattr(device_console, "require_offroad", lambda: None)
-  monkeypatch.setattr(device_console, "select_log_range", lambda start, end: selection)
+  monkeypatch.setattr(device_console, "select_log_range", lambda start, end, **kwargs: selection)
   monkeypatch.setattr(device_console, "delete_log_selection",
                       lambda selected: LogDeletion(2, 4, 8192, ()))
   payload = json.dumps({"start_ms": 1000, "end_ms": 2000, "confirm": True}).encode()

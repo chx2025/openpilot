@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import pytest
 import re
 import random
 import string
@@ -22,6 +23,8 @@ from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.system.loggerd.xattr_cache import getxattr
 from openpilot.system.loggerd.deleter import PRESERVE_ATTR_NAME, PRESERVE_ATTR_VALUE
 from openpilot.system.manager.process_config import managed_processes
+from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_profile
+from openpilot.selfdrive.debug.local_diagnostics import scan_local_diagnostics
 from openpilot.common.version import get_version
 from openpilot.tools.lib.helpers import RE
 from openpilot.tools.lib.logreader import LogReader
@@ -31,7 +34,9 @@ from msgq.visionipc import VisionIpcServer
 SentinelType = log.Sentinel.SentinelType
 
 CEREAL_SERVICES = [f for f in log.Event.schema.union_fields if f in SERVICE_LIST
-                   and SERVICE_LIST[f].should_log and "encode" not in f.lower()]
+                   and SERVICE_LIST[f].should_log and "encode" not in f.lower()
+                   and not (get_hardware_profile() == HardwareProfile.C3XL and
+                            SERVICE_LIST[f].local_diagnostic_decimation is not None)]
 
 
 class TestLoggerd(OpenpilotTestCase):
@@ -198,7 +203,9 @@ class TestLoggerd(OpenpilotTestCase):
   def test_rotation(self):
     Params().put("RecordFront", True, block=True)
 
-    expected_files = {"rlog.zst", "qlog.zst", "qcamera.ts", "fcamera.hevc", "dcamera.hevc", "ecamera.hevc"}
+    expected_files = {"qlog.zst", "qcamera.ts", "fcamera.hevc", "dcamera.hevc", "ecamera.hevc"}
+    if get_hardware_profile() != HardwareProfile.C3XL:
+      expected_files.add("rlog.zst")
 
     num_segs = random.randint(2, 3)
     length = random.randint(4, 5) # H264 encoder uses 40 lookahead frames and does B-frame reordering, so minimum 3 seconds before qcam output
@@ -284,6 +291,38 @@ class TestLoggerd(OpenpilotTestCase):
         expected_cnt = (len(msgs) - 1) // decimation + 1
         assert recv_cnt == expected_cnt, f"expected {expected_cnt} msgs for {s}, got {recv_cnt}"
 
+  @pytest.mark.skipif(get_hardware_profile() != HardwareProfile.C3XL, reason="C3XL-specific logging policy")
+  def test_c3xl_creates_qlog_without_rlog(self):
+    self._publish_random_messages(["deviceState"])
+
+    segment = self._get_latest_log_dir()
+    assert (segment / "qlog.zst").is_file()
+    assert not (segment / "rlog.zst").exists()
+    self._check_sentinel(list(LogReader(str(segment / "qlog.zst"))), True)
+
+  @pytest.mark.skipif(get_hardware_profile() != HardwareProfile.C3XL, reason="C3XL-specific logging policy")
+  def test_c3xl_diverts_local_feature_messages_out_of_qlog(self):
+    services = ["chestnutState", "carStateSP", "longitudinalPlanSP", "trafficRadarState"]
+    pm = messaging.PubMaster(services)
+    managed_processes["loggerd"].start()
+    managed_processes["local_diagnosticsd"].start()
+    for service in services:
+      assert pm.wait_for_readers_to_update(service, timeout=5)
+      for _ in range(20):
+        pm.send(service, messaging.new_message(service))
+    managed_processes["loggerd"].stop()
+    managed_processes["local_diagnosticsd"].stop()
+
+    qlog_services = {message.which() for message in LogReader(str(self._get_latest_log_dir() / "qlog.zst"))}
+    assert not qlog_services.intersection(services)
+    diagnostic_services = {
+      message.which()
+      for file in scan_local_diagnostics()
+      for message in LogReader(str(file.path))
+    }
+    assert diagnostic_services == set(services)
+
+  @pytest.mark.skipif(get_hardware_profile() == HardwareProfile.C3XL, reason="C3XL intentionally disables rlog")
   def test_rlog(self):
     services = random.sample(CEREAL_SERVICES, random.randint(5, 10))
     sent_msgs = self._publish_random_messages(services)
@@ -337,5 +376,6 @@ class TestLoggerd(OpenpilotTestCase):
     has_audio_stream = subprocess.run(ffprobe_cmd, shell=True, capture_output=True).stdout.strip() != b''
     assert has_audio_stream == record_audio
 
-    raw_audio_in_rlog = any(m.which() == 'rawAudioData' for m in LogReader(os.path.join(self._get_latest_log_dir(), 'rlog.zst')))
-    assert raw_audio_in_rlog == record_audio
+    if get_hardware_profile() != HardwareProfile.C3XL:
+      raw_audio_in_rlog = any(m.which() == 'rawAudioData' for m in LogReader(os.path.join(self._get_latest_log_dir(), 'rlog.zst')))
+      assert raw_audio_in_rlog == record_audio

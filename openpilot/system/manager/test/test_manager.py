@@ -47,22 +47,18 @@ class TestManager(OpenpilotTestCase):
     manager.main()
     for k in params.all_keys():
       default_value = params.get_default_value(k)
-      if k == b"RecordRoadVideo":
-        assert params.get_bool(k)
-      elif default_value is not None:
+      if default_value is not None:
         assert params.get(k) == default_value
     assert params.get("OpenpilotEnabledToggle")
     assert params.get("RouteCount") == 0
 
-  def test_road_video_is_reenabled_for_existing_installs(self):
+  def test_c3xl_startup_disables_existing_road_video_setting(self):
     params = Params()
-    params.put_bool("RecordRoadVideo", False, block=True)
+    params.put_bool("RecordRoadVideo", True, block=True)
 
-    manager.enable_automatic_road_video(params)
+    manager.apply_local_recording_policy(params)
 
-    assert params.get_bool("RecordRoadVideo")
-    assert managed_processes["encoderd"].should_run(True, params, car.CarParams.new_message())
-    assert not managed_processes["encoderd"].should_run(False, params, car.CarParams.new_message())
+    assert not params.get_bool("RecordRoadVideo")
 
   def test_livestream_processes_follow_livestream_param_until_ignition_clear(self):
     params = Params()
@@ -74,7 +70,7 @@ class TestManager(OpenpilotTestCase):
     assert managed_processes["webrtcd"].should_run(True, params, CP)
 
   def test_local_process_seams_remain_registered(self):
-    for name in ("device_console", "alert_output", "chestnut_statusd", "trafficcontrold"):
+    for name in ("device_console", "alert_output", "chestnut_statusd", "trafficcontrold", "local_diagnosticsd"):
       assert name in managed_processes
 
   def test_github_runner_process_is_retired(self):

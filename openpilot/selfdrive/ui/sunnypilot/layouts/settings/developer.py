@@ -18,6 +18,7 @@ from openpilot.system.ui.widgets import DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from openpilot.system.ui.widgets.list_view import button_item
 
+from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_profile
 from openpilot.system.ui.sunnypilot.widgets.html_render import HtmlModalSP
 from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp
 
@@ -57,15 +58,16 @@ class DeveloperLayoutSP(DeveloperLayout):
       tr("The local console on port 8088 has no authentication in this test version. Terminal commands remain offroad-only."),
       param="WebTerminalEnabled",
     )
-    self.route_video_toggle = toggle_item_sp(
-      tr("Record Road Video"),
-      tr("Store forward road-camera video with each route. Enabled automatically at every system startup; older routes are deleted when storage is low."),
-      param="RecordRoadVideo",
-    )
-
-    self.items: list = [self.show_advanced_controls, self.web_terminal_toggle, self.route_video_toggle,
+    self.items: list = [self.show_advanced_controls, self.web_terminal_toggle,
                         self.enable_github_runner_toggle, self.enable_copyparty_toggle,
                         self.prebuilt_toggle, self.error_log_btn]
+    if get_hardware_profile() != HardwareProfile.C3XL:
+      self.route_video_toggle = toggle_item_sp(
+        tr("Record Road Video"),
+        tr("Store forward road-camera video with each route. Older routes are deleted when storage is low."),
+        param="RecordRoadVideo",
+      )
+      self.items.insert(2, self.route_video_toggle)
 
   @staticmethod
   def _on_prebuilt_toggled(state):
