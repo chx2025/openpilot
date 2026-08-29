@@ -10,7 +10,7 @@ import os
 os.environ['GMMU'] = '0'
 from openpilot.common.hardware import COMMA_HARDWARE
 from openpilot.selfdrive.modeld.helpers import chestnut_present, load_oob
-from openpilot.sunnypilot.modeld_v2.egpu_loader import configure_default_device, load_with_timeout
+from openpilot.sunnypilot.modeld_v2.egpu_loader import C3XL_MODEL_LOAD_TIMEOUT, configure_default_device, load_with_timeout
 configure_default_device(COMMA_HARDWARE)
 import time
 import numpy as np
@@ -52,7 +52,7 @@ from openpilot.sunnypilot.models.helpers import get_active_bundle
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
-BIG_MODEL_TIMEOUT = 75
+BIG_MODEL_TIMEOUT = C3XL_MODEL_LOAD_TIMEOUT
 
 
 def _pkl_exists(path):

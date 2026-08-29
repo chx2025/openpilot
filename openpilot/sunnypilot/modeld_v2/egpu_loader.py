@@ -3,6 +3,12 @@ import threading
 from collections.abc import Callable, MutableMapping
 
 
+# Measured on the C3XL/UT3G device on 2026-08-29:
+# LM 71.50 s, BMV3 73.54 s, TT 74.66 s, BMV2 75.58 s.
+# Keep a bounded 44.42 s margin for cold starts and USB scheduling variance.
+C3XL_MODEL_LOAD_TIMEOUT = 120
+
+
 class EgpuModelLoadError(RuntimeError):
   pass
 

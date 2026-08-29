@@ -1,10 +1,17 @@
 import threading
 import unittest
 
-from openpilot.sunnypilot.modeld_v2.egpu_loader import EgpuModelLoadError, configure_default_device, load_with_timeout
+from openpilot.sunnypilot.modeld_v2.egpu_loader import (
+  C3XL_MODEL_LOAD_TIMEOUT, EgpuModelLoadError, configure_default_device, load_with_timeout,
+)
 
 
 class TestEgpuLoading(unittest.TestCase):
+  def test_timeout_covers_measured_c3xl_model_loads(self):
+    measured_max_seconds = 75.58
+    self.assertEqual(C3XL_MODEL_LOAD_TIMEOUT, 120)
+    self.assertGreaterEqual(C3XL_MODEL_LOAD_TIMEOUT, measured_max_seconds * 1.5)
+
   def test_configures_qcom_default_without_overriding_explicit_device(self):
     environment = {}
     configure_default_device(True, environment)
