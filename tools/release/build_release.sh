@@ -80,13 +80,11 @@ else
   "$SCONS" panda/
 fi
 
-# Ensure no submodules in release
-if test "$(git submodule--helper list | wc -l)" -gt "0"; then
-  echo "submodules found:"
-  git submodule--helper list
+# Ensure the flattened release has neither submodule metadata nor gitlinks.
+if [ -f .gitmodules ] || git ls-files -s | awk '$1 == "160000" { found = 1 } END { exit !found }'; then
+  echo "submodule metadata or gitlinks found in release"
   exit 1
 fi
-git submodule status
 
 # Cleanup
 find . -name '*.a' -delete
@@ -100,10 +98,6 @@ rm -f openpilot/sunnypilot/modeld*/models/*.onnx*
 
 find openpilot/third_party/ -name '*x86*' -exec rm -r {} +
 find openpilot/third_party/ -name '*Darwin*' -exec rm -r {} +
-
-
-# Restore third_party
-git checkout openpilot/third_party/
 
 # Mark as prebuilt release
 touch prebuilt
