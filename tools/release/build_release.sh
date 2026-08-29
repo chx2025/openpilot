@@ -17,6 +17,15 @@ fi
 
 BUILD_BRANCH=${BUILD_BRANCH:-release-mici-staging}
 
+SCONS=${SCONS:-$(command -v scons || true)}
+if [ -z "$SCONS" ] && [ -x /usr/local/venv/bin/scons ]; then
+  SCONS=/usr/local/venv/bin/scons
+fi
+if [ -z "$SCONS" ]; then
+  echo "scons executable not found"
+  exit 1
+fi
+
 case "$(readlink -f "$BUILD_DIR")" in
   /|/data|/data/sp|"$(readlink -f "$SOURCE_DIR")")
     echo "Unsafe BUILD_DIR: $BUILD_DIR"
@@ -57,17 +66,17 @@ for policy in /sys/devices/system/cpu/cpufreq/policy*; do
   fi
 done
 
-scons
+"$SCONS"
 if [ -n "$INCLUDE_BIG_MODEL" ]; then
   test -f openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl.chunkmanifest
 fi
 
 if [ -z "$PANDA_DEBUG_BUILD" ]; then
   # release panda fw
-  CERT=/data/pandaextra/certs/release RELEASE=1 scons panda/
+  CERT=/data/pandaextra/certs/release RELEASE=1 "$SCONS" panda/
 else
   # build with ALLOW_DEBUG=1 to enable features like experimental longitudinal
-  scons panda/
+  "$SCONS" panda/
 fi
 
 # Ensure no submodules in release
