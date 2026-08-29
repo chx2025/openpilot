@@ -52,7 +52,9 @@ cd $BUILD_DIR
 for policy in /sys/devices/system/cpu/cpufreq/policy*; do
   [ -d "$policy" ] || continue
   hardware_max="$(cat "$policy/cpuinfo_max_freq")"
-  echo "$hardware_max" | sudo tee "$policy/scaling_max_freq" >/dev/null
+  if ! echo "$hardware_max" | sudo tee "$policy/scaling_max_freq" >/dev/null; then
+    echo "Warning: $policy rejected scaling_max_freq=$hardware_max; keeping the kernel-selected limit"
+  fi
 done
 
 scons
