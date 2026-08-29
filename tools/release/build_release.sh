@@ -5,17 +5,24 @@ set -x
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 cd $DIR
 
-BUILD_DIR=/data/openpilot
+BUILD_DIR=${BUILD_DIR:-/data/openpilot}
 SOURCE_DIR="$(git rev-parse --show-toplevel)"
 
 export PYTHONPATH="$BUILD_DIR:$BUILD_DIR/msgq_repo:$BUILD_DIR/opendbc_repo:$BUILD_DIR/rednose_repo:$BUILD_DIR/teleoprtc_repo:$BUILD_DIR/tinygrad_repo"
 
-if [ -z "$RELEASE_BRANCH" ]; then
+if [ -z "$RELEASE_BRANCH" ] && [ "$SKIP_PUSH" != "1" ]; then
   echo "RELEASE_BRANCH is not set"
   exit 1
 fi
 
-BUILD_BRANCH=release-mici-staging
+BUILD_BRANCH=${BUILD_BRANCH:-release-mici-staging}
+
+case "$(readlink -f "$BUILD_DIR")" in
+  /|/data|/data/sp|"$(readlink -f "$SOURCE_DIR")")
+    echo "Unsafe BUILD_DIR: $BUILD_DIR"
+    exit 1
+    ;;
+esac
 
 
 # set git identity
@@ -89,6 +96,10 @@ git checkout openpilot/third_party/
 # Mark as prebuilt release
 touch prebuilt
 
+# Preserve the exact source anchor in the orphan prebuild snapshot.
+git -C "$SOURCE_DIR" rev-parse HEAD > git_src_commit
+git -C "$SOURCE_DIR" show -s --format='%ct %ci' HEAD > git_src_commit_date
+
 VERSION=$(cat openpilot/sunnypilot/common/version.h | awk -F[\"-]  '{print $2}')
 # Add built files to git
 # writing larger objects is faster than compressing them on-device
@@ -101,6 +112,10 @@ RELEASE=1 ./openpilot/selfdrive/test/test_onroad.py
 #tools/test_runner.py openpilot/selfdrive/car/tests/test_car_interfaces.py
 
 echo "[-] pushing release T=$SECONDS"
+if [ "$SKIP_PUSH" = "1" ]; then
+  echo "[-] SKIP_PUSH=1; prebuild commit is ready at $BUILD_DIR"
+  exit 0
+fi
 REFS=()
 for branch in ${RELEASE_BRANCH//,/ }; do
   REFS+=("$BUILD_BRANCH:$branch")

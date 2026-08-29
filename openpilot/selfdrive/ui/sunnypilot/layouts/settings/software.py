@@ -9,7 +9,7 @@ import subprocess
 from openpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.common.hardware import HARDWARE
-from openpilot.sunnypilot.hardware.branches import C3XL_COMPATIBLE_BRANCHES, selectable_tici_branches
+from openpilot.sunnypilot.hardware.branches import C3XL_COMPATIBLE_BRANCHES, is_prebuild_branch, selectable_tici_branches
 from openpilot.sunnypilot.hardware.profile import get_hardware_profile, HardwareProfile
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, tr_noop
@@ -67,8 +67,8 @@ class SoftwareLayoutSP(SoftwareLayout):
 
     top_level_nodes = [TreeNode(b, {'display_name': b}) for b in top_level_branches if b in branches]
     remaining_branches = [b for b in branches if b not in top_level_branches]
-    prebuilt_nodes = [TreeNode(b, {'display_name': b}) for b in remaining_branches if b.endswith("-prebuilt")]
-    non_prebuilt_nodes = [TreeNode(b, {'display_name': b}) for b in remaining_branches if not b.endswith("-prebuilt")]
+    prebuilt_nodes = [TreeNode(b, {'display_name': b}) for b in remaining_branches if is_prebuild_branch(b)]
+    non_prebuilt_nodes = [TreeNode(b, {'display_name': b}) for b in remaining_branches if not is_prebuild_branch(b)]
 
     folders = [
       TreeFolder("", top_level_nodes),
