@@ -11,6 +11,7 @@ from pathlib import Path
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
 from openpilot.common.hardware import PC
+from openpilot.common.basedir import BASEDIR
 from openpilot.common.hardware.hw import Paths
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
@@ -22,7 +23,7 @@ from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_
 from openpilot.system.ui.sunnypilot.widgets.html_render import HtmlModalSP
 from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp
 
-PREBUILT_PATH = os.path.join(Paths.comma_home(), "prebuilt") if PC else "/data/openpilot/prebuilt"
+PREBUILT_PATH = os.path.join(Paths.comma_home(), "prebuilt") if PC else os.path.join(BASEDIR, "prebuilt")
 
 
 class DeveloperLayoutSP(DeveloperLayout):

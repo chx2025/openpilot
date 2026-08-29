@@ -60,6 +60,10 @@ class TestManager(OpenpilotTestCase):
 
     assert not params.get_bool("RecordRoadVideo")
 
+  def test_prebuilt_marker_follows_the_active_checkout_root(self):
+    assert manager.prebuilt_path("/data/sp") == "/data/sp/prebuilt"
+    assert manager.prebuilt_path("/data/openpilot") == "/data/openpilot/prebuilt"
+
   def test_livestream_processes_follow_livestream_param_until_ignition_clear(self):
     params = Params()
     params.put_bool("IsLiveStreaming", True, block=True)
