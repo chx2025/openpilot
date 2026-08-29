@@ -43,7 +43,18 @@ bool process_mads_heartbeat(SubMaster *sm) {
   const auto &mads = (*sm)["selfdriveStateSP"].getSelfdriveStateSP().getMads();
   const bool heartbeat_type = disengage_lateral_on_brake ? mads.getActive() : mads.getEnabled();
 
-  return sm->allAliveAndValid({"selfdriveStateSP", "carParams"}) && heartbeat_type;
+  // NOTE (fix 2026-08-28, ref. cross-brand lateral-takeover investigation):
+  // carParams is intentionally published only ~once every 50s (see card.py / cereal/services.py,
+  // 0.02 Hz) - it's a logging-frequency channel, not a heartbeat-style one. Requiring it inside
+  // allAliveAndValid() here means that any time pandad (re)connects and carParams has not yet
+  // been freshly re-published since, process_mads_heartbeat() returns false - so
+  // heartbeat_engaged_mads=false gets sent to panda. After 3 consecutive mismatches,
+  // mads_heartbeat_engaged_check() in opendbc/safety/sunnypilot/mads.h forcibly clears
+  // controls_allowed_lateral (lateral-only revoke, car-brand-agnostic) - matching the
+  // "hold the steering wheel" symptom seen across every car model. We still read carParams'
+  // last-known alternativeExperience value above (fine even if stale - it rarely changes), we
+  // just no longer require it to be freshly alive to send a truthful MADS heartbeat.
+  return sm->allAliveAndValid({"selfdriveStateSP"}) && heartbeat_type;
 }
 
 Panda *connect(std::string serial="", uint32_t index=0) {
