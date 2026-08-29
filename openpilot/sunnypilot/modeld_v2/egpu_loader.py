@@ -7,16 +7,21 @@ from collections.abc import Callable, MutableMapping
 # LM 71.50 s, BMV3 73.54 s, TT 74.66 s, BMV2 75.58 s.
 # Keep a bounded 44.42 s margin for cold starts and USB scheduling variance.
 C3XL_MODEL_LOAD_TIMEOUT = 120
+C3XL_TINYGRAD_CACHE_HOME = "/data/cache"
 
 
 class EgpuModelLoadError(RuntimeError):
   pass
 
 
-def configure_default_device(comma_hardware: bool, environment: MutableMapping[str, str] = os.environ) -> None:
+def configure_default_device(comma_hardware: bool, environment: MutableMapping[str, str] = os.environ, *, c3xl: bool = False) -> None:
   """Prevent tinygrad's default-device scan from probing the USB AMD GPU."""
   if comma_hardware:
     environment.setdefault("DEV", "QCOM")
+  if c3xl:
+    # /home is an ephemeral overlay on C3XL. Keep AMD firmware and compiler
+    # caches across reboots so model startup never depends on a live download.
+    environment.setdefault("XDG_CACHE_HOME", C3XL_TINYGRAD_CACHE_HOME)
 
 
 def load_with_timeout[T](load: Callable[[], T], timeout: float) -> T:

@@ -2,7 +2,7 @@ import threading
 import unittest
 
 from openpilot.sunnypilot.modeld_v2.egpu_loader import (
-  C3XL_MODEL_LOAD_TIMEOUT, EgpuModelLoadError, configure_default_device, load_with_timeout,
+  C3XL_MODEL_LOAD_TIMEOUT, C3XL_TINYGRAD_CACHE_HOME, EgpuModelLoadError, configure_default_device, load_with_timeout,
 )
 
 
@@ -20,6 +20,15 @@ class TestEgpuLoading(unittest.TestCase):
     environment = {"DEV": "CPU"}
     configure_default_device(True, environment)
     self.assertEqual(environment["DEV"], "CPU")
+
+  def test_configures_persistent_c3xl_tinygrad_cache_without_overriding_explicit_path(self):
+    environment = {}
+    configure_default_device(True, environment, c3xl=True)
+    self.assertEqual(environment["XDG_CACHE_HOME"], C3XL_TINYGRAD_CACHE_HOME)
+
+    environment = {"XDG_CACHE_HOME": "/custom/cache"}
+    configure_default_device(True, environment, c3xl=True)
+    self.assertEqual(environment["XDG_CACHE_HOME"], "/custom/cache")
 
   def test_propagates_loader_exception(self):
     original = RuntimeError("USB AMD initialization failed")
