@@ -2045,6 +2045,22 @@ msgstr "走走停停破解 (Alpha)"
 msgid "Stop and Go for Manual Parking Brake (Beta)"
 msgstr "手動駐車煞車（測試版）走走停停"
 
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop at Red Lights / Stop Signs"
+msgstr "紅綠燈／停止標誌停等"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop for red lights and stop signs using the driving model's own predicted trajectory to place a virtual stop-line obstacle for the planner. No separate traffic light detector is required."
+msgstr "利用駕駛模型自身預測的行駛軌跡，在停止線位置放置虛擬障礙物，讓規劃器據此煞車，藉此在紅綠燈與停止標誌前停等。不需要額外的紅綠燈偵測器。"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop Line Position Adjust"
+msgstr "停止線位置微調"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Fine-tune where the virtual stop-line obstacle is placed. Positive values move it further away (stop later, closer to the line); negative values pull it closer to the car (stop earlier, further back from the line)."
+msgstr "微調虛擬停止線障礙物的放置位置。正值會將其移動至較遠處（較晚煞車、較接近停止線）；負值則會將其拉近至本車（較早煞車、停在較後方）。"
+
 #: selfdrive\ui\layouts\settings\toggles.py
 msgid "Strict"
 msgstr "嚴格"
@@ -3146,96 +3162,4 @@ msgstr "橫向"
 #: selfdrive\ui\widgets\offroad_alerts.py
 msgid "This alert will be cleared when new maps are downloaded."
 msgstr "下載新地圖後此警報將清除。"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Calibration cancelled"
-msgstr "校正已取消"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Calibration completed"
-msgstr "校正完成"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Calibration failed"
-msgstr "校正失敗"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Cancelled"
-msgstr "已取消"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Clear the IMU calibration and switch back to stock calibration."
-msgstr "清除 IMU 校正並恢復使用原廠校正。"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Completed"
-msgstr "已完成"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Drive straight"
-msgstr "直線行駛"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Enable auto-calibration for devices mounted at large or arbitrary angles."
-msgstr "為安裝角度較大或任意角度的裝置啟用自動校正。"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Failed"
-msgstr "失敗"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "IMU Calibration"
-msgstr "IMU 校正"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Idle"
-msgstr "閒置"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Keep parked"
-msgstr "保持停車"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Not calibrated"
-msgstr "未校正"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Orientation"
-msgstr "安裝方向"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Park on level ground, then drive straight to calibrate the device orientation."
-msgstr "將車輛停放在水平地面上，然後直線行駛以校正裝置安裝方向。"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Reset"
-msgstr "重設"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Reset IMU Calibration"
-msgstr "重設 IMU 校正"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Start IMU Calibration"
-msgstr "開始 IMU 校正"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Status"
-msgstr "狀態"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "reset imu calibration"
-msgstr "重設 imu 校正"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "start imu calibration"
-msgstr "開始 imu 校正"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "use imu calibration"
-msgstr "使用 imu 校正"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Use IMU Calibration"
-msgstr "使用 IMU 校正"
 

@@ -195,10 +195,11 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     // Model Manager params
     {"ModelManager_ActiveBundle", {PERSISTENT, JSON}},
-    {"ModelManager_ActiveBundleUSBGPU", {PERSISTENT, JSON}},
-    {"ModelManager_ActiveJson", {CLEAR_ON_MANAGER_START, JSON}},
+    {"ModelManager_ActiveJson", {CLEAR_ON_MANAGER_START, STRING}},
+    {"ModelManager_PrevBundle", {PERSISTENT, JSON}},
+    {"ModelManager_PrevBundle_USBGPU", {PERSISTENT, JSON}},
     {"ModelManager_ClearCache", {CLEAR_ON_MANAGER_START, BOOL}},
-    {"ModelManager_DownloadRef", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
+    {"ModelManager_DownloadIndex", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, INT}},
     {"ModelManager_Favs", {PERSISTENT | BACKUP, STRING}},
     {"ModelManager_LastSyncTime", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},
     {"ModelManager_LastSyncTime_USBGPU", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},
@@ -246,7 +247,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
 
     // mapd
     {"MapAdvisorySpeedLimit", {CLEAR_ON_ONROAD_TRANSITION, FLOAT}},
-    {"Mapd_ClearCache", {CLEAR_ON_MANAGER_START, BOOL}},
     {"MapdVersion", {PERSISTENT, STRING}},
     {"MapSpeedLimit", {CLEAR_ON_ONROAD_TRANSITION, FLOAT, "0.0"}},
     {"NextMapSpeedLimit", {CLEAR_ON_ONROAD_TRANSITION, JSON}},
@@ -277,6 +277,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SmartCruiseControlMap", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"SmartCruiseControlVision", {PERSISTENT | BACKUP, BOOL, "0"}},
 
+    // Traffic Stop (red light / stop sign virtual stop-line obstacle)
+    {"TrafficStopEnabled", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TrafficStopDistanceAdjust", {PERSISTENT | BACKUP, INT, "0"}},
+
     // Torque lateral control custom params
     {"CustomTorqueParams", {PERSISTENT | BACKUP , BOOL}},
     {"EnforceTorqueControl", {PERSISTENT | BACKUP, BOOL}},
@@ -297,9 +301,4 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SpDevBeep", {PERSISTENT, BOOL, "0"}},
     {"WebuiHeadlessMode", {PERSISTENT | BACKUP, STRING, "auto"}},
     {"IsOnroadPreview", {CLEAR_ON_MANAGER_START, BOOL}},
-    
-    {"ImuCalibrationEnabled", {PERSISTENT, BOOL}},
-    {"ImuCalibrationMatrix", {PERSISTENT, BYTES}},
-    {"ImuCalibrationRequested", {CLEAR_ON_MANAGER_START, BOOL}},
-    {"ImuCalibrationStatus", {PERSISTENT, STRING}},
 };
