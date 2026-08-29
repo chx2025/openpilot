@@ -3532,3 +3532,47 @@ msgstr "使用 imu 校準"
 #: selfdrive\ui\layouts\settings\imu_calibration.py
 msgid "Use IMU Calibration"
 msgstr "使用 IMU 校準"
+msgid "Small Model"
+msgstr "小型模型"
+
+msgid "Big Model"
+msgstr "大型模型"
+
+msgid "Model Status"
+msgstr "模型狀態"
+
+msgid "Cancel Verification"
+msgstr "取消驗證"
+
+msgid "queued"
+msgstr "排隊中"
+
+msgid "small"
+msgstr "小型"
+
+msgid "big"
+msgstr "大型"
+
+msgid "Big model unavailable, {} is driving until the next drive."
+msgstr "大型模型不可用，直到下次駕駛前將由 {} 進行駕駛。"
+
+msgid "Big model unavailable until the next drive."
+msgstr "大型模型在下次駕駛前不可用。"
+
+msgid "{} drives until the big model is ready."
+msgstr "將由 {} 接管駕駛，直到大型模型準備就緒。"
+
+msgid "Getting the big model ready."
+msgstr "正在準備大型模型。"
+
+msgid "{} will drive. If it fails during a drive, {} takes over until the next drive."
+msgstr "將由 {} 進行駕駛。若在行駛中失效，將由 {} 接管直到下次駕駛。"
+
+msgid "{} will drive when the eGPU is ready."
+msgstr "當 eGPU 準備就緒時，將由 {} 進行駕駛。"
+
+msgid "verifying"
+msgstr "驗證中"
+
+msgid "No models are available for this hardware yet. Connect to the internet and refresh the model list."
+msgstr "此硬體目前沒有可用的模型。請連接網路並刷新模型列表。"
