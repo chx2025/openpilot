@@ -25,6 +25,7 @@ if [ -z "$SCONS" ]; then
   echo "scons executable not found"
   exit 1
 fi
+export PATH="$(dirname "$SCONS"):$PATH"
 
 case "$(readlink -f "$BUILD_DIR")" in
   /|/data|/data/sp|"$(readlink -f "$SOURCE_DIR")")
