@@ -197,14 +197,6 @@ msgid "Always-On Driver Monitoring"
 msgstr "始终启用驾驶员监控"
 
 #: selfdrive\ui\layouts\settings\toggles.py
-msgid "Disable Driver Monitoring"
-msgstr "禁用驾驶员监控"
-
-#: selfdrive\ui\layouts\settings\toggles.py
-msgid "Disable driver monitoring (no cabin camera required). Similar to LITE mode."
-msgstr "禁用驾驶员监控（无需舱内摄像头），效果类似 LITE 模式。"
-
-#: selfdrive\ui\layouts\settings\toggles.py
 msgid "An alpha version of sunnypilot longitudinal control can be tested, along with Experimental mode, on non-release branches."
 msgstr "在非发布分支上可测试 sunnypilot 纵向控制 Alpha 版及实验模式。"
 
@@ -227,6 +219,10 @@ msgstr "为设置界面设置自定义超时。<br>用户无操作后，设置�
 #: selfdrive\ui\sunnypilot\layouts\settings\sunnylink.py
 msgid "Are you sure you want to backup your current sunnypilot settings?"
 msgstr "确定要备份当前的 sunnypilot 设置吗？"
+
+#: selfdrive/ui/layouts/settings/imu_calibration.py
+msgid "Are you sure you want to clear the IMU calibration?"
+msgstr "确定要清除 IMU 校准吗？"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\device.py
 msgid "Are you sure you want to enter Always Offroad mode?"
@@ -288,14 +284,6 @@ msgstr "转向灯自动变道"
 msgid "Auto Lane Change: Delay with Blind Spot"
 msgstr "自动变道：盲区延迟"
 
-#: selfdrive\ui\sunnypilot\layouts\settings\steering_sub_layouts\lane_change_settings.py
-msgid "Block Lane Change: Road Edge Detection"
-msgstr "阻止变道：道路边缘检测"
-
-#: selfdrive\ui\sunnypilot\layouts\settings\steering_sub_layouts\lane_change_settings.py
-msgid "Blocks the lane change if the model sees a road edge on your signaled side."
-msgstr "如果模型在您打转向灯的一侧检测到道路边缘，则阻止变道。"
-
 #: selfdrive\ui\sunnypilot\onroad\developer_ui\elements.py
 msgid "B.D."
 msgstr "方位"
@@ -337,6 +325,26 @@ msgstr "成为 sunnypilot 赞助者，可在 sunnylink 功能上线时抢先体�
 msgid "Before we get on the road, let's finish installation and cover some details."
 msgstr "在我们上路之前，让我们完成安装并介绍一些细节。"
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big Model"
+msgstr "大模型"
+
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big model unavailable until the next drive."
+msgstr "大模型目前无法使用，需等到下次行驶才能恢复。"
+
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Big model unavailable, {} is driving until the next drive."
+msgstr "大模型无法使用，目前由 {} 驾驶，直到下次行驶。"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\steering_sub_layouts\lane_change_settings.py
+msgid "Block Lane Change: Road Edge Detection"
+msgstr "阻止变道：道路边缘检测"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\steering_sub_layouts\lane_change_settings.py
+msgid "Blocks the lane change if the model sees a road edge on your signaled side."
+msgstr "如果模型在您打转向灯的一侧检测到道路边缘，则阻止变道。"
+
 #: selfdrive\ui\widgets\pairing_dialog.py
 msgid "Bookmark connect.comma.ai to your home screen to use it like an app"
 msgstr "将 connect.comma.ai 添加到主屏幕，像应用一样使用"
@@ -372,6 +380,18 @@ msgstr "连接"
 msgid "CONNECTING..."
 msgstr "连接中..."
 
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Calibration cancelled"
+msgstr "校准已取消"
+
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Calibration completed"
+msgstr "校准完成"
+
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Calibration failed"
+msgstr "校准失败"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\models.py
 #: system\ui\tici_reset.py
 #: system\ui\widgets\confirm_dialog.py
@@ -384,6 +404,14 @@ msgstr "取消"
 #: selfdrive\ui\sunnypilot\layouts\settings\models.py
 msgid "Cancel Download"
 msgstr "取消下载"
+
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Cancel Verification"
+msgstr "取消验证"
+
+#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
+msgid "Cancelled"
+msgstr "已取消"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\cruise_sub_layouts\speed_limit_policy.py
 msgid "Car First"
@@ -434,6 +462,10 @@ msgstr "清除缓存"
 msgid "Clear Model Cache"
 msgstr "清除模型缓存"
 
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Clear the IMU calibration and switch back to stock calibration."
+msgstr "清除 IMU 校准并恢复使用原厂校准。"
+
 #: selfdrive\ui\widgets\pairing_dialog.py
 msgid "Click \"add new device\" and scan the QR code on the right"
 msgstr "点击“添加新设备”，扫描右侧二维码"
@@ -450,6 +482,14 @@ msgstr "关闭"
 msgid "Cloud"
 msgstr "云端"
 
+#: selfdrive/ui/layouts/settings/imu_calibration.py
+msgid "Collecting dynamic data — drive straight"
+msgstr "正在收集动态数据 — 请直线行驶"
+
+#: selfdrive/ui/layouts/settings/imu_calibration.py
+msgid "Collecting static data — keep parked"
+msgstr "正在收集静态数据 — 请保持驻车"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\vehicle\platform_selector.py
 msgid "Colors represent vehicle fingerprint status:"
 msgstr "颜色表示车辆指纹状态："
@@ -461,6 +501,14 @@ msgstr "组合"
 #: selfdrive\ui\sunnypilot\layouts\settings\cruise_sub_layouts\speed_limit_policy.py
 msgid "Combined: Use combined Speed Limit data from Car & OpenStreetMaps"
 msgstr "组合：使用车辆和 OpenStreetMaps 组合的限速数据"
+
+#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
+msgid "Completed"
+msgstr "已完成"
+
+#: selfdrive/ui/layouts/settings/imu_calibration.py
+msgid "Computing calibration..."
+msgstr "正在计算校准..."
 
 #: selfdrive\ui\sunnypilot\layouts\settings\device.py
 #: selfdrive\ui\sunnypilot\layouts\settings\vehicle\platform_selector.py
@@ -621,9 +669,17 @@ msgstr ""
 msgid "Disable"
 msgstr "禁用"
 
+#: selfdrive\ui\layouts\settings\toggles.py
+msgid "Disable Driver Monitoring"
+msgstr "禁用驾驶员监控"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\software.py
 msgid "Disable Updates"
 msgstr "禁用更新"
+
+#: selfdrive\ui\layouts\settings\toggles.py
+msgid "Disable driver monitoring (no cabin camera required). Similar to LITE mode."
+msgstr "禁用驾驶员监控（无需舱内摄像头），效果类似 LITE 模式。"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
 msgid "Disable the sunnypilot Longitudinal Control (alpha) toggle to allow Intelligent Cruise Button Management."
@@ -652,6 +708,14 @@ msgstr "脱离以重启"
 #: selfdrive\ui\layouts\settings\device.py
 msgid "Disengage to Reset Calibration"
 msgstr "脱离以重置校准"
+
+#: selfdrive/ui/layouts/settings/imu_calibration.py
+msgid "Disengage to reset calibration"
+msgstr "请先取消驾驶辅助才能重设校准"
+
+#: selfdrive/ui/layouts/settings/imu_calibration.py
+msgid "Disengage to start calibration"
+msgstr "请先取消驾驶辅助才能开始校准"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\steering_sub_layouts\mads_settings.py
 msgid "Disengage: ALC will disengage when the brake pedal is pressed."
@@ -744,42 +808,22 @@ msgstr "正在下载地图..."
 msgid "Downloading..."
 msgstr "正在下载..."
 
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Drive straight"
+msgstr "直线行驶"
+
 #: selfdrive\ui\layouts\settings\device.py
 msgid "Driver Camera"
 msgstr "车内摄像头"
 
-#: selfdrive\ui\layouts\settings\device.py
-msgid "Onroad Preview"
-msgstr "行车预览"
-
-#: selfdrive\ui\layouts\settings\device.py
-#: selfdrive\ui\sunnypilot\layouts\settings\device.py
-msgid "ENTER"
-msgstr "进入"
-
-#: selfdrive\ui\layouts\settings\device.py
-#: selfdrive\ui\sunnypilot\layouts\settings\device.py
-msgid "EXIT"
-msgstr "退出"
-
-#: selfdrive\ui\mici\onroad\augmented_road_view.py
-#: selfdrive\ui\onroad\augmented_road_view.py
-msgid "road"
-msgstr "长焦"
-
-#: selfdrive\ui\mici\onroad\augmented_road_view.py
-#: selfdrive\ui\onroad\augmented_road_view.py
-msgid "wide"
-msgstr "广角"
-
-#: selfdrive\ui\mici\onroad\augmented_road_view.py
-#: selfdrive\ui\onroad\augmented_road_view.py
-msgid "exit"
-msgstr "关闭"
-
 #: selfdrive\ui\sunnypilot\layouts\settings\device.py
 msgid "Driver Camera Preview"
 msgstr "驾驶员摄像头预览"
+
+#: selfdrive\ui\mici\onroad\cabin_camera_dialog.py
+#: selfdrive\ui\onroad\cabin_camera_dialog.py
+msgid "Driver camera unavailable"
+msgstr "驾驶员摄像头不可用"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\trips.py
 msgid "Drives"
@@ -809,6 +853,11 @@ msgstr "扭矩"
 msgid "EDIT"
 msgstr "编辑"
 
+#: selfdrive\ui\layouts\settings\device.py
+#: selfdrive\ui\sunnypilot\layouts\settings\device.py
+msgid "ENTER"
+msgstr "进入"
+
 #: selfdrive\ui\layouts\sidebar.py
 #: selfdrive\ui\sunnypilot\layouts\sidebar.py
 msgid "ERROR"
@@ -817,6 +866,11 @@ msgstr "错误"
 #: selfdrive\ui\layouts\sidebar.py
 msgid "ETH"
 msgstr "ETH"
+
+#: selfdrive\ui\layouts\settings\device.py
+#: selfdrive\ui\sunnypilot\layouts\settings\device.py
+msgid "EXIT"
+msgstr "退出"
 
 #: selfdrive\ui\widgets\exp_mode_button.py
 msgid "EXPERIMENTAL MODE ON"
@@ -862,10 +916,6 @@ msgstr "启用动态实验模式控制"
 msgid "Enable Lane Departure Warnings"
 msgstr "启用车道偏离警示"
 
-#: selfdrive\ui\layouts\settings\toggles.py
-msgid "Enable driver monitoring even when sunnypilot is not engaged."
-msgstr "即使未启用 sunnypilot 也启用驾驶员监控。"
-
 #: system\ui\widgets\network.py
 msgid "Enable Roaming"
 msgstr "启用漫游"
@@ -886,9 +936,17 @@ msgstr "启用特斯拉彩虹模式"
 msgid "Enable Tethering"
 msgstr "启用网络共享"
 
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Enable auto-calibration for devices mounted at large or arbitrary angles."
+msgstr "为安装角度较大或任意角度的装置启用自动校准。"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
 msgid "Enable custom Short & Long press increments for cruise speed increase/decrease."
 msgstr "启用自订短按和长按增量以增加/减少巡航速度。"
+
+#: selfdrive\ui\layouts\settings\toggles.py
+msgid "Enable driver monitoring even when sunnypilot is not engaged."
+msgstr "即使未启用 sunnypilot 也启用驾驶员监控。"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\sunnylink.py
 msgid "Enable sunnylink"
@@ -1050,6 +1108,10 @@ msgstr "正在遗忘..."
 msgid "FRIC."
 msgstr "摩擦"
 
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Failed"
+msgstr "失败"
+
 #: selfdrive\ui\widgets\offroad_alerts.py
 msgid "Failed to register with comma.ai backend. It will not connect or upload to comma.ai servers, and receives no support from comma.ai. If this is a device purchased at comma.ai/shop, open a ticket at https://comma.ai/support."
 msgstr "无法向 comma.ai 后端注册。设备不会连接或上传到 comma.ai 服务器，也不享有 comma.ai 支持。若从 comma.ai/shop 购买，请在 https://comma.ai/support 提交工单。"
@@ -1061,6 +1123,10 @@ msgstr "收藏"
 #: selfdrive\ui\sunnypilot\layouts\settings\models.py
 msgid "Fetching Latest Models"
 msgstr "正在获取最新模型"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Fine-tune where the virtual stop-line obstacle is placed. Positive values move it further away (stop later, closer to the line); negative values pull it closer to the car (stop earlier, further back from the line)."
+msgstr "微调虚拟停止线障碍物的放置位置。正值会将其移动至较远处（较晚煞车、较接近停止线）；负值则会将其拉近至本车（较早煞车、停在较后方）。"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\vehicle\platform_selector.py
 msgid "Fingerprinted automatically"
@@ -1144,8 +1210,7 @@ msgstr ""
 "\n"
 "什么样的 USB-C 充电器比较好？任意快充手机或笔记本充电器即可。\n"
 "\n"
-"用什么软件重要吗？重要，只有上游 openpilot（及指定 fork）可用于训练。"
-"为获得最佳效果，建议每周把设备带回家，接上 USB-C 充电器和 Wi-Fi。\n"
+"用什么软件重要吗？重要，只有上游 openpilot（及指定 fork）可用于训练。为获得最佳效果，建议每周把设备带回家，接上 USB-C 充电器和 Wi-Fi。\n"
 "\n"
 "连接热点或不限流量 SIM 卡时，开车也能用 Firehose 模式。\n"
 "\n"
@@ -1198,6 +1263,10 @@ msgstr "绿灯"
 msgid "Getting Started"
 msgstr "入门"
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Getting the big model ready."
+msgstr "正在准备大模型。"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\developer.py
 msgid "GitHub Runner Service"
 msgstr "GitHub Runner 服务"
@@ -1222,13 +1291,13 @@ msgstr "隐藏网络"
 msgid "Hours"
 msgstr "小时"
 
-#: selfdrive\ui\sunnypilot\layouts\settings\trips.py
-msgid "Local"
-msgstr "本地"
-
 #: selfdrive\ui\sunnypilot\layouts\settings\display.py
 msgid "How long the screen saver runs before the screen turns off."
 msgstr "屏幕保护运行多久后关闭屏幕。"
+
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "IMU Calibration"
+msgstr "IMU 校准"
 
 #: selfdrive\ui\mici\layouts\settings\firehose.py
 msgid "INACTIVE: connect to an unmetered network"
@@ -1241,6 +1310,10 @@ msgstr "安装"
 #: system\ui\widgets\network.py
 msgid "IP Address"
 msgstr "IP 地址"
+
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Idle"
+msgstr "空闲"
 
 #: system\ui\sunnypilot\widgets\sunnylink_pairing_dialog.py
 msgid "If sponsorship status was not updated, please contact a moderator on the community forum at https://community.sunnypilot.ai"
@@ -1301,6 +1374,10 @@ msgstr "摇杆调试模式"
 #: selfdrive\ui\sunnypilot\layouts\settings\trips.py
 msgid "KM"
 msgstr "公里"
+
+#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
+msgid "Keep parked"
+msgstr "保持停车"
 
 #: selfdrive\ui\sunnypilot\onroad\developer_ui\elements.py
 msgid "L.A.F."
@@ -1375,6 +1452,10 @@ msgstr "实时转向延迟："
 msgid "Loading..."
 msgstr "加载中..."
 
+#: selfdrive\ui\sunnypilot\layouts\settings\trips.py
+msgid "Local"
+msgstr "本地"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
 msgid "Long Press Increment"
 msgstr "长按增量"
@@ -1446,6 +1527,10 @@ msgstr "英里"
 msgid "Minimum Speed to Pause Lateral Control"
 msgstr "暂停横向控制的最低速度"
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Model Status"
+msgstr "模型状态"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\models.py
 msgid "Model download has started in the background. We suggest resetting calibration. Would you like to do that now?"
 msgstr "模型下载已在后台开始。建议重置标定。是否现在重置？"
@@ -1513,6 +1598,10 @@ msgstr "在此 URL 中找不到自订软件。"
 msgid "No custom software found at this URL: "
 msgstr "在此 URL 中找不到自订软件："
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "No models are available for this hardware yet. Connect to the internet and refresh the model list."
+msgstr "此硬件目前尚无可用模型。请连接网络并刷新模型列表。"
+
 #: selfdrive\ui\widgets\offroad_alerts.py
 msgid "No release notes available."
 msgstr "暂无发行说明。"
@@ -1528,10 +1617,6 @@ msgstr "不会，只会抽取部分片段。"
 #: selfdrive\ui\layouts\settings\developer.py
 msgid "Non-Prebuilt Branches"
 msgstr "非预构建分支"
-
-#: selfdrive\ui\layouts\settings\developer.py
-msgid "Prebuilt Branches"
-msgstr "预构建分支"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\cruise_sub_layouts\speed_limit_settings.py
 msgid "None"
@@ -1552,6 +1637,10 @@ msgstr "未关联"
 #: selfdrive\ui\sunnypilot\layouts\settings\sunnylink.py
 msgid "Not Sponsor"
 msgstr "未赞助"
+
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Not calibrated"
+msgstr "未校准"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\vehicle\platform_selector.py
 msgid "Not fingerprinted or manually selected"
@@ -1646,20 +1735,16 @@ msgid "Only available when vehicle is off, or always offroad mode is on"
 msgstr "仅在车辆熄火或始终非行车模式下可用"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\display.py
-msgid "Screen Brightness"
-msgstr "屏幕亮度"
-
-#: selfdrive\ui\sunnypilot\layouts\settings\display.py
-msgid "Screen brightness when offroad. 0 uses the device default."
-msgstr "非行车模式下的屏幕亮度。0 表示使用设备默认亮度。"
-
-#: selfdrive\ui\sunnypilot\layouts\settings\display.py
 msgid "Onroad Brightness"
 msgstr "行车亮度"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\display.py
 msgid "Onroad Brightness Delay"
 msgstr "行车亮度延迟"
+
+#: selfdrive\ui\layouts\settings\device.py
+msgid "Onroad Preview"
+msgstr "行车预览"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\device.py
 msgid "Onroad Uploads"
@@ -1678,6 +1763,10 @@ msgstr ""
 "OpenStreetMap 数据库已过期。若需继续使用开放街图数据进行增强速度控制和道路名称显示，必须下载新地图。\n"
 "\n"
 "%1"
+
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Orientation"
+msgstr "安装方向"
 
 #: selfdrive\ui\layouts\settings\device.py
 msgid "PAIR"
@@ -1731,6 +1820,10 @@ msgstr "将设备与 comma connect（connect.comma.ai）配对，领取您的 co
 #: selfdrive\ui\sunnypilot\layouts\settings\sunnylink.py
 msgid "Paired"
 msgstr "已关联"
+
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Park on level ground, then drive straight to calibrate the device orientation."
+msgstr "将车辆停放在水平地面上，然后直线行驶以校准装置安装方向。"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\steering_sub_layouts\mads_settings.py
 msgid "Pause"
@@ -1798,6 +1891,10 @@ msgstr "关机"
 msgid "Power your device in a car with a harness or proceed at your own risk."
 msgstr "使用安全带在车内为您的设备供电，或自行承担风险。"
 
+#: selfdrive\ui\layouts\settings\developer.py
+msgid "Prebuilt Branches"
+msgstr "预构建分支"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\vehicle\brands\hyundai.py
 msgid "Predictive"
 msgstr "预测性"
@@ -1813,6 +1910,10 @@ msgstr "在计量制蜂窝网络时避免大量上传"
 #: selfdrive\ui\layouts\settings\device.py
 msgid "Preview the driver facing camera to ensure that driver monitoring has good visibility. (vehicle must be off)"
 msgstr "预览车内摄像头以确保驾驶员监控视野良好。（车辆必须熄火）"
+
+#: selfdrive/ui/layouts/settings/device.py
+msgid "Preview the onroad camera view while parked. (vehicle must be off)"
+msgstr "预览行车摄像头画面（仅限熄火驻车时）。（车辆必须熄火）"
 
 #: selfdrive\ui\widgets\pairing_dialog.py
 msgid "QR Code Error"
@@ -1955,6 +2056,10 @@ msgstr "重置"
 msgid "Reset Calibration"
 msgstr "重置校准"
 
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Reset IMU Calibration"
+msgstr "重设 IMU 校准"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\device.py
 msgid "Reset Settings"
 msgstr "重置设置"
@@ -2039,6 +2144,10 @@ msgstr "赞助"
 msgid "SSH Keys"
 msgstr "SSH 密钥"
 
+#: selfdrive/ui/layouts/settings/imu_calibration.py
+msgid "START"
+msgstr "开始"
+
 #: selfdrive\ui\sunnypilot\onroad\circular_alerts.py
 msgid "STOPPED"
 msgstr "已停止"
@@ -2072,6 +2181,10 @@ msgid "Scanning..."
 msgstr "扫描中..."
 
 #: selfdrive\ui\sunnypilot\layouts\settings\display.py
+msgid "Screen Brightness"
+msgstr "屏幕亮度"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\display.py
 msgid "Screen Off"
 msgstr "关闭屏幕"
 
@@ -2082,6 +2195,10 @@ msgstr "屏幕保护"
 #: selfdrive\ui\sunnypilot\layouts\settings\display.py
 msgid "Screen Saver Duration"
 msgstr "屏幕保护时长"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\display.py
+msgid "Screen brightness when offroad. 0 uses the device default."
+msgstr "非行车模式下的屏幕亮度。0 表示使用设备默认亮度。"
 
 #: system\ui\tici_setup.py
 msgid "Scroll to continue"
@@ -2160,10 +2277,6 @@ msgstr "设置已恢复。确认后重启界面。"
 msgid "Short Press Increment"
 msgstr "短按增量"
 
-#: selfdrive\ui\sunnypilot\layouts\settings\display.py
-msgid "Show a screen saver when the device is offroad and idle, instead of turning the screen off."
-msgstr "设备处于非行车状态且空闲时显示屏幕保护，而不是关闭屏幕。"
-
 #: selfdrive\ui\sunnypilot\layouts\settings\developer.py
 msgid "Show Advanced Controls"
 msgstr "显示高级控制"
@@ -2172,6 +2285,10 @@ msgstr "显示高级控制"
 msgid "Show Blind Spot Warnings"
 msgstr "显示盲区警告"
 
+#: selfdrive\ui\sunnypilot\layouts\settings\display.py
+msgid "Show a screen saver when the device is offroad and idle, instead of turning the screen off."
+msgstr "设备处于非行车状态且空闲时显示屏幕保护，而不是关闭屏幕。"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\visuals.py
 msgid "Show a timer on the HUD when the car is at a standstill."
 msgstr "当车辆静止时在 HUD 上显示计时器。"
@@ -2179,6 +2296,10 @@ msgstr "当车辆静止时在 HUD 上显示计时器。"
 #: selfdrive\ui\sunnypilot\layouts\settings\visuals.py
 msgid "Show an indicator on the left side of the screen to display real-time vehicle acceleration and deceleration. This displays what the car is currently doing, not what the planner is requesting."
 msgstr "在屏幕左侧显示实时加减速指示条，反映车辆当前实际加减速，而非规划器请求值。"
+
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "Small Model"
+msgstr "小模型"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
 msgid "Smart Cruise Control - Map"
@@ -2246,6 +2367,10 @@ msgstr "建议使用标准模式。激进模式下跟车更近、加减速更积
 msgid "Start Download"
 msgstr "开始下载"
 
+#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
+msgid "Start IMU Calibration"
+msgstr "开始 IMU 校准"
+
 #: system\ui\tici_setup.py
 msgid "Start over"
 msgstr "重新开始"
@@ -2261,6 +2386,10 @@ msgstr "启动车辆以检查兼容性。"
 msgid "State"
 msgstr "状态"
 
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Status"
+msgstr "状态"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\settings.py
 msgid "Steering"
 msgstr "转向"
@@ -2273,6 +2402,10 @@ msgstr "转向弧"
 msgid "Steering Mode on Brake Pedal"
 msgstr "刹车踏板转向模式"
 
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop Line Position Adjust"
+msgstr "停止线位置微调"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\vehicle\brands\subaru.py
 msgid "Stop and Go (Beta)"
 msgstr "跟停与起步 (Beta)"
@@ -2284,6 +2417,14 @@ msgstr "跟停与起步 Hack (Alpha)"
 #: selfdrive\ui\sunnypilot\layouts\settings\vehicle\brands\subaru.py
 msgid "Stop and Go for Manual Parking Brake (Beta)"
 msgstr "手动手刹跟停与起步 (Beta)"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop at Red Lights / Stop Signs"
+msgstr "红绿灯／停止标志停等"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop for red lights and stop signs using the driving model's own predicted trajectory to place a virtual stop-line obstacle for the planner. No separate traffic light detector is required."
+msgstr "利用驾驶模型自身预测的行驶轨迹，在停止线位置放置虚拟障碍物，让规划器据此煞车，藉此在红绿灯与停止标志前停等。不需要额外的红绿灯侦测器。"
 
 #: selfdrive\ui\layouts\settings\toggles.py
 msgid "Strict"
@@ -2525,6 +2666,10 @@ msgstr "立即升级"
 msgid "Upload data from the driver facing camera and help improve the driver monitoring algorithm."
 msgstr "上传车内摄像头数据，帮助改进驾驶员监控算法。"
 
+#: selfdrive\ui\layouts\settings\imu_calibration.py
+msgid "Use IMU Calibration"
+msgstr "使用 IMU 校准"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\models.py
 msgid "Use Lane Turn Desires"
 msgstr "使用车道转向意图"
@@ -2741,6 +2886,10 @@ msgstr "备份设置"
 msgid "become a sunnypilot sponsor"
 msgstr "成为 sunnypilot 赞助者"
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "big"
+msgstr "大"
+
 #: selfdrive\ui\sunnypilot\mici\layouts\models.py
 msgid "cache size"
 msgstr "缓存大小"
@@ -2750,11 +2899,6 @@ msgstr "缓存大小"
 #: selfdrive\ui\onroad\driver_camera_dialog.py
 msgid "camera starting"
 msgstr "相机启动中"
-
-#: selfdrive\ui\onroad\cabin_camera_dialog.py
-#: selfdrive\ui\mici\onroad\cabin_camera_dialog.py
-msgid "Driver camera unavailable"
-msgstr "驾驶员摄像头不可用"
 
 #: system\ui\mici_reset.py
 msgid "cancel"
@@ -2878,6 +3022,11 @@ msgstr "启用 SunnyLink"
 #: selfdrive\ui\sunnypilot\mici\layouts\models.py
 msgid "error"
 msgstr "错误"
+
+#: selfdrive\ui\mici\onroad\augmented_road_view.py
+#: selfdrive\ui\onroad\augmented_road_view.py
+msgid "exit"
+msgstr "关闭"
 
 #: system\ui\mici_reset.py
 msgid "factory reset"
@@ -3042,6 +3191,10 @@ msgstr "请重启后重试"
 msgid "progress"
 msgstr "进度"
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "queued"
+msgstr "排队中"
+
 #: selfdrive\ui\sunnypilot\layouts\settings\models.py
 msgid "ready"
 msgstr "就绪"
@@ -3070,6 +3223,10 @@ msgstr ""
 #: system\ui\mici_reset.py
 msgid "reset failed"
 msgstr "重置失败"
+
+#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
+msgid "reset imu calibration"
+msgstr "重设 imu 校准"
 
 #: system\ui\mici_reset.py
 msgid ""
@@ -3106,6 +3263,11 @@ msgstr "恢复中"
 #: selfdrive\ui\layouts\settings\device.py
 msgid "right"
 msgstr "右"
+
+#: selfdrive\ui\mici\onroad\augmented_road_view.py
+#: selfdrive\ui\onroad\augmented_road_view.py
+msgid "road"
+msgstr "长焦"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\steering.py
 #: selfdrive\ui\sunnypilot\layouts\settings\steering_sub_layouts\lane_change_settings.py
@@ -3161,6 +3323,10 @@ msgstr "滑动重新启动"
 msgid "slide to restore"
 msgstr "滑动以恢复"
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "small"
+msgstr "小"
+
 #: selfdrive\ui\sunnypilot\mici\layouts\sunnylink.py
 msgid "sponsor"
 msgstr "赞助"
@@ -3172,6 +3338,10 @@ msgstr "赞助等级"
 #: system\ui\mici_setup.py
 msgid "start"
 msgstr "开始"
+
+#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
+msgid "start imu calibration"
+msgstr "开始 imu 校准"
 
 #: selfdrive\ui\sunnypilot\layouts\onboarding.py
 #: selfdrive\ui\sunnypilot\layouts\settings\settings.py
@@ -3339,6 +3509,10 @@ msgstr "更新失败"
 msgid "update required"
 msgstr "需要更新"
 
+#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
+msgid "use imu calibration"
+msgstr "使用 imu 校准"
+
 #: system\ui\mici_reset.py
 msgid ""
 "user data partition\n"
@@ -3347,6 +3521,10 @@ msgstr ""
 "使用者资料分区\n"
 "无法安装"
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "verifying"
+msgstr "验证中"
+
 #: system\ui\mici_setup.py
 msgid ""
 "waiting for\n"
@@ -3354,6 +3532,11 @@ msgid ""
 msgstr ""
 "等待\n"
 "互联网..."
+
+#: selfdrive\ui\mici\onroad\augmented_road_view.py
+#: selfdrive\ui\onroad\augmented_road_view.py
+msgid "wide"
+msgstr "广角"
 
 #: selfdrive\ui\sunnypilot\layouts\settings\display.py
 msgid "{} %"
@@ -3376,6 +3559,10 @@ msgid "{} day ago"
 msgid_plural "{} days ago"
 msgstr[0] "{} 天前"
 msgstr[1] "{} 天前"
+
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} drives until the big model is ready."
+msgstr "在大模型准备就绪前，由 {} 驾驶。"
 
 #: selfdrive\ui\layouts\settings\software.py
 msgid "{} hour ago"
@@ -3403,6 +3590,14 @@ msgid_plural "{} segments of your driving is in the training dataset so far."
 msgstr[0] "目前已有 {} 个您的驾驶片段被纳入训练数据集。"
 msgstr[1] "目前已有 {} 个您的驾驶片段被纳入训练数据集。"
 
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} will drive when the eGPU is ready."
+msgstr "eGPU 准备就绪后将由 {} 驾驶。"
+
+#: selfdrive/ui/sunnypilot/layouts/settings/models.py
+msgid "{} will drive. If it fails during a drive, {} takes over until the next drive."
+msgstr "将由 {} 驾驶。若在行驶过程中失败，将由 {} 接手，直到下次行驶。"
+
 #: system\ui\mici_setup.py
 msgid "• It has not been tested by comma."
 msgstr "• 尚未经过comma 测试。"
@@ -3427,154 +3622,3 @@ msgstr "🔥 Firehose 模式 🔥"
 msgid "🚀 sunnylink 🚀"
 msgstr "🚀 SunnyLink 🚀"
 
-#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
-msgid "Stop at Red Lights / Stop Signs"
-msgstr "红绿灯／停止标志停等"
-
-#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
-msgid "Stop for red lights and stop signs using the driving model's own predicted trajectory to place a virtual stop-line obstacle for the planner. No separate traffic light detector is required."
-msgstr "利用驾驶模型自身预测的行驶轨迹，在停止线位置放置虚拟障碍物，让规划器据此煞车，藉此在红绿灯与停止标志前停等。不需要额外的红绿灯侦测器。"
-
-#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
-msgid "Stop Line Position Adjust"
-msgstr "停止线位置微调"
-
-#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
-msgid "Fine-tune where the virtual stop-line obstacle is placed. Positive values move it further away (stop later, closer to the line); negative values pull it closer to the car (stop earlier, further back from the line)."
-msgstr "微调虚拟停止线障碍物的放置位置。正值会将其移动至较远处（较晚煞车、较接近停止线）；负值则会将其拉近至本车（较早煞车、停在较后方）。"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Calibration cancelled"
-msgstr "校准已取消"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Calibration completed"
-msgstr "校准完成"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Calibration failed"
-msgstr "校准失败"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Cancelled"
-msgstr "已取消"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Clear the IMU calibration and switch back to stock calibration."
-msgstr "清除 IMU 校准并恢复使用原厂校准。"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Completed"
-msgstr "已完成"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Drive straight"
-msgstr "直线行驶"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Enable auto-calibration for devices mounted at large or arbitrary angles."
-msgstr "为安装角度较大或任意角度的装置启用自动校准。"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Failed"
-msgstr "失败"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "IMU Calibration"
-msgstr "IMU 校准"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Idle"
-msgstr "空闲"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Keep parked"
-msgstr "保持停车"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Not calibrated"
-msgstr "未校准"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Orientation"
-msgstr "安装方向"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Park on level ground, then drive straight to calibrate the device orientation."
-msgstr "将车辆停放在水平地面上，然后直线行驶以校准装置安装方向。"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Reset"
-msgstr "重设"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Reset IMU Calibration"
-msgstr "重设 IMU 校准"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "Start IMU Calibration"
-msgstr "开始 IMU 校准"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Status"
-msgstr "状态"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "reset imu calibration"
-msgstr "重设 imu 校准"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "start imu calibration"
-msgstr "开始 imu 校准"
-
-#: selfdrive\ui\mici\layouts\settings\imu_calibration.py
-msgid "use imu calibration"
-msgstr "使用 imu 校准"
-
-#: selfdrive\ui\layouts\settings\imu_calibration.py
-msgid "Use IMU Calibration"
-msgstr "使用 IMU 校准"
-msgid "Small Model"
-msgstr "小型模型"
-
-msgid "Big Model"
-msgstr "大型模型"
-
-msgid "Model Status"
-msgstr "模型状态"
-
-msgid "Cancel Verification"
-msgstr "取消验证"
-
-msgid "queued"
-msgstr "排队中"
-
-msgid "small"
-msgstr "小型"
-
-msgid "big"
-msgstr "大型"
-
-msgid "Big model unavailable, {} is driving until the next drive."
-msgstr "大型模型不可用，直到下次驾驶前将由 {} 进行驾驶。"
-
-msgid "Big model unavailable until the next drive."
-msgstr "大型模型在下次驾驶前不可用。"
-
-msgid "{} drives until the big model is ready."
-msgstr "将由 {} 接管驾驶，直到大型模型准备就绪。"
-
-msgid "Getting the big model ready."
-msgstr "正在准备大型模型。"
-
-msgid "{} will drive. If it fails during a drive, {} takes over until the next drive."
-msgstr "将由 {} 进行驾驶。若在行驶中失效，将由 {} 接管直到下次驾驶。"
-
-msgid "{} will drive when the eGPU is ready."
-msgstr "当 eGPU 准备就绪时，将由 {} 进行驾驶。"
-
-msgid "verifying"
-msgstr "验证中"
-
-msgid "No models are available for this hardware yet. Connect to the internet and refresh the model list."
-msgstr "此硬体目前没有可用的模型。请连接网路并刷新模型列表。"
