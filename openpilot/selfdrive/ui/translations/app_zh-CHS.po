@@ -2699,6 +2699,38 @@ msgid "Signal lost · holding stop"
 msgstr "信号暂时中断 · 继续停车保持"
 
 #: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal lost · smooth transition"
+msgstr "信号暂时中断 · 正在平滑切换"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Stop control · smooth transition"
+msgstr "停车控制 · 正在平滑切换"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Red · stop control applied"
+msgstr "红灯 · 已执行停车控制"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal changing · stop applied"
+msgstr "灯色变化 · 已执行停车控制"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · auto start applied"
+msgstr "绿灯 · 已执行自动起步"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · stop control released"
+msgstr "绿灯 · 已解除停车控制"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Stop control · transition applied"
+msgstr "停车控制 · 已平滑切换"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · continuing applied"
+msgstr "绿灯 · 已执行继续放行"
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
 msgid "Signal expired · control idle"
 msgstr "信号过期 · 不新增控制"
 

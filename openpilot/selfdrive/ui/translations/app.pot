@@ -2696,6 +2696,38 @@ msgid "Signal lost · holding stop"
 msgstr ""
 
 #: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal lost · smooth transition"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Stop control · smooth transition"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Red · stop control applied"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Signal changing · stop applied"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · auto start applied"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · stop control released"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Stop control · transition applied"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
+msgid "Green · continuing applied"
+msgstr ""
+
+#: openpilot/selfdrive/ui/sunnypilot/onroad/traffic_control.py
 msgid "Signal expired · control idle"
 msgstr ""
 
