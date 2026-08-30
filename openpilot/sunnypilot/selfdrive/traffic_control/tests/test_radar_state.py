@@ -80,6 +80,52 @@ def test_confirmed_red_is_published_as_a_separate_radar_like_target():
   assert not sm["radarState"].leadTwo.present
 
 
+def test_persistent_off_release_publishes_a_known_transition_reason():
+  sm = red_light_sm()
+  sm["carState"].vEgo = 5.0
+  source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+
+  for now_ns, distance in ((100_000_000, 50.0), (600_000_000, 47.5)):
+    sm["carStateSP"].teslaTrafficControl.distance = distance
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    source.update(sm, now_ns)
+
+  sm["carStateSP"].teslaTrafficControl.lightState = 0
+  target = None
+  for now_ns, distance in ((1_100_000_000, 45.0), (1_600_000_000, 42.5),
+                           (2_100_000_000, 40.0), (2_600_000_000, 37.5),
+                           (3_100_000_000, 35.0)):
+    sm["carStateSP"].teslaTrafficControl.distance = distance
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    target = source.update(sm, now_ns).trafficRadarState
+
+  assert target.phase == 6
+  assert target.eventTransitionReason == 18
+
+
+def test_long_dropout_reconfirmation_publishes_a_new_session_reason():
+  sm = red_light_sm()
+  sm["carState"].vEgo = 5.0
+  source = TrafficRadarSource(TrafficControlConfig(mode=TrafficControlMode.stopGo))
+
+  for now_ns, distance in ((100_000_000, 50.0), (600_000_000, 47.5)):
+    sm["carStateSP"].teslaTrafficControl.distance = distance
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    target = source.update(sm, now_ns).trafficRadarState
+  session_id = target.stopSessionId
+
+  sm["carStateSP"].teslaTrafficControl.distance = 45.0
+  sm["carStateSP"].teslaTrafficControl.frameMonoTime = 3_100_000_000
+  first = source.update(sm, 3_100_000_000).trafficRadarState
+  sm["carStateSP"].teslaTrafficControl.distance = 42.5
+  sm["carStateSP"].teslaTrafficControl.frameMonoTime = 3_600_000_000
+  second = source.update(sm, 3_600_000_000).trafficRadarState
+
+  assert first.stopSessionId == session_id
+  assert second.stopSessionId == session_id + 1
+  assert second.eventTransitionReason == 19
+
+
 def test_red_and_green_control_do_not_depend_on_radar_health():
   sm = red_light_sm()
   for health in (sm.seen, sm.alive, sm.valid):

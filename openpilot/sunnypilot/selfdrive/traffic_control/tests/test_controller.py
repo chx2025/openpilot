@@ -105,21 +105,62 @@ def test_near_urgent_red_still_confirms_in_two_frames():
   assert c.event_id == 1
 
 
-def test_far_low_urgency_replacement_requires_half_second_continuous_evidence():
+def test_nearer_low_urgency_replacement_requires_half_second_continuous_evidence():
   c = controller()
-  establish_red(c, distance=35.0, speed=5.0)
+  establish_red(c, distance=190.0, speed=5.0)
   original_event = c.event_id
   original_session = c.stop_session_id
 
-  update(c, 2.0, observation(190.0, 1, 2.0), v_ego=10.0)
-  update(c, 2.1, observation(189.0, 1, 2.1), v_ego=10.0)
+  update(c, 2.0, observation(100.0, 1, 2.0), v_ego=5.0)
+  update(c, 2.1, observation(99.5, 1, 2.1), v_ego=5.0)
   assert c.event_id == original_event
   assert c.stop_session_id == original_session
 
-  confirmed = update(c, 2.5, observation(185.0, 1, 2.5), v_ego=10.0)
+  confirmed = update(c, 2.5, observation(97.5, 1, 2.5), v_ego=5.0)
   assert c.event_id == original_event + 1
   assert c.stop_session_id == original_session + 1
   assert confirmed.phase in c.ACTIVE_PHASES
+
+
+def test_farther_active_replacement_requires_one_second_of_continuous_evidence():
+  c = controller()
+  establish_red(c, distance=35.0, speed=5.0)
+  original_session = c.stop_session_id
+
+  first = update(c, 2.0, observation(70.0, 1, 2.0), v_ego=5.0)
+  second = update(c, 2.5, observation(67.5, 1, 2.5), v_ego=5.0)
+
+  assert first.stop_session_id == original_session
+  assert second.stop_session_id == original_session
+
+  confirmed = update(c, 3.0, observation(65.0, 1, 3.0), v_ego=5.0)
+  assert confirmed.stop_session_id == original_session + 1
+  assert math.isclose(confirmed.remaining_distance, 60.0, abs_tol=0.1)
+
+
+def test_nearer_active_replacement_still_confirms_in_two_frames():
+  c = controller()
+  establish_red(c, distance=100.0, speed=10.0)
+  original_session = c.stop_session_id
+
+  first = update(c, 2.0, observation(35.0, 1, 2.0), v_ego=10.0)
+  confirmed = update(c, 2.5, observation(30.0, 1, 2.5), v_ego=10.0)
+
+  assert first.stop_session_id == original_session
+  assert confirmed.stop_session_id == original_session + 1
+  assert math.isclose(confirmed.remaining_distance, 25.0, abs_tol=0.1)
+
+
+def test_transient_27_to_63_to_25_tracks_do_not_churn_stop_sessions():
+  c = controller()
+  establish_red(c, distance=27.0, speed=5.0)
+  original_session = c.stop_session_id
+
+  for now_s, distance in ((2.0, 63.0), (2.5, 60.5), (3.0, 25.0), (3.5, 22.5)):
+    decision = update(c, now_s, observation(distance, 1, now_s), v_ego=5.0)
+    assert decision.stop_session_id == original_session
+
+  assert c.transition_reason == "stop_confirmed"
 
 
 def test_new_stop_session_discards_stale_green_tracking_geometry():
@@ -196,6 +237,193 @@ def test_committed_stop_survives_transport_dropout():
   assert decision.apply_constraint
 
 
+def test_short_off_evidence_loss_freezes_active_stop_geometry():
+  c = controller()
+  establish_red(c, distance=50.0, speed=5.0)
+  session_id = c.stop_session_id
+  stop_station = c.stop_station
+  can_remaining = c.can_remaining
+
+  off = update(c, 2.0, observation(50.0, 0, 2.0), v_ego=5.0)
+
+  assert off.phase in c.ACTIVE_PHASES
+  assert off.stop_session_id == session_id
+  assert c.stop_station == stop_station
+  assert off.can_remaining == can_remaining
+  assert off.remaining_distance < can_remaining
+
+
+def test_persistent_off_evidence_loss_smoothly_releases_a_moving_stop():
+  c = controller()
+  establish_red(c, distance=50.0, speed=5.0)
+  session_id = c.stop_session_id
+
+  for now_s, distance in ((2.0, 45.0), (2.5, 42.5), (3.0, 40.0), (3.5, 37.5)):
+    still_stopping = update(c, now_s, observation(distance, 0, now_s), v_ego=5.0)
+    assert still_stopping.phase in c.ACTIVE_PHASES
+
+  released = update(c, 4.0, observation(35.0, 0, 4.0), v_ego=5.0)
+  assert released.phase == TrafficControlPhase.release
+  assert released.stop_session_id == session_id
+  assert c.transition_reason == "signal_lost_release"
+
+
+def test_persistent_out_of_range_evidence_smoothly_releases_a_moving_stop():
+  c = controller()
+  establish_red(c, distance=50.0, speed=5.0)
+
+  for now_s, distance in ((2.0, 230.0), (2.5, 227.5), (3.0, 225.0), (3.5, 222.5)):
+    still_stopping = update(c, now_s, observation(distance, 1, now_s), v_ego=5.0)
+    assert still_stopping.phase in c.ACTIVE_PHASES
+
+  released = update(c, 4.0, observation(220.0, 1, 4.0), v_ego=5.0)
+  assert released.phase == TrafficControlPhase.release
+  assert c.transition_reason == "signal_lost_release"
+
+
+def test_persistent_unsupported_color_evidence_smoothly_releases_a_moving_stop():
+  c = controller()
+  establish_red(c, distance=50.0, speed=5.0)
+  stop_station = c.stop_station
+
+  for now_s in (2.0, 2.5, 3.0, 3.5):
+    still_stopping = update(c, now_s, observation(45.0, 4, now_s), v_ego=5.0)
+    assert still_stopping.phase in c.ACTIVE_PHASES
+    assert c.stop_station == stop_station
+
+  released = update(c, 4.0, observation(45.0, 4, 4.0), v_ego=5.0)
+  assert released.phase == TrafficControlPhase.release
+  assert c.transition_reason == "signal_lost_release"
+
+
+def test_signal_loss_release_expires_while_off_frames_continue():
+  c = controller(release_s=3.0)
+  establish_red(c, distance=50.0, speed=5.0)
+
+  for now_s, distance in ((2.0, 45.0), (2.5, 42.5), (3.0, 40.0),
+                          (3.5, 37.5), (4.0, 35.0)):
+    released = update(c, now_s, observation(distance, 0, now_s), v_ego=5.0)
+  assert released.phase == TrafficControlPhase.release
+
+  for now_s, distance in ((4.5, 32.5), (5.0, 30.0), (5.5, 27.5),
+                          (6.0, 25.0), (6.5, 22.5)):
+    still_releasing = update(c, now_s, observation(distance, 0, now_s), v_ego=5.0)
+  still_releasing = update(c, 6.9, observation(20.5, 0, 6.9), v_ego=5.0)
+  expired = update(c, 7.0, observation(20.0, 0, 7.0), v_ego=5.0)
+
+  assert still_releasing.phase == TrafficControlPhase.release
+  assert expired.phase == TrafficControlPhase.off
+  assert expired.stop_session_id == 0
+
+
+def test_off_evidence_loss_timer_restarts_after_red_recovers():
+  c = controller()
+  establish_red(c, distance=50.0, speed=5.0)
+  session_id = c.stop_session_id
+
+  update(c, 2.0, observation(45.0, 0, 2.0), v_ego=5.0)
+  recovered = update(c, 2.5, observation(42.5, 1, 2.5), v_ego=5.0)
+  assert recovered.stop_session_id == session_id
+
+  update(c, 3.0, observation(40.0, 0, 3.0), v_ego=5.0)
+  still_stopping = update(c, 4.5, observation(32.5, 0, 4.5), v_ego=5.0)
+  assert still_stopping.phase in c.ACTIVE_PHASES
+
+  released = update(c, 5.0, observation(30.0, 0, 5.0), v_ego=5.0)
+  assert released.phase == TrafficControlPhase.release
+
+
+def test_red_after_signal_loss_release_requires_two_fresh_frames_to_rearm():
+  c = controller()
+  establish_red(c, distance=50.0, speed=5.0)
+  session_id = c.stop_session_id
+
+  for now_s, distance in ((2.0, 45.0), (2.5, 42.5), (3.0, 40.0),
+                          (3.5, 37.5), (4.0, 35.0)):
+    released = update(c, now_s, observation(distance, 0, now_s), v_ego=5.0)
+  assert released.phase == TrafficControlPhase.release
+
+  first_red = update(c, 4.5, observation(32.5, 1, 4.5), v_ego=5.0)
+  assert first_red.phase == TrafficControlPhase.release
+  assert first_red.stop_session_id == session_id
+
+  second_red = update(c, 5.0, observation(30.0, 1, 5.0), v_ego=5.0)
+  assert second_red.phase in c.ACTIVE_PHASES
+  assert second_red.stop_session_id == session_id + 1
+
+
+def test_persistent_off_does_not_release_a_stationary_hold():
+  c = controller()
+  establish_red(c, distance=5.0, speed=0.0)
+  held = update(c, 2.0, observation(5.0, 1, 2.0), v_ego=0.0)
+  assert held.phase == TrafficControlPhase.hold
+  session_id = c.stop_session_id
+
+  for now_s in (2.5, 3.0, 3.5, 4.0, 4.5, 5.0):
+    held = update(c, now_s, observation(5.0, 0, now_s), v_ego=0.0)
+
+  assert held.phase == TrafficControlPhase.hold
+  assert held.should_stop
+  assert held.stop_session_id == session_id
+
+
+def test_vehicle_reaching_frozen_stop_station_enters_hold_during_off_gap():
+  c = controller()
+  establish_red(c, distance=18.0, speed=6.0)
+  session_id = c.stop_session_id
+  assert c.can_remaining == 10.0
+
+  decision = None
+  for now_s, speed in ((2.0, 6.0), (2.5, 6.0), (3.0, 6.0),
+                       (3.5, 2.0), (4.0, 0.0)):
+    decision = update(c, now_s, observation(15.0, 0, now_s), v_ego=speed)
+
+  assert decision is not None
+  assert decision.phase == TrafficControlPhase.hold
+  assert decision.should_stop
+  assert decision.stop_session_id == session_id
+  assert decision.remaining_distance == 0.0
+  assert decision.can_remaining == 10.0
+
+
+def test_vehicle_reaching_frozen_stop_station_enters_hold_during_transport_gap():
+  c = controller()
+  establish_red(c, distance=18.0, speed=6.0)
+  session_id = c.stop_session_id
+  assert c.can_remaining == 10.0
+
+  decision = None
+  for now_s, speed in ((2.0, 6.0), (2.5, 6.0), (3.0, 6.0),
+                       (3.5, 2.0), (4.0, 0.0)):
+    decision = update(
+      c, now_s, observation(15.0, 1, now_s, available=False), v_ego=speed,
+    )
+
+  assert decision is not None
+  assert decision.phase == TrafficControlPhase.hold
+  assert decision.should_stop
+  assert decision.stop_session_id == session_id
+  assert decision.remaining_distance == 0.0
+  assert decision.can_remaining == 10.0
+
+
+def test_persistent_off_does_not_release_a_confirmed_flashing_stop():
+  c = controller()
+  for now_s, distance, light in ((1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 0),
+                                 (2.7, 66.4, 2), (3.2, 62.4, 0)):
+    decision = update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
+  assert decision.phase == TrafficControlPhase.flashingGreenStop
+  session_id = c.stop_session_id
+
+  for now_s, distance in ((3.7, 58.4), (4.2, 54.4), (4.7, 50.4),
+                          (5.2, 46.4), (5.7, 42.4)):
+    decision = update(c, now_s, observation(distance, 0, now_s), v_ego=8.0)
+
+  assert decision.phase == TrafficControlPhase.flashingGreenStop
+  assert decision.stop_session_id == session_id
+
+
 def test_stop_safety_permission_is_independent_from_raw_freshness():
   c = controller()
   establish_red(c)
@@ -212,9 +440,11 @@ def test_stop_safety_permission_is_independent_from_raw_freshness():
 def test_long_raw_dropout_requires_two_fresh_stop_frames_before_rearming():
   c = controller()
   establish_red(c, distance=60.0, speed=5.0)
+  session_id = c.stop_session_id
 
   update(c, 2.0, observation(55.0, 1, 1.5, available=False), v_ego=5.0)
   first = update(c, 4.1, observation(44.5, 1, 4.1), v_ego=5.0)
+  assert first.stop_session_id == session_id
   assert not first.stop_safety_allowed
   assert not first.stop_control_allowed
 
@@ -223,8 +453,40 @@ def test_long_raw_dropout_requires_two_fresh_stop_frames_before_rearming():
   assert not duplicate.stop_control_allowed
 
   second = update(c, 4.6, observation(42.0, 1, 4.6), v_ego=5.0)
+  assert second.stop_session_id == session_id + 1
   assert second.stop_safety_allowed
   assert second.stop_control_allowed
+
+
+def test_long_dropout_clears_stationary_green_confirmation_count():
+  c = controller()
+  establish_red(c, distance=5.0, speed=0.0)
+
+  first_green = update(c, 2.0, observation(5.0, 2, 2.0), v_ego=0.0)
+  assert first_green.phase in c.ACTIVE_PHASES
+  update(c, 4.3, observation(5.0, 2, 2.0, available=False), v_ego=0.0)
+
+  recovered_first = update(c, 4.5, observation(5.0, 2, 4.5), v_ego=0.0)
+  recovered_second = update(c, 5.0, observation(5.0, 2, 5.0), v_ego=0.0)
+
+  assert recovered_first.phase in c.ACTIVE_PHASES
+  assert recovered_second.phase == TrafficControlPhase.release
+
+
+def test_farther_replacement_confirmation_cannot_span_a_long_transport_gap():
+  c = controller()
+  establish_red(c, distance=35.0, speed=5.0)
+  session_id = c.stop_session_id
+
+  update(c, 2.0, observation(70.0, 1, 2.0), v_ego=5.0)
+  update(c, 2.2, observation(70.0, 1, 2.0, available=False), v_ego=5.0)
+  recovered_first = update(c, 4.5, observation(57.5, 1, 4.5), v_ego=5.0)
+  recovered_second = update(c, 5.0, observation(55.0, 1, 5.0), v_ego=5.0)
+  recovered_third = update(c, 5.5, observation(52.5, 1, 5.5), v_ego=5.0)
+
+  assert recovered_first.stop_session_id == session_id
+  assert recovered_second.stop_session_id == session_id
+  assert recovered_third.stop_session_id == session_id + 1
 
 
 def test_critical_dropout_age_starts_at_the_last_real_can_frame():
