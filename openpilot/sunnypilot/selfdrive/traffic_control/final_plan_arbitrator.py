@@ -11,7 +11,11 @@ from openpilot.cereal import log
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot.selfdrive.traffic_control import TRAFFIC_SIGNAL_CONTROL_PARAM
-from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlMode, TrafficControlPhase
+from openpilot.sunnypilot.selfdrive.traffic_control.controller import (
+  STOP_EVIDENCE_LOSS_GRACE_S,
+  TrafficControlMode,
+  TrafficControlPhase,
+)
 from openpilot.sunnypilot.selfdrive.traffic_control.stop_profile import StopProfileGenerator
 
 
@@ -618,7 +622,7 @@ class FinalPlanArbitrator:
     self._hold_latched_should_stop = False
 
     v_ego = float(sm["carState"].vEgo)
-    if v_ego > START_MAX_SPEED:
+    if v_ego >= START_MAX_SPEED:
       self._finish_start(session_id)
       return False
     if self._active_start_session_id == 0:
@@ -626,7 +630,7 @@ class FinalPlanArbitrator:
       self._start_started_ns = now_ns
     elif self._active_start_session_id != session_id:
       return False
-    if now_ns - self._start_started_ns > START_MAX_DURATION_NS:
+    if now_ns - self._start_started_ns >= START_MAX_DURATION_NS:
       self._finish_start(session_id)
       return False
     base_a_target = float(plan.aTarget)
@@ -840,7 +844,7 @@ class FinalPlanArbitrator:
     stale_armed_grace = bool(
       trackable_stop and int(traffic.stopSessionId) == self._armed_stop_session_id
       and traffic.stopSafetyAllowed and not traffic.rawObservationFresh
-      and 0.0 <= float(traffic.observationAgeMs) <= 2000.0
+      and 0.0 <= float(traffic.observationAgeMs) <= STOP_EVIDENCE_LOSS_GRACE_S * 1000.0
       and float(traffic.rawDistance) < 255.0
     )
     active_stop = bool(
@@ -860,11 +864,17 @@ class FinalPlanArbitrator:
       self._was_stopping = False
       self._profile.reset()
     elif traffic is not None and bool(traffic.plannerStartRequested) and int(traffic.lightState) == 2:
-      if float(sm["carState"].vEgo) > MOVING_GREEN_SPEED:
+      start_session_id = int(traffic.stopSessionId)
+      continuing_start = bool(
+        start_session_id > 0 and self._active_start_session_id == start_session_id
+      )
+      # The moving threshold separates a newly observed rolling green from a
+      # standstill GO; an active same-session GO retains its 2.5 m/s / 3 s bounds.
+      if float(sm["carState"].vEgo) > MOVING_GREEN_SPEED and not continuing_start:
         self.diagnostics.start_requested = True
-        if self._go_lead_blocked(plan, sm, int(traffic.stopSessionId), now_ns):
+        if self._go_lead_blocked(plan, sm, start_session_id, now_ns):
           self.diagnostics.start_block_reason = TrafficStartBlockReason.physicalLead
-        self._finish_start(int(traffic.stopSessionId))
+        self._finish_start(start_session_id)
         self._hold_latched = False
         self._hold_latched_should_stop = False
         self._was_stopping = False
