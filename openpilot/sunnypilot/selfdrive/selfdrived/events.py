@@ -14,6 +14,7 @@ from openpilot.sunnypilot.selfdrive.selfdrived.events_base import EventsBase, Pr
   NoEntryAlert, ImmediateDisableAlert, EngagementAlert, NormalPermanentAlert, AlertCallbackType, wrong_car_mode_alert
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import resolve_pcm_long_required_max
 from openpilot.common.hardware import HARDWARE
+from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_profile
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
@@ -75,6 +76,18 @@ def speed_limit_pre_active_alert(CP: car.CarParams, CS: car.CarState, sm: messag
     "",
     AlertStatus.normal, alert_size,
     Priority.LOW, VisualAlert.none, AudibleAlertSP.promptSingleLow, .1)
+
+
+def big_model_ready_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster,
+                          metric: bool, soft_disable_time: int, personality) -> Alert:
+  # C3XL has no amplifier. Route this edge notification through its existing
+  # GPIO buzzer while leaving the official audible prompt unchanged elsewhere.
+  audible_alert = AudibleAlert.promptRepeat if get_hardware_profile() == HardwareProfile.C3XL else AudibleAlert.prompt
+  return Alert(
+    "Big Model Ready",
+    "",
+    AlertStatus.normal, AlertSize.small,
+    Priority.LOW, VisualAlert.none, audible_alert, 2.)
 
 
 class EventsSP(EventsBase):
@@ -255,5 +268,9 @@ EVENTS_SP: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "",
       AlertStatus.userPrompt, AlertSize.small,
       Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 0.1),
+  },
+
+  EventNameSP.bigModelReady: {
+    ET.PERMANENT: big_model_ready_alert,
   },
 }

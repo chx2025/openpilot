@@ -10,6 +10,7 @@ _ZH_CHS_EXACT = {
   "Be ready to take over at any time": "请随时准备接管",
   "Big Model Failed ": "大模型运行失败",
   "Big Model Loading": "大模型正在加载",
+  "Big Model Ready": "大模型已就绪",
   "Brake Hold Active": "正在使用刹车保持",
   "CAN Bus Disconnected: Check Connections": "CAN Bus Disconnected: 请检查连接",
   "CAN Bus Disconnected: Likely Faulty Cable": "CAN Bus Disconnected: 请检查连接",
