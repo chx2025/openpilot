@@ -19,6 +19,7 @@ from openpilot.cereal import messaging, custom
 from openpilot.sunnypilot.models.fetcher import ModelFetcher
 from openpilot.sunnypilot.models.helpers import (ACTIVE_BUNDLE_KEYS, get_active_bundle, get_selected_bundle,
                                                   resolve_bundle_by_ref, validate_active_bundles, verify_file)
+from openpilot.sunnypilot.models.model_name import DEFAULT_MODEL_REF
 
 # (connect, read) seconds. read is per-request inactivity, not a total cap
 DOWNLOAD_TIMEOUT = (30, 30)
@@ -26,6 +27,12 @@ DOWNLOAD_TIMEOUT = (30, 30)
 
 class DownloadCancelled(Exception):
   pass
+
+
+def ensure_default_qcom_fallback(params) -> None:
+  if (get_selected_bundle(params, "chestnut") is not None and get_selected_bundle(params, "qcom") is None and
+      params.get("ModelManager_DownloadRef") is None and DEFAULT_MODEL_REF):
+    params.put("ModelManager_DownloadRef", DEFAULT_MODEL_REF)
 
 
 class ModelManagerSP:
@@ -335,6 +342,7 @@ class ModelManagerSP:
         validate_active_bundles(self.params, self.source_models)
         self.active_bundle = get_active_bundle(self.params, chestnut=self.chestnut_present)
 
+        ensure_default_qcom_fallback(self.params)
         self._process_download_requests()
 
         if self.params.get("ModelManager_ClearCache"):

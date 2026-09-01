@@ -33,5 +33,15 @@
   "2d6cc4c065c4d1833dc267fff60ebae48b444817": {
     "reason": "semantically ported model selector upgrades, verification state, resumable downloads, and UI while preserving explicit user-selected QCOM/USBGPU routing",
     "local_commits": ["5faa388d99"]
+  },
+  "de197ba6fab5b99f8d322139ca156d111f8cfec1": {
+    "reason": "semantically ported the big-model-ready edge while preserving the C3XL GPIO buzzer output",
+    "local_commits": ["08c14a36e2"]
+  },
+  "98ed8111f6bb5136aa1c7f0cf3078f3ac3a43210": {
+    "reason": "semantically ported big-to-small model fallback while preserving C3XL load timeout, progress, cache, and single warmup seams"
+  },
+  "51987a62d07c44cc9e14b4d85dcb445edecd17d3": {
+    "reason": "synchronized model build runner routing by target hardware"
   }
 }

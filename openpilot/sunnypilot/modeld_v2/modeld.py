@@ -73,6 +73,50 @@ def _find_driving_pkl(bundle):
   pkl_path = os.path.join(model_root, pkl_name)
   if _pkl_exists(pkl_path):
     return pkl_path
+  return None
+
+
+def load_models_with_fallback(*, chestnut, load_big, load_small, params, update_loading_progress):
+  model = None
+  small_model = None
+  if chestnut:
+    try:
+      model = load_with_timeout(load_big, BIG_MODEL_TIMEOUT)
+    except Exception:
+      cloudlog.exception("chestnut load failed")
+      params.put_bool("ChestnutActive", False)
+      update_loading_progress(0)
+    else:
+      params.put_bool("ChestnutActive", True)
+      update_loading_progress(100)
+
+  params.put_bool("ChestnutLoading", False)
+  if model is None or chestnut:
+    small_model = load_small()
+  if model is None:
+    model = small_model
+  assert model is not None
+  return model, small_model
+
+
+def run_model_with_fallback(model, small_model, params, chestnut_state, bufs, transforms, inputs, prepare_only):
+  try:
+    return model, model.run(bufs, transforms, inputs, prepare_only), False
+  except Exception:
+    if not params.get_bool("ChestnutActive"):
+      raise
+    cloudlog.exception("chestnut failed, falling back to small")
+    params.put_bool("ChestnutActive", False)
+    assert small_model is not None
+    if chestnut_state is not None:
+      chestnut_state.big = False
+    return small_model, None, True
+
+
+def validate_model_outputs(*, chestnut, outputs):
+  if chestnut and not np.all(np.isfinite(outputs.get("plan", np.array([0.])))):
+    raise RuntimeError("model output not finite")
+  return outputs
 
 
 class FrameMeta:
@@ -305,11 +349,7 @@ class ModelState(ModelStateBase):
       buf[0, :-1] = buf[0, 1:]
       buf[0, -1, :] = outputs['desired_curvature'][0, :] if not self.mlsim else 0
 
-    if self.chestnut and not np.all(np.isfinite(outputs.get('plan', np.array([0.])))):
-      cloudlog.error("model output not finite, dropping frame")
-      return None
-
-    return outputs
+    return validate_model_outputs(chestnut=self.chestnut, outputs=outputs)
 
   def get_action_from_model(self, model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
                             lat_action_t: float, long_action_t: float, v_ego: float) -> log.ModelDataV2.Action:
@@ -388,25 +428,14 @@ def main(demo=False):
   cloudlog.warning("loading model")
   st = time.monotonic()
 
-  model = None
-  if CHESTNUT:
-    try:
-      model = load_with_timeout(
-        lambda: ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=True,
-                           loading_progress_callback=update_loading_progress),
-        BIG_MODEL_TIMEOUT,
-      )
-    except Exception:
-      params.put_bool("ChestnutActive", False)
-      params.put_bool("ChestnutLoading", False)
-      params.put("ChestnutLoadingProgress", 0, block=True)
-      raise
-    params.put_bool("ChestnutActive", True)
-    update_loading_progress(100)
-  else:
-    model = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=False)
-
-  params.put_bool("ChestnutLoading", False)
+  model, small_model = load_models_with_fallback(
+    chestnut=CHESTNUT,
+    load_big=lambda: ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=True,
+                                loading_progress_callback=update_loading_progress),
+    load_small=lambda: ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=False),
+    params=params,
+    update_loading_progress=update_loading_progress,
+  )
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
   # messaging
@@ -415,7 +444,7 @@ def main(demo=False):
   sm = SubMaster(["deviceState", "carState", "narrowRoadCameraState", "extrinsicsCalibration", "driverMonitoringState", "carControl", "lateralDelay"])
 
   publish_state = PublishState()
-  chestnut_state = ChestnutState(pm, CHESTNUT) if CHESTNUT else None
+  chestnut_state = ChestnutState(pm, model.chestnut) if CHESTNUT else None
 
   # setup filter to track dropped frames
   frame_dropped_filter = FirstOrderFilter(0., 10., 1. / model.constants.MODEL_FREQ)
@@ -540,7 +569,12 @@ def main(demo=False):
       inputs['action_t'] = np.array([lat_action_t, long_action_t], dtype=np.float32)
 
     mt1 = time.perf_counter()
-    model_output = model.run(bufs, transforms, inputs, prepare_only)
+    model, model_output, fell_back = run_model_with_fallback(
+      model, small_model, params, chestnut_state, bufs, transforms, inputs, prepare_only,
+    )
+    if fell_back:
+      run_count = 0
+      long_delay = CP.longitudinalActuatorDelay + model.LONG_SMOOTH_SECONDS
     mt2 = time.perf_counter()
     model_execution_time = mt2 - mt1
 
