@@ -84,13 +84,13 @@ def load_models_with_fallback(*, chestnut, load_big, load_small, params, update_
       model = load_with_timeout(load_big, BIG_MODEL_TIMEOUT)
     except Exception:
       cloudlog.exception("chestnut load failed")
-      params.put_bool("ChestnutActive", False)
+      params.put_bool("ChestnutActive", False, block=True)
       update_loading_progress(0)
     else:
-      params.put_bool("ChestnutActive", True)
+      params.put_bool("ChestnutActive", True, block=True)
       update_loading_progress(100)
 
-  params.put_bool("ChestnutLoading", False)
+  params.put_bool("ChestnutLoading", False, block=True)
   if model is None or chestnut:
     small_model = load_small()
   if model is None:
@@ -106,7 +106,7 @@ def run_model_with_fallback(model, small_model, params, chestnut_state, bufs, tr
     if not params.get_bool("ChestnutActive"):
       raise
     cloudlog.exception("chestnut failed, falling back to small")
-    params.put_bool("ChestnutActive", False)
+    params.put_bool("ChestnutActive", False, block=True)
     assert small_model is not None
     if chestnut_state is not None:
       chestnut_state.big = False

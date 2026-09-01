@@ -8,9 +8,12 @@ from openpilot.sunnypilot.models import manager as manager_module
 class FakeParams:
   def __init__(self):
     self.values = {}
+    self.blocking_bool_writes = []
 
   def put_bool(self, key, value, block=False):
     self.values[key] = bool(value)
+    if block:
+      self.blocking_bool_writes.append((key, bool(value)))
 
   def put(self, key, value, block=False):
     self.values[key] = value
@@ -92,6 +95,7 @@ def test_runtime_big_model_failure_switches_to_preloaded_small():
   assert fell_back
   assert params.values["ChestnutActive"] is False
   assert chestnut_state.big is False
+  assert ("ChestnutActive", False) in params.blocking_bool_writes
 
 
 def test_non_finite_big_model_plan_becomes_fallback_error():
