@@ -1,7 +1,7 @@
 from typing import cast
 
 from openpilot.common.params import Params
-from openpilot.sunnypilot.models.helpers import get_active_bundle
+from openpilot.sunnypilot.models.helpers import REQUIRED_JSON_VERSION, get_active_bundle
 
 
 class FakeParams:
@@ -28,11 +28,11 @@ def test_connected_chestnut_selects_big_slot_and_disconnected_selects_qcom():
   params = FakeParams({
     "ModelManager_ActiveBundle": {
       "internalName": "QCOM",
-      "minimumSelectorVersion": 18,
+      "minimumSelectorVersion": REQUIRED_JSON_VERSION,
     },
     "ModelManager_ActiveBundleChestnut": {
       "internalName": "LM",
-      "minimumSelectorVersion": 18,
+      "minimumSelectorVersion": REQUIRED_JSON_VERSION,
     },
   })
 

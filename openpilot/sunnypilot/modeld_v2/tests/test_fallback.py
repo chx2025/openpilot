@@ -3,6 +3,7 @@ import pytest
 
 from openpilot.sunnypilot.modeld_v2 import modeld as modeld_module
 from openpilot.sunnypilot.models import manager as manager_module
+from openpilot.sunnypilot.models.helpers import REQUIRED_JSON_VERSION
 
 
 class FakeParams:
@@ -147,7 +148,7 @@ def test_missing_qcom_selection_queues_exact_default_fallback_ref():
   params = FakeParams()
   params.values["ModelManager_ActiveBundleChestnut"] = {
     "internalName": "BMV4",
-    "minimumSelectorVersion": 18,
+    "minimumSelectorVersion": REQUIRED_JSON_VERSION,
   }
 
   manager_module.ensure_default_qcom_fallback(params)
@@ -156,7 +157,7 @@ def test_missing_qcom_selection_queues_exact_default_fallback_ref():
 
 
 @pytest.mark.parametrize("existing", (
-  {"ModelManager_ActiveBundle": {"internalName": "USER", "minimumSelectorVersion": 18}},
+  {"ModelManager_ActiveBundle": {"internalName": "USER", "minimumSelectorVersion": REQUIRED_JSON_VERSION}},
   {"ModelManager_DownloadRef": "user-request"},
 ))
 def test_default_fallback_never_overwrites_user_model_or_download(existing):
@@ -164,7 +165,7 @@ def test_default_fallback_never_overwrites_user_model_or_download(existing):
   params.values.update(existing)
   params.values["ModelManager_ActiveBundleChestnut"] = {
     "internalName": "BMV4",
-    "minimumSelectorVersion": 18,
+    "minimumSelectorVersion": REQUIRED_JSON_VERSION,
   }
 
   manager_module.ensure_default_qcom_fallback(params)

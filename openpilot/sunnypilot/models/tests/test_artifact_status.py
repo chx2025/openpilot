@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from openpilot.sunnypilot.models.artifact_status import bundle_artifacts_ready, chestnut_model_ready
+from openpilot.sunnypilot.models.helpers import REQUIRED_JSON_VERSION
 
 
 @dataclass
@@ -61,7 +62,7 @@ class TestArtifactStatus(unittest.TestCase):
           "runner": "tinygrad",
           "is20hz": True,
           "ref": "lm",
-          "minimumSelectorVersion": 18,
+          "minimumSelectorVersion": REQUIRED_JSON_VERSION,
         },
       })
 
@@ -71,7 +72,7 @@ class TestArtifactStatus(unittest.TestCase):
     params = FakeParams({
       "ModelManager_ActiveBundle": {
         "internalName": "QCOM",
-        "minimumSelectorVersion": 18,
+        "minimumSelectorVersion": REQUIRED_JSON_VERSION,
       },
     })
 

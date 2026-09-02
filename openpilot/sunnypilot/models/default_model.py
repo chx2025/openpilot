@@ -2,6 +2,7 @@ import argparse
 import os
 import hashlib
 import re
+import subprocess
 
 import requests
 
@@ -25,7 +26,9 @@ def get_stock_default_model() -> str:
 
 DEFAULT_MODEL_NAME_PATH = os.path.join(BASEDIR, "openpilot", "sunnypilot", "models", "model_name.py")
 MODEL_HASH_PATH = os.path.join(BASEDIR, "openpilot", "sunnypilot", "models", "tests", "model_hash")
+BIG_MODEL_HASH_PATH = os.path.join(BASEDIR, "openpilot", "sunnypilot", "models", "tests", "big_model_hash")
 SUPERCOMBO_ONNX_PATH = os.path.join(BASEDIR, "openpilot", "selfdrive", "modeld", "models", "driving_supercombo.onnx")
+BIG_SUPERCOMBO_ONNX_PATH = os.path.join(BASEDIR, "openpilot", "selfdrive", "modeld", "models", "big_driving_supercombo.onnx")
 
 
 def update_model_hash():
@@ -36,6 +39,17 @@ def update_model_hash():
     f.write(combined_hash)
 
   print(f"Generated and updated new combined model hash to {MODEL_HASH_PATH}")
+
+  if os.path.exists(BIG_SUPERCOMBO_ONNX_PATH):
+    relative_path = os.path.relpath(BIG_SUPERCOMBO_ONNX_PATH, os.getcwd())
+    pointer = subprocess.check_output(["git", "show", f"HEAD:{relative_path}"], text=True)
+    oid = next(line.split(":", 1)[1] for line in pointer.splitlines() if line.startswith("oid sha256:"))
+    big_combined_hash = hashlib.sha256(oid.encode()).hexdigest()
+
+    with open(BIG_MODEL_HASH_PATH, "w") as f:
+      f.write(big_combined_hash)
+
+    print(f"Generated and updated new big model hash to {BIG_MODEL_HASH_PATH}")
 
 
 def get_ref_for_name(url: str, name: str) -> str:

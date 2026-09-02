@@ -13,13 +13,14 @@ import tempfile
 import threading
 import time
 import unittest
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 import requests
 from urllib3.connectionpool import HTTPConnectionPool
 
 from openpilot.cereal import custom
+from openpilot.common.params import Params
 from openpilot.common.test import OpenpilotTestCase
 from openpilot.common.file_chunker import get_chunk_name, get_manifest_path
 from openpilot.selfdrive.test.helpers import http_server_context
@@ -403,7 +404,7 @@ class TestManagerDownload(ManagerDownloadTestBase):
     def body():
       artifact = self.make_artifact(chunked=True)
       self._bundle.ref = "test-ref"
-      self._bundle.minimumSelectorVersion = 18
+      self._bundle.minimumSelectorVersion = helpers.REQUIRED_JSON_VERSION
       params, store = self._make_params_with_store()
       self.manager.params = params
       asyncio.run(self.manager._download_bundle(self._bundle, self.dest, "qcom"))
@@ -423,7 +424,7 @@ class TestManagerDownload(ManagerDownloadTestBase):
     def body():
       self.make_artifact(chunked=True)
       self._bundle.ref = "big-ref"
-      self._bundle.minimumSelectorVersion = 18
+      self._bundle.minimumSelectorVersion = helpers.REQUIRED_JSON_VERSION
       params, store = self._make_params_with_store()
       self.manager.params = params
       asyncio.run(self.manager._download_bundle(self._bundle, self.dest, "chestnut"))
@@ -486,7 +487,7 @@ def manifest_bundle(short_name: str, ref: str, index: int = 0, is_big: bool = Fa
     "environment": "release",
     "runner": "tinygrad",
     "is_big": is_big,
-    "minimum_selector_version": "18",
+    "minimum_selector_version": str(helpers.REQUIRED_JSON_VERSION),
     "ref": ref,
     "models": [{
       "type": "supercombo",
@@ -672,7 +673,7 @@ class TestActiveBundleValidation(OpenpilotTestCase):
   def _raw_bundle(ref: str, runner: int | None = None) -> dict:
     bundle = custom.ModelManagerSP.ModelBundle.new_message()
     bundle.ref = ref
-    bundle.minimumSelectorVersion = 18
+    bundle.minimumSelectorVersion = helpers.REQUIRED_JSON_VERSION
     if runner is not None:
       bundle.runner = runner
     return bundle.to_dict()
@@ -691,6 +692,35 @@ class TestActiveBundleValidation(OpenpilotTestCase):
     with mock.patch("openpilot.sunnypilot.models.helpers.chestnut_present", return_value=False):
       validate_active_bundles(params, {"qcom": [], "chestnut": []})
     params.remove.assert_not_called()
+
+  def test_previous_selector_bundle_is_upgraded_from_matching_catalog_without_losing_selection(self):
+    current_raw = self._raw_bundle("same", runner=int(custom.ModelManagerSP.Runner.tinygrad))
+    previous_raw = dict(current_raw)
+    previous_raw["minimumSelectorVersion"] = helpers.REQUIRED_JSON_VERSION - 1
+
+    class MutableParams:
+      def __init__(self):
+        self.values = {"ModelManager_ActiveBundle": previous_raw}
+        self.removed = []
+
+      def get(self, key, *args, **kwargs):
+        return self.values.get(key)
+
+      def put(self, key, value, block=False):
+        self.values[key] = value
+
+      def remove(self, key):
+        self.removed.append(key)
+        self.values.pop(key, None)
+
+    params = MutableParams()
+    validate_active_bundles(cast(Params, params), {
+      "qcom": [custom.ModelManagerSP.ModelBundle(**current_raw)],
+      "chestnut": [],
+    })
+
+    assert params.removed == []
+    assert params.values["ModelManager_ActiveBundle"] == current_raw
 
   def test_reset_recomputes_runner_from_surviving_slot(self):
     tinygrad = int(custom.ModelManagerSP.Runner.tinygrad)
@@ -714,7 +744,7 @@ class TestActiveBundleSelection(OpenpilotTestCase):
   def _raw_bundle(ref: str) -> dict:
     bundle = custom.ModelManagerSP.ModelBundle.new_message()
     bundle.ref = ref
-    bundle.minimumSelectorVersion = 18
+    bundle.minimumSelectorVersion = helpers.REQUIRED_JSON_VERSION
     return bundle.to_dict()
 
   def _params(self, qcom=None, chestnut=None):
@@ -761,7 +791,7 @@ class TestEffectiveSource(OpenpilotTestCase):
   def _raw_bundle(ref: str) -> dict:
     bundle = custom.ModelManagerSP.ModelBundle.new_message()
     bundle.ref = ref
-    bundle.minimumSelectorVersion = 18
+    bundle.minimumSelectorVersion = helpers.REQUIRED_JSON_VERSION
     return bundle.to_dict()
 
   def test_runtime_no_gpu(self):

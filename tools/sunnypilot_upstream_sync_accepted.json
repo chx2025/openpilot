@@ -43,5 +43,14 @@
   },
   "51987a62d07c44cc9e14b4d85dcb445edecd17d3": {
     "reason": "synchronized model build runner routing by target hardware"
+  },
+  "ab389498a8808e8ea82808adabe355af7475b749": {
+    "reason": "ported selector 19 and v22/v23 model catalogs with in-place previous-selector migration; tinygrad is integrated separately"
+  },
+  "68be7773955e996f2ee1a443866656191862639d": {
+    "reason": "integrated official tinygrad e837e367 as the model ABI base while preserving the audited USB/UT3G runtime patch"
+  },
+  "47db84ebfb47f82bfe3ebb3d78cb13d4bc9a91a3": {
+    "reason": "ported big-model ONNX LFS hash generation and regression coverage without replacing local default-model selection semantics"
   }
 }

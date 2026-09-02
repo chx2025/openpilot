@@ -19,7 +19,7 @@ from openpilot.common.hardware.hw import Paths
 from openpilot.selfdrive.modeld.helpers import chestnut_present
 
 # SET ME TO THE EXACT JSON VERSION WE SET IN SUNNYPILOT_MODELS REPO
-REQUIRED_JSON_VERSION = 18
+REQUIRED_JSON_VERSION = 19
 
 CUSTOM_MODEL_PATH = Paths.model_root()
 METADATA_PATH = Path(__file__).parent / '../models/supercombo_metadata.pkl'
@@ -121,6 +121,27 @@ def _parse_active_bundle(raw_bundle) -> "custom.ModelManagerSP.ModelBundle | Non
   return None
 
 
+def _upgrade_previous_selector_bundle(
+  raw_bundle: dict,
+  available_bundles: list[custom.ModelManagerSP.ModelBundle] | None,
+) -> "custom.ModelManagerSP.ModelBundle | None":
+  if (not available_bundles or
+      raw_bundle.get("minimumSelectorVersion") != REQUIRED_JSON_VERSION - 1):
+    return None
+  try:
+    previous_bundle = custom.ModelManagerSP.ModelBundle(**raw_bundle)
+  except Exception:
+    return None
+
+  for available_bundle in available_bundles:
+    same_selection = ((previous_bundle.ref and available_bundle.ref and previous_bundle.ref == available_bundle.ref) or
+                      (not previous_bundle.ref and previous_bundle.internalName == available_bundle.internalName))
+    if (same_selection and is_bundle_version_compatible(available_bundle.to_dict()) and
+        _bundle_is_valid_locally(available_bundle)):
+      return available_bundle
+  return None
+
+
 def get_selected_bundle(params: Params | None = None, source: str = "qcom") -> "custom.ModelManagerSP.ModelBundle | None":
   params = params or Params()
   return _parse_active_bundle(params.get(ACTIVE_BUNDLE_KEYS[source]))
@@ -164,6 +185,11 @@ def _validate_active_bundle(params: Params, source: str, available_bundles: list
     return
 
   active_bundle = _parse_active_bundle(raw_bundle)
+  if active_bundle is None and isinstance(raw_bundle, dict):
+    active_bundle = _upgrade_previous_selector_bundle(raw_bundle, available_bundles)
+    if active_bundle is not None:
+      raw_bundle = active_bundle.to_dict()
+      params.put(key, raw_bundle, block=True)
   if active_bundle is None or _bundle_needs_reset(active_bundle, available_bundles):
     cloudlog.warning(f"Active model bundle invalid for {source}; resetting to default")
     params.remove(key)
