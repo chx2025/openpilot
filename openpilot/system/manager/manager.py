@@ -20,7 +20,6 @@ from openpilot.system.athena.registration import register, UNREGISTERED_DONGLE_I
 from openpilot.common.swaglog import cloudlog, add_file_handler
 from openpilot.common.version import get_build_metadata
 from openpilot.common.hardware.hw import Paths
-from openpilot.common.basedir import BASEDIR
 
 from openpilot.sunnypilot.system.params_migration import run_migration
 from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_profile
@@ -30,10 +29,6 @@ def apply_local_recording_policy(params: Params) -> None:
   """C3XL records structured route logs but never continuous road video."""
   if get_hardware_profile() == HardwareProfile.C3XL:
     params.put_bool("RecordRoadVideo", False, block=True)
-
-
-def prebuilt_path(root: str = BASEDIR) -> str:
-  return os.path.join(root, "prebuilt")
 
 
 def manager_init() -> None:
@@ -53,12 +48,6 @@ def manager_init() -> None:
   # device boot mode
   if params.get("DeviceBootMode") == 1:  # start in Always Offroad mode
     params.put_bool("OffroadMode", True, block=True)
-
-  # quick boot
-  if params.get_bool("QuickBootToggle") and not PC:
-    marker = prebuilt_path()
-    if not os.path.exists(marker):
-      open(marker, 'x').close()
 
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True, block=True)

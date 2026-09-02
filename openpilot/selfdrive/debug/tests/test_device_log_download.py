@@ -252,6 +252,22 @@ def test_console_log_status_and_preview_routes(monkeypatch, console_server):
   assert preview["max_system_diagnostic_bytes"] == device_console.MAX_SYSTEM_DIAGNOSTIC_BYTES
 
 
+def test_console_offers_system_diagnostics_when_no_route_exists(monkeypatch, console_server):
+  monkeypatch.setattr(device_console, "available_log_range", lambda: {
+    "available": False, "start_ms": None, "end_ms": None, "segment_count": 0,
+    "local_diagnostic_count": 0,
+  })
+  monkeypatch.setattr(device_console, "console_status", lambda: {"onroad": False})
+
+  base = f"http://127.0.0.1:{console_server.server_port}"
+  with urllib.request.urlopen(base + "/api/logs/status", timeout=2) as response:
+    status = json.loads(response.read())
+
+  assert status["available"] is True
+  assert status["system_diagnostics_available"] is True
+  assert status["start_ms"] < status["end_ms"]
+
+
 def test_console_streams_selected_logs_as_zip(monkeypatch, console_server, tmp_path):
   make_segment(tmp_path, "00000001--123456789a--0", 1_000_000, {
     "qlog.zst": b"qlog-data", "rlog.zst": b"rlog-data", "fcamera.hevc": b"video",
@@ -274,6 +290,25 @@ def test_console_streams_selected_logs_as_zip(monkeypatch, console_server, tmp_p
     assert "system/error.log" in archive.namelist()
     assert not any(name.endswith((".hevc", "/rlog.zst")) for name in archive.namelist())
   assert disposition.startswith('attachment; filename="openpilot-logs-')
+
+
+def test_console_exports_onroad_block_diagnostics_without_route_logs(monkeypatch, console_server, tmp_path):
+  selection = LogSelection(1_000, 2_000, ())
+  monkeypatch.setattr(device_console, "select_log_range", lambda start, end: selection)
+  monkeypatch.setattr(device_console, "collect_system_diagnostics", lambda: (
+    DiagnosticFile("system/onroad-block/onroad-block.jsonl", b'{"event":"onroad_blocked"}\n'),
+  ))
+  monkeypatch.setattr(device_console, "require_offroad", lambda: None)
+
+  url = f"http://127.0.0.1:{console_server.server_port}/api/logs/download?start_ms=1000&end_ms=2000"
+  with urllib.request.urlopen(url, timeout=5) as response:
+    body = response.read()
+
+  archive_path = tmp_path / "onroad-block.zip"
+  archive_path.write_bytes(body)
+  with zipfile.ZipFile(archive_path) as archive:
+    assert archive.read("system/onroad-block/onroad-block.jsonl") == b'{"event":"onroad_blocked"}\n'
+    assert not any(name.endswith((".hevc", "/rlog.zst")) for name in archive.namelist())
 
 
 def test_console_deletes_confirmed_selected_logs(monkeypatch, console_server, tmp_path):

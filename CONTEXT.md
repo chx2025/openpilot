@@ -13,7 +13,7 @@ The orphan `dev` release tree containing compiled artifacts and the `prebuilt` m
 _Avoid_: dev branch, source branch
 
 **Hardware Profile**:
-An explicit description of hardware capabilities and compatibility overrides consumed through a small seam. A profile does not replace the device's reported identity.
+An explicit, device-local description of hardware capabilities and compatibility overrides consumed through a small seam. The persistent value lives at `/data/hardware_profile`; absence means standard upstream hardware. A profile does not replace the device's reported identity.
 _Avoid_: hardware hack, device spoof
 
 **C3XL Profile**:

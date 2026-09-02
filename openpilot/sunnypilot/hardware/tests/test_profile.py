@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from panda import Panda
 
 from openpilot.common.hardware.comma.hardware import HardwareComma
@@ -9,8 +10,26 @@ from openpilot.sunnypilot.hardware.profile import (
 )
 
 
-def test_repository_profile_is_c3xl() -> None:
+def test_repository_without_device_override_defaults_standard() -> None:
+  assert get_hardware_profile() == HardwareProfile.STANDARD
+
+
+def test_device_profile_file_enables_c3xl(tmp_path, monkeypatch) -> None:
+  from openpilot.sunnypilot.hardware import profile
+
+  profile_file = tmp_path / "hardware_profile"
+  profile_file.write_text("c3xl\n")
+  monkeypatch.setattr(profile, "HARDWARE_PROFILE_FILE", profile_file)
+
   assert get_hardware_profile() == HardwareProfile.C3XL
+
+
+def test_native_build_uses_device_local_profile() -> None:
+  sconstruct = (Path(__file__).parents[4] / "SConstruct").read_text()
+
+  assert '"/data/hardware_profile"' in sconstruct
+  assert "SUNNYPILOT_HARDWARE_PROFILE" in sconstruct
+  assert "Dir('#').abspath, 'hardware_profile'" not in sconstruct
 
 
 def test_explicit_standard_profile() -> None:
@@ -44,7 +63,12 @@ def test_c3xl_ignores_automatic_power_down_but_keeps_manual_force() -> None:
   assert power_down_requested(automatic=True, manual=False, profile=HardwareProfile.STANDARD)
 
 
-def test_c3xl_tici_does_not_probe_absent_amplifier(monkeypatch) -> None:
+def test_c3xl_tici_does_not_probe_absent_amplifier(tmp_path, monkeypatch) -> None:
+  from openpilot.sunnypilot.hardware import profile
+
+  profile_file = tmp_path / "hardware_profile"
+  profile_file.write_text("c3xl\n")
+  monkeypatch.setattr(profile, "HARDWARE_PROFILE_FILE", profile_file)
   hardware = HardwareComma()
   monkeypatch.setattr(hardware, "get_device_type", lambda: "tici")
   assert hardware.amplifier is None

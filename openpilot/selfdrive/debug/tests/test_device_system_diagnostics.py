@@ -46,3 +46,22 @@ def test_missing_diagnostic_sources_still_produce_metadata(tmp_path):
   )
 
   assert [entry.archive_name for entry in diagnostics] == ["system/diagnostics.json"]
+
+
+def test_collects_rotating_onroad_block_logs(tmp_path):
+  onroad_root = tmp_path / "onroad-block"
+  onroad_root.mkdir()
+  (onroad_root / "onroad-block.jsonl").write_bytes(b"current\n")
+  (onroad_root / "onroad-block.jsonl.1").write_bytes(b"older\n")
+
+  diagnostics = collect_system_diagnostics(
+    journal_runner=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=b""),
+    launch_log=tmp_path / "missing-launch",
+    crash_log=tmp_path / "missing-crash",
+    onroad_block_root=onroad_root,
+  )
+
+  by_name = {entry.archive_name: entry.data for entry in diagnostics}
+  assert by_name["system/onroad-block/onroad-block.jsonl"] == b"current\n"
+  assert by_name["system/onroad-block/onroad-block.jsonl.1"] == b"older\n"
+  assert sum(len(entry.data) for entry in diagnostics) <= MAX_SYSTEM_DIAGNOSTIC_BYTES

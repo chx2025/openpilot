@@ -8,6 +8,12 @@ import json
 from pathlib import Path
 import subprocess
 from openpilot.common.hardware.hw import Paths
+from openpilot.selfdrive.debug.onroad_block_log import (
+  ONROAD_BLOCK_LOG_BACKUPS,
+  ONROAD_BLOCK_LOG_MAX_BYTES,
+  ONROAD_BLOCK_LOG_NAME,
+  ONROAD_BLOCK_LOG_ROOT,
+)
 
 
 MAX_SYSTEM_DIAGNOSTIC_BYTES = 4 * 1024 * 1024
@@ -42,6 +48,7 @@ def collect_system_diagnostics(
   journal_runner: Callable = subprocess.run,
   launch_log: Path = Path("/tmp/launch_log"),
   crash_log: Path | None = None,
+  onroad_block_root: Path = ONROAD_BLOCK_LOG_ROOT,
 ) -> tuple[DiagnosticFile, ...]:
   """Collect current-boot warnings and local crash files without unbounded reads."""
   crash_log = crash_log or Path(Paths.crash_log_root()) / "error.log"
@@ -73,6 +80,16 @@ def collect_system_diagnostics(
       archive_name = "system/launch_log.txt" if name == "launch_log" else "system/error.log"
       diagnostics.append(DiagnosticFile(archive_name, data))
     source_status[name] = f"bytes={len(data)} path={path}"
+
+  onroad_bytes = 0
+  for index in range(ONROAD_BLOCK_LOG_BACKUPS + 1):
+    name = ONROAD_BLOCK_LOG_NAME if index == 0 else f"{ONROAD_BLOCK_LOG_NAME}.{index}"
+    path = onroad_block_root / name
+    data = _tail_file(path, ONROAD_BLOCK_LOG_MAX_BYTES)
+    if data:
+      diagnostics.append(DiagnosticFile(f"system/onroad-block/{name}", data))
+      onroad_bytes += len(data)
+  source_status["onroad_block"] = f"bytes={onroad_bytes} path={onroad_block_root}"
 
   metadata = json.dumps({
     "generated_at": datetime.now(tz=UTC).isoformat(),

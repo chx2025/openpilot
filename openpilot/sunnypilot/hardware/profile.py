@@ -1,8 +1,12 @@
 from enum import StrEnum
+import os
 from pathlib import Path
 
 
-HARDWARE_PROFILE_FILE = Path(__file__).parents[3] / "hardware_profile"
+# Hardware capabilities belong to the physical device, not to a Git branch.
+# Deployments that need C3XL compatibility opt in with this persistent file;
+# every portable/source checkout otherwise preserves upstream hardware behavior.
+HARDWARE_PROFILE_FILE = Path(os.getenv("SUNNYPILOT_HARDWARE_PROFILE_FILE", "/data/hardware_profile"))
 
 
 class HardwareProfile(StrEnum):
@@ -17,6 +21,8 @@ PANDA_TYPE_TRES = b"\x09"
 def get_hardware_profile(value: str | None = None) -> HardwareProfile:
   if value is not None:
     raw_value = value
+  elif env_value := os.getenv("SUNNYPILOT_HARDWARE_PROFILE"):
+    raw_value = env_value
   elif HARDWARE_PROFILE_FILE.is_file():
     raw_value = HARDWARE_PROFILE_FILE.read_text().strip()
   else:

@@ -17,6 +17,7 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_HW
 from openpilot.sunnypilot.models.artifact_status import chestnut_model_ready
+from openpilot.selfdrive.debug.onroad_block_log import OnroadBlockLogger
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.common.hardware import HARDWARE, COMMA_HARDWARE
 from openpilot.common.basedir import BASEDIR
@@ -31,7 +32,7 @@ from openpilot.sunnypilot.system.statsd import statlog
 from openpilot.system.hardware.power_monitoring import PowerMonitoring
 from openpilot.system.hardware.fan_controller import FanController
 from openpilot.system.hardware.chestnut.ejector import ChestnutEjector
-from openpilot.common.version import terms_version, training_version, get_build_metadata, terms_version_sp
+from openpilot.common.version import terms_version, training_version, terms_version_sp
 
 
 ThermalStatus = log.DeviceState.ThermalStatus
@@ -253,6 +254,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   params = Params()
   hardware_profile = get_hardware_profile()
   power_monitor = PowerMonitoring()
+  onroad_block_logger = OnroadBlockLogger()
 
   uptime_offroad: float = params.get("UptimeOffroad", return_default=True)
   uptime_onroad: float = params.get("UptimeOnroad", return_default=True)
@@ -381,15 +383,10 @@ def hardware_thread(end_event, hw_queue) -> None:
     startup_conditions["not_always_offroad"] = not offroad_mode
     onroad_conditions["not_always_offroad"] = not offroad_mode
 
-    # if an unsupported device and branch is detected, going onroad is blocked
-    # only allow going onroad when:
-    # - TIZI, or
-    # - TICI and channel_type is "tici"
-    build_metadata = get_build_metadata()
-    is_unsupported_combo = COMMA_HARDWARE and HARDWARE.get_device_type() == "tici" and build_metadata.channel_type != "tici"
-    startup_conditions["not_tici"] = not is_unsupported_combo
-    onroad_conditions["not_tici"] = not is_unsupported_combo
-    set_offroad_alert("Offroad_TiciSupport", is_unsupported_combo, extra_text=build_metadata.channel)
+    # Branch labels are release metadata, not a safety signal. Never block an
+    # otherwise valid ignition transition because a maintained fork uses a
+    # different branch name, and clear alerts left by older builds.
+    set_offroad_alert("Offroad_TiciSupport", False)
 
     # if the temperature enters the danger zone, go offroad to cool down
     onroad_conditions["device_temp_good"] = thermal_status < ThermalStatus.critical
@@ -404,6 +401,30 @@ def hardware_thread(end_event, hw_queue) -> None:
     should_start = all(onroad_conditions.values())
     if started_ts is None:
       should_start = should_start and all(startup_conditions.values())
+
+    onroad_block_logger.update(
+      ignition=onroad_conditions["ignition"],
+      started=should_start,
+      startup_conditions=startup_conditions,
+      onroad_conditions=onroad_conditions,
+      record_missing_ignition=bool(pandaStates),
+      details={
+        "branch": params.get("GitBranch") or "",
+        "commit": params.get("GitCommit") or "",
+        "device_type": HARDWARE.get_device_type(),
+        "free_space_percent": round(msg.deviceState.freeSpacePercent, 2),
+        "thermal_status": str(thermal_status),
+        "offroad_mode": offroad_mode,
+        "panda_states": [{
+          "panda_type": str(panda.pandaType),
+          "harness_status": str(panda.harnessStatus),
+          "ignition_line": panda.ignitionLine,
+          "ignition_can": panda.ignitionCan,
+          "voltage": panda.voltage,
+          "can_rx": [panda.canState0.totalRxCnt, panda.canState1.totalRxCnt, panda.canState2.totalRxCnt],
+        } for panda in pandaStates],
+      },
+    )
 
     if should_start != should_start_prev or (count == 0):
       params.put_bool("IsEngaged", False, block=True)

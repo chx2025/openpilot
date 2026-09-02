@@ -15,7 +15,7 @@ REMOTE_BRANCHES = [
 
 
 def test_c3xl_exposes_only_the_maintained_branches() -> None:
-  assert C3XL_COMPATIBLE_BRANCHES == ("dev-sp-egpu", "dev-sp-egpu-nva", "dev-sp-egpu-prebuild")
+  assert C3XL_COMPATIBLE_BRANCHES == ("dev-sp-egpu", "dev-sp-egpu-nva", "dev-sp-egpu-prebuild", "navassist-track-p0")
   assert selectable_tici_branches(REMOTE_BRANCHES, HardwareProfile.C3XL) == [
     "dev-sp-egpu",
     "dev-sp-egpu-nva",

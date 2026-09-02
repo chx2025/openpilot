@@ -91,10 +91,16 @@ def load_models_with_fallback(*, chestnut, load_big, load_small, params, update_
       update_loading_progress(100)
 
   params.put_bool("ChestnutLoading", False, block=True)
-  if model is None or chestnut:
-    small_model = load_small()
   if model is None:
+    small_model = load_small()
     model = small_model
+  elif chestnut:
+    try:
+      small_model = load_small()
+    except Exception:
+      # A runtime fallback is optional while Chestnut is healthy. An empty or
+      # incomplete qcom slot must not discard a successfully loaded big model.
+      cloudlog.exception("small fallback preload failed; continuing with chestnut")
   assert model is not None
   return model, small_model
 
@@ -102,12 +108,14 @@ def load_models_with_fallback(*, chestnut, load_big, load_small, params, update_
 def run_model_with_fallback(model, small_model, params, chestnut_state, bufs, transforms, inputs, prepare_only):
   try:
     return model, model.run(bufs, transforms, inputs, prepare_only), False
-  except Exception:
+  except Exception as error:
     if not params.get_bool("ChestnutActive"):
       raise
-    cloudlog.exception("chestnut failed, falling back to small")
     params.put_bool("ChestnutActive", False, block=True)
-    assert small_model is not None
+    if small_model is None:
+      cloudlog.exception("chestnut failed and small fallback unavailable")
+      raise RuntimeError("chestnut failed and small fallback unavailable") from error
+    cloudlog.exception("chestnut failed, falling back to small")
     if chestnut_state is not None:
       chestnut_state.big = False
     return small_model, None, True

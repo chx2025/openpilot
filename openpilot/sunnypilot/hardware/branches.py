@@ -5,7 +5,7 @@ from openpilot.sunnypilot.hardware.profile import HardwareProfile
 
 # Single source of truth for branches that include the isolated C3XL hardware,
 # Panda, Tesla, eGPU, and boot-chain compatibility seams.
-C3XL_COMPATIBLE_BRANCHES = ("dev-sp-egpu", "dev-sp-egpu-nva", "dev-sp-egpu-prebuild")
+C3XL_COMPATIBLE_BRANCHES = ("dev-sp-egpu", "dev-sp-egpu-nva", "dev-sp-egpu-prebuild", "navassist-track-p0")
 
 
 def is_prebuild_branch(branch: str) -> bool:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import inspect
 from pathlib import Path
 import unittest
 import signal
@@ -14,6 +15,7 @@ import openpilot.system.manager.process_config as process_config
 from openpilot.system.manager.process import ensure_running
 from openpilot.system.manager.process_config import managed_processes, procs
 from openpilot.common.hardware import HARDWARE
+from openpilot.sunnypilot.hardware.profile import HardwareProfile
 
 os.environ['FAKEUPLOAD'] = "1"
 
@@ -52,7 +54,8 @@ class TestManager(OpenpilotTestCase):
     assert params.get("OpenpilotEnabledToggle")
     assert params.get("RouteCount") == 0
 
-  def test_c3xl_startup_disables_existing_road_video_setting(self):
+  def test_c3xl_startup_disables_existing_road_video_setting(self, monkeypatch):
+    monkeypatch.setattr(manager, "get_hardware_profile", lambda: HardwareProfile.C3XL)
     params = Params()
     params.put_bool("RecordRoadVideo", True, block=True)
 
@@ -60,9 +63,10 @@ class TestManager(OpenpilotTestCase):
 
     assert not params.get_bool("RecordRoadVideo")
 
-  def test_prebuilt_marker_follows_the_active_checkout_root(self):
-    assert manager.prebuilt_path("/data/sp") == "/data/sp/prebuilt"
-    assert manager.prebuilt_path("/data/openpilot") == "/data/openpilot/prebuilt"
+  def test_quick_boot_never_fabricates_prebuilt_marker(self):
+    source = inspect.getsource(manager.manager_init)
+    assert "QuickBootToggle" not in source
+    assert "prebuilt" not in source
 
   def test_livestream_processes_follow_livestream_param_until_ignition_clear(self):
     params = Params()

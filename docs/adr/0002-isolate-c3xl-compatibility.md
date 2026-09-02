@@ -4,4 +4,9 @@ C3XL behavior is implemented by a C3XL Profile and a Panda Startup adapter rathe
 
 ## Consequences
 
+The profile is device-local at `/data/hardware_profile`; a missing file means the
+standard upstream profile. Build and test environments may use the explicit
+`SUNNYPILOT_HARDWARE_PROFILE` override. The repository must not track a profile
+that silently turns every installation into C3XL.
+
 The physical device identity and the effective C++ logging/Panda capabilities may differ, so raw values must remain observable before profile overrides are applied. AGNOS boot-chain images are allowed to update automatically only when they match the C3XL Boot-chain Allowlist; Panda bootstub updates are not inherited automatically from upstream or the reference release.

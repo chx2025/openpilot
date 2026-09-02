@@ -5,6 +5,7 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import BinaryIO, cast
 from urllib.parse import parse_qs, urlparse
 
 from openpilot.sunnypilot.selfdrive.car.tesla.validation_controller import VALIDATION_LOG_PATH
@@ -99,7 +100,7 @@ def render_page() -> bytes:
     <button id="cancel" onclick="cancelSession()">立即取消</button><div id="status"></div>
   </section>
   <section id="logs-panel" hidden>
-    <h1>日志下载与清理</h1><p>导出仅包含低频 qlog、本地功能独立诊断和当前 boot 的系统错误日志。rlog 与摄像头视频永远不会进入 ZIP；行驶中禁止操作。</p>
+    <h1>日志下载与清理</h1><p>导出仅包含低频 qlog、本地功能独立诊断、无法进入 onroad 的阻挡记录和当前 boot 的系统错误日志。rlog 与摄像头视频永远不会进入 ZIP；行驶中禁止操作。</p>
     <div id="log-state" class="notice">正在读取可用日志时间…</div>
     <div class="log-range"><label>开始时间<input id="log-start" type="datetime-local" onchange="previewLogs()"></label><label>结束时间<input id="log-end" type="datetime-local" onchange="previewLogs()"></label></div>
     <div class="log-actions"><button onclick="previewLogs()">刷新范围</button><button id="log-download" onclick="downloadLogs()" disabled>打包并下载</button><button id="log-delete" onclick="deleteLogs()" disabled>清理所选日志</button></div>
@@ -159,7 +160,7 @@ function localTimeInput(ms) { const d = new Date(ms), local = new Date(d.getTime
 function selectedLogRange() { const start = new Date(document.getElementById('log-start').value).getTime(), end = new Date(document.getElementById('log-end').value).getTime(); return {start,end}; }
 function formatBytes(bytes) { if (!Number.isFinite(bytes)) return '—'; const units=['B','KiB','MiB','GiB','TiB']; let value=bytes, unit=0; while(value>=1024&&unit<units.length-1){value/=1024;unit++;} return (unit?value.toFixed(value>=10?1:2):String(value))+' '+units[unit]; }
 async function loadLogStatus() { const state=document.getElementById('log-state'),button=document.getElementById('log-download'),deleteButton=document.getElementById('log-delete');try{const response=await apiFetch('/api/logs/status',{cache:'no-store'}),data=await response.json();if(!response.ok)throw new Error(data.message||'HTTP '+response.status);logsStatus=data;state.className='notice'+(data.onroad?' onroad':'');if(!data.available){state.textContent='没有找到可下载的 qlog 或本地诊断';button.disabled=true;deleteButton.disabled=true;return;}state.textContent=(data.onroad?'行驶中：仅可查看范围，禁止下载或清理。':'设置模式：可以打包下载或清理。')+' 可用范围：'+new Date(data.start_ms).toLocaleString()+' → '+new Date(data.end_ms).toLocaleString()+' · '+data.segment_count+' 个路线段 · '+data.local_diagnostic_count+' 个本地诊断文件';if(!logsInitialized){const end=data.end_ms,start=Math.max(data.start_ms,end-30*60*1000);document.getElementById('log-start').value=localTimeInput(start);document.getElementById('log-end').value=localTimeInput(end);logsInitialized=true;}await previewLogs();}catch(error){state.className='notice onroad';state.textContent='日志范围读取失败：'+error;button.disabled=true;deleteButton.disabled=true;} }
-async function previewLogs() { const preview=document.getElementById('log-preview'),button=document.getElementById('log-download'),deleteButton=document.getElementById('log-delete'),range=selectedLogRange();logsPreviewValid=false;button.disabled=true;deleteButton.disabled=true;if(!Number.isFinite(range.start)||!Number.isFinite(range.end)||range.end<=range.start){preview.className='notice onroad';preview.textContent='请选择有效的开始和结束时间';return;}try{const response=await apiFetch('/api/logs/preview?start_ms='+range.start+'&end_ms='+range.end,{cache:'no-store'}),data=await response.json();if(!response.ok)throw new Error(data.message||'HTTP '+response.status);preview.className='notice';preview.textContent='qlog '+data.route_file_count+' 个 · 本地诊断 '+data.local_diagnostic_count+' 个 · '+formatBytes(data.total_bytes)+'\\n另附系统错误日志（最多 '+formatBytes(data.max_system_diagnostic_bytes)+'）；不包含 rlog 或视频。';logsPreviewValid=data.file_count>0;const disabled=!logsPreviewValid||!logsStatus||Boolean(logsStatus.onroad);button.disabled=disabled;deleteButton.disabled=disabled;}catch(error){preview.className='notice onroad';preview.textContent='日志范围无效：'+error;} }
+async function previewLogs() { const preview=document.getElementById('log-preview'),button=document.getElementById('log-download'),deleteButton=document.getElementById('log-delete'),range=selectedLogRange();logsPreviewValid=false;button.disabled=true;deleteButton.disabled=true;if(!Number.isFinite(range.start)||!Number.isFinite(range.end)||range.end<=range.start){preview.className='notice onroad';preview.textContent='请选择有效的开始和结束时间';return;}try{const response=await apiFetch('/api/logs/preview?start_ms='+range.start+'&end_ms='+range.end,{cache:'no-store'}),data=await response.json();if(!response.ok)throw new Error(data.message||'HTTP '+response.status);preview.className='notice';preview.textContent='qlog '+data.route_file_count+' 个 · 本地诊断 '+data.local_diagnostic_count+' 个 · '+formatBytes(data.total_bytes)+'\\n另附 onroad 阻挡记录和系统错误日志（最多 '+formatBytes(data.max_system_diagnostic_bytes)+'）；不包含 rlog 或视频。';logsPreviewValid=Boolean(data.includes_system_diagnostics)||data.file_count>0;const onroad=!logsStatus||Boolean(logsStatus.onroad);button.disabled=!logsPreviewValid||onroad;deleteButton.disabled=data.file_count<=0||onroad;}catch(error){preview.className='notice onroad';preview.textContent='日志范围无效：'+error;} }
 function downloadLogs() { if(!logsPreviewValid||logsStatus?.onroad)return;const range=selectedLogRange();window.location.assign('/api/logs/download?start_ms='+range.start+'&end_ms='+range.end); }
 async function deleteLogs() { if(!logsPreviewValid||logsStatus?.onroad)return;const range=selectedLogRange();if(!confirm('确定永久删除所选时间范围内的 qlog、本地诊断及遗留 rlog？视频不会删除，此操作无法撤销。'))return;const button=document.getElementById('log-delete'),preview=document.getElementById('log-preview');button.disabled=true;preview.className='notice';preview.textContent='正在清理所选日志…';try{const response=await apiFetch('/api/logs/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start_ms:range.start,end_ms:range.end,confirm:true})}),data=await response.json();if(!response.ok)throw new Error(data.message||'HTTP '+response.status);logsInitialized=false;await loadLogStatus();preview.className=data.skipped_files?.length?'notice onroad':'notice';preview.textContent='已清理 '+data.file_count+' 个日志文件 · 释放 '+formatBytes(data.total_bytes)+(data.skipped_files?.length?'\\n跳过 '+data.skipped_files.length+' 个已变化或不安全的文件。':'');}catch(error){preview.className='notice onroad';preview.textContent='日志清理失败：'+error;await previewLogs();} }
 function drawLine(ctx, points, xScale, yScale, color, width) { if (!points.length) return; ctx.beginPath(); points.forEach(([x,y], i) => { const px = ctx.canvas.clientWidth / 2 - y * yScale, py = ctx.canvas.clientHeight - 38 - x * xScale; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }); ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke(); }
@@ -388,7 +389,7 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
       self.send_header("Connection", "close")
       self.end_headers()
       self.close_connection = True
-      stream_log_zip(selection, self.wfile, diagnostics=collect_system_diagnostics())
+      stream_log_zip(selection, cast(BinaryIO, self.wfile), diagnostics=collect_system_diagnostics())
       self.wfile.flush()
     except (BrokenPipeError, ConnectionResetError):
       pass
@@ -418,7 +419,12 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
       self._json(HTTPStatus.OK, hotspot_status())
       return
     if path == "/api/logs/status":
-      self._json(HTTPStatus.OK, {**available_log_range(), **console_status(),
+      log_range = available_log_range()
+      if not log_range["available"]:
+        now_ms = time.time_ns() // 1_000_000
+        log_range = {**log_range, "available": True, "start_ms": now_ms - 30 * 60 * 1000, "end_ms": now_ms}
+      self._json(HTTPStatus.OK, {**log_range, **console_status(),
+                                "system_diagnostics_available": True,
                                 "export_excludes_rlog": True, "export_excludes_video": True})
       return
     if path == "/api/logs/preview":
@@ -434,8 +440,6 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
       try:
         require_offroad()
         selection = select_log_range(*self._range_from_query(query))
-        if not selection.files and not selection.diagnostic_files:
-          raise ValueError("所选时间段没有 qlog 或本地诊断")
         self._stream_log_download(selection)
       except PermissionError as error:
         self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": str(error)})
@@ -617,7 +621,7 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
   def _json(self, status: HTTPStatus, payload: dict) -> None:
     self._send(status, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode())
 
-  def log_message(self, message_format: str, *args) -> None:
+  def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib override requires this parameter name
     pass
 
 

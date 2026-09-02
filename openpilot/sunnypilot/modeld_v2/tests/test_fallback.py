@@ -76,6 +76,28 @@ def test_successful_big_model_keeps_preloaded_small_for_runtime_fallback(monkeyp
   assert params.values["ChestnutLoading"] is False
 
 
+def test_successful_big_model_survives_missing_small_fallback(monkeypatch):
+  params = FakeParams()
+  big_model = object()
+  monkeypatch.setattr(modeld_module, "load_with_timeout", lambda load, timeout: load())
+
+  def load_small():
+    raise AssertionError("No driving pkl found — qcom slot empty")
+
+  model, fallback = modeld_module.load_models_with_fallback(
+    chestnut=True,
+    load_big=lambda: big_model,
+    load_small=load_small,
+    params=params,
+    update_loading_progress=lambda _progress: None,
+  )
+
+  assert model is big_model
+  assert fallback is None
+  assert params.values["ChestnutActive"] is True
+  assert params.values["ChestnutLoading"] is False
+
+
 def test_runtime_big_model_failure_switches_to_preloaded_small():
   params = FakeParams()
   params.values["ChestnutActive"] = True
@@ -96,6 +118,22 @@ def test_runtime_big_model_failure_switches_to_preloaded_small():
   assert params.values["ChestnutActive"] is False
   assert chestnut_state.big is False
   assert ("ChestnutActive", False) in params.blocking_bool_writes
+
+
+def test_runtime_big_model_failure_without_small_fallback_is_explicit():
+  params = FakeParams()
+  params.values["ChestnutActive"] = True
+
+  class FailingBigModel:
+    def run(self, *_args, **_kwargs):
+      raise RuntimeError("USB stream stopped")
+
+  with pytest.raises(RuntimeError, match="small fallback unavailable"):
+    modeld_module.run_model_with_fallback(
+      FailingBigModel(), None, params, None, (), {}, {}, False,
+    )
+
+  assert params.values["ChestnutActive"] is False
 
 
 def test_non_finite_big_model_plan_becomes_fallback_error():
