@@ -47,7 +47,7 @@
   "ab389498a8808e8ea82808adabe355af7475b749": {
     "reason": "ported selector 19 and v22/v23 model catalogs with in-place previous-selector migration; tinygrad is integrated separately"
   },
-  "68be7773955e996f2ee1a443866656191862639d": {
+  "68be7773955e2a0dd7901ea604ba3301bed13daf": {
     "reason": "integrated official tinygrad e837e367 as the model ABI base while preserving the audited USB/UT3G runtime patch"
   },
   "47db84ebfb47f82bfe3ebb3d78cb13d4bc9a91a3": {
