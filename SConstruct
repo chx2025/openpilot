@@ -9,14 +9,13 @@ import numpy as np
 
 import SCons.Errors
 from SCons.Defaults import _stripixes
+from openpilot.sunnypilot.hardware.profile import get_hardware_profile
 
 COMMA_HARDWARE = os.path.isfile('/AGNOS')
-HARDWARE_PROFILE_FILE = os.getenv("SUNNYPILOT_HARDWARE_PROFILE_FILE", "/data/hardware_profile")
-HARDWARE_PROFILE = os.getenv("SUNNYPILOT_HARDWARE_PROFILE")
-if HARDWARE_PROFILE is None:
-  HARDWARE_PROFILE = open(HARDWARE_PROFILE_FILE).read().strip() if os.path.isfile(HARDWARE_PROFILE_FILE) else 'standard'
-if HARDWARE_PROFILE not in ('standard', 'c3xl'):
-  raise SCons.Errors.UserError(f"Unknown hardware profile '{HARDWARE_PROFILE}'")
+try:
+  HARDWARE_PROFILE = get_hardware_profile().value
+except ValueError as error:
+  raise SCons.Errors.UserError(str(error)) from error
 
 SCons.Warnings.warningAsException(True)
 

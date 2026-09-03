@@ -4,8 +4,11 @@ C3XL behavior is implemented by a C3XL Profile and a Panda Startup adapter rathe
 
 ## Consequences
 
-The profile is device-local at `/data/hardware_profile`; a missing file means the
-standard upstream profile. Build and test environments may use the explicit
+The profile is device-local at `/data/hardware_profile` and that explicit value
+is authoritative. When the file is missing, a raw `comma tici` hardware model is
+inferred as C3XL so recovery and fresh source installs cannot compile a standard
+pandad that rejects that device type; other raw models default to the standard
+upstream profile. Build and test environments may use the explicit
 `SUNNYPILOT_HARDWARE_PROFILE` override. The repository must not track a profile
 that silently turns every installation into C3XL.
 

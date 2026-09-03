@@ -14,6 +14,31 @@ def test_repository_without_device_override_defaults_standard() -> None:
   assert get_hardware_profile() == HardwareProfile.STANDARD
 
 
+def test_missing_profile_defaults_raw_tici_hardware_to_c3xl(tmp_path, monkeypatch) -> None:
+  from openpilot.sunnypilot.hardware import profile
+
+  profile_file = tmp_path / "missing_hardware_profile"
+  model_file = tmp_path / "model"
+  model_file.write_bytes(b"comma tici\x00")
+  monkeypatch.setattr(profile, "HARDWARE_PROFILE_FILE", profile_file)
+  monkeypatch.setattr(profile, "HARDWARE_MODEL_FILE", model_file, raising=False)
+
+  assert get_hardware_profile() == HardwareProfile.C3XL
+
+
+@pytest.mark.parametrize("model", [b"comma tizi\x00", b"comma mici\x00", b"unknown\x00"])
+def test_missing_profile_keeps_non_tici_hardware_standard(tmp_path, monkeypatch, model) -> None:
+  from openpilot.sunnypilot.hardware import profile
+
+  profile_file = tmp_path / "missing_hardware_profile"
+  model_file = tmp_path / "model"
+  model_file.write_bytes(model)
+  monkeypatch.setattr(profile, "HARDWARE_PROFILE_FILE", profile_file)
+  monkeypatch.setattr(profile, "HARDWARE_MODEL_FILE", model_file, raising=False)
+
+  assert get_hardware_profile() == HardwareProfile.STANDARD
+
+
 def test_device_profile_file_enables_c3xl(tmp_path, monkeypatch) -> None:
   from openpilot.sunnypilot.hardware import profile
 
@@ -24,11 +49,23 @@ def test_device_profile_file_enables_c3xl(tmp_path, monkeypatch) -> None:
   assert get_hardware_profile() == HardwareProfile.C3XL
 
 
+def test_device_profile_file_overrides_raw_tici_inference(tmp_path, monkeypatch) -> None:
+  from openpilot.sunnypilot.hardware import profile
+
+  profile_file = tmp_path / "hardware_profile"
+  profile_file.write_text("standard\n")
+  model_file = tmp_path / "model"
+  model_file.write_bytes(b"comma tici\x00")
+  monkeypatch.setattr(profile, "HARDWARE_PROFILE_FILE", profile_file)
+  monkeypatch.setattr(profile, "HARDWARE_MODEL_FILE", model_file)
+
+  assert get_hardware_profile() == HardwareProfile.STANDARD
+
+
 def test_native_build_uses_device_local_profile() -> None:
   sconstruct = (Path(__file__).parents[4] / "SConstruct").read_text()
 
-  assert '"/data/hardware_profile"' in sconstruct
-  assert "SUNNYPILOT_HARDWARE_PROFILE" in sconstruct
+  assert "get_hardware_profile" in sconstruct
   assert "Dir('#').abspath, 'hardware_profile'" not in sconstruct
 
 
