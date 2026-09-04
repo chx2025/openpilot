@@ -4,6 +4,10 @@ import ctypes
 from functools import cached_property
 import os
 os.environ['GMMU'] = '0' # for chestnut fast loading, noop for qcom
+from openpilot.common.hardware import COMMA_HARDWARE
+from openpilot.sunnypilot.hardware.profile import HardwareProfile, get_hardware_profile
+from openpilot.sunnypilot.modeld_v2.egpu_loader import C3XL_MODEL_LOAD_TIMEOUT, configure_default_device
+configure_default_device(COMMA_HARDWARE, c3xl=get_hardware_profile() == HardwareProfile.C3XL)
 from tinygrad.tensor import Tensor
 from tinygrad.device import Device
 from tinygrad.helpers import GlobalCounters
@@ -36,7 +40,6 @@ from openpilot.selfdrive.modeld.helpers import chestnut_present, chestnut_compil
 from openpilot.system.hardware.chestnut.status import read_runtime_asm_telemetry
 
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
-from openpilot.sunnypilot.modeld_v2.egpu_loader import C3XL_MODEL_LOAD_TIMEOUT
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
 
