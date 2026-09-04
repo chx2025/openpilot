@@ -7,7 +7,6 @@ os.environ['GMMU'] = '0' # for chestnut fast loading, noop for qcom
 from tinygrad.tensor import Tensor
 from tinygrad.device import Device
 from tinygrad.helpers import GlobalCounters
-import struct
 import threading
 import time
 import numpy as np
@@ -34,6 +33,7 @@ from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_drivi
 from openpilot.common.file_chunker import get_chunked_file_size, open_file_chunked
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.helpers import chestnut_present, chestnut_compiled, modeld_pkl_path, get_tg_input_devices, load_oob
+from openpilot.system.hardware.chestnut.status import read_runtime_asm_telemetry
 
 from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld_v2.egpu_loader import C3XL_MODEL_LOAD_TIMEOUT
@@ -119,6 +119,7 @@ class ChestnutState:
     if self.big:
       for k, v in self.metrics.items():
         setattr(state, k, v)
+      state.metricsValid = self.valid
       state.memoryUsedMb = max(0, int(GlobalCounters.mem_used_per_device.get("AMD", 0) >> 20))
       if "AMD" in Device._opened_devices:
         state.memoryTotalMb = max(0, int(Device["AMD"].iface.dev_impl.vram_size >> 20))
@@ -126,16 +127,18 @@ class ChestnutState:
 
     asm_valid = False
     if "AMD" in Device._opened_devices:
-      try:
-        # ASM runs on USB-C power, these still read without a gpu
-        asm = Device["AMD"].iface.pci_dev.usb
-        state.pcieLtssm = asm.read(0xB450, 1)[0]
-        state.supplyVoltage, state.supplyCurrent = struct.unpack('<Hh', bytes(asm.usb.control_read(0xC0, 5))[:4])
-        asm_valid = True
-      except Exception:
-        pass
+      # ASM runs on USB-C power. Link state and legacy supply telemetry are
+      # independent: newer firmware may omit the supply request while B450 and
+      # GPU SMU metrics remain valid.
+      asm = Device["AMD"].iface.pci_dev.usb
+      asm_telemetry = read_runtime_asm_telemetry(asm)
+      state.pcieLtssm = asm_telemetry.pcie_ltssm
+      state.supplyValid = asm_telemetry.supply_valid
+      state.supplyVoltage = asm_telemetry.supply_voltage_mv
+      state.supplyCurrent = asm_telemetry.supply_current_ma
+      asm_valid = asm_telemetry.link_valid
 
-    msg.valid = asm_valid and (not self.big or self.valid)
+    msg.valid = asm_valid
     self.pm.send('chestnutState', msg)
 
 

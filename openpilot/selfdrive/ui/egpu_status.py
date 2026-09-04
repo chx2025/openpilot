@@ -195,8 +195,8 @@ def draw_egpu_status_panel(rect: rl.Rectangle, font: rl.Font, *, compact: bool) 
   model_seen = sm.recv_frame["modelV2"] > ui_state.started_frame
   model_alive = bool(model_seen and sm.alive["modelV2"])
   model_big = bool(model_alive and sm["modelV2"].big)
-  telemetry_valid = bool(sm.alive["chestnutState"] and sm.valid["chestnutState"])
   telemetry = sm["chestnutState"]
+  telemetry_valid = bool(sm.alive["chestnutState"] and sm.valid["chestnutState"] and telemetry.metricsValid)
   active_bundle = ui_state.active_bundle
   model_name = ""
   if isinstance(active_bundle, dict):

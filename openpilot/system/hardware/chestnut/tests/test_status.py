@@ -2,9 +2,11 @@ from openpilot.system.hardware.chestnut.status import (
   PCIE_L0,
   ChestnutLinkState,
   classify_chestnut_link,
+  read_runtime_asm_telemetry,
 )
 from types import SimpleNamespace
 
+import openpilot.cereal.messaging as messaging
 from openpilot.system.hardware.chestnut.statusd import PcieLinkProbe, _chestnut_usb
 
 
@@ -53,3 +55,38 @@ def test_status_daemon_only_accepts_runtime_chestnut_identity():
 
   assert _chestnut_usb(state("custom d1377a01-UT3G-DUAL")) == (True, 5000)
   assert _chestnut_usb(state("custom d1377a01-UT3G-DUAL-DIRTY")) == (False, 0)
+
+
+def test_supply_telemetry_failure_does_not_invalidate_pcie_link():
+  class Usb:
+    def control_read(self, *_args, **_kwargs):
+      raise RuntimeError("new firmware has no legacy supply telemetry")
+
+  asm = SimpleNamespace(read=lambda address, length: bytes([PCIE_L0]), usb=Usb())
+
+  telemetry = read_runtime_asm_telemetry(asm)
+
+  assert telemetry.link_valid
+  assert telemetry.pcie_ltssm == PCIE_L0
+  assert not telemetry.supply_valid
+  assert telemetry.supply_voltage_mv == 0
+  assert telemetry.supply_current_ma == 0
+
+
+def test_ltssm_failure_still_invalidates_link():
+  asm = SimpleNamespace(read=lambda *_args: (_ for _ in ()).throw(RuntimeError("E4 failed")))
+
+  telemetry = read_runtime_asm_telemetry(asm)
+
+  assert not telemetry.link_valid
+  assert telemetry.pcie_ltssm == 0
+
+
+def test_chestnut_message_exposes_independent_validity_domains():
+  msg = messaging.new_message("chestnutState", valid=True)
+  msg.chestnutState.metricsValid = True
+  msg.chestnutState.supplyValid = False
+
+  assert msg.valid
+  assert msg.chestnutState.metricsValid
+  assert not msg.chestnutState.supplyValid

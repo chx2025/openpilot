@@ -63,6 +63,8 @@ def main() -> None:
     valid, ltssm = probe.update(connected=connected, usb_speed_mbps=speed)
     msg = messaging.new_message("chestnutState", valid=valid)
     msg.chestnutState.pcieLtssm = ltssm
+    msg.chestnutState.metricsValid = False
+    msg.chestnutState.supplyValid = False
     pm.send("chestnutState", msg)
     rk.keep_time()
 

@@ -728,6 +728,8 @@ struct ChestnutState {
   memoryUsedMb @10 :UInt32;
   memoryTotalMb @11 :UInt32;
   modelFps @12 :Float32;
+  metricsValid @13 :Bool;
+  supplyValid @14 :Bool;
 }
 
 struct RadarState @0x9a185389d6fdd05f {
