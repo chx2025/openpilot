@@ -157,7 +157,8 @@ def test_no_target_is_output_transparent():
   assert arbitrator.diagnostics.action == TrafficPlanAction.none
 
 
-def test_observe_mode_clears_a_latched_hold_and_is_output_transparent():
+@pytest.mark.parametrize("mode", [0, 1])
+def test_disabled_or_legacy_observe_clears_a_latched_hold_and_is_output_transparent(mode):
   arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
   hold = fake_sm(
     phase=TrafficControlPhase.hold, light_state=1, target=True,
@@ -169,7 +170,7 @@ def test_observe_mode_clears_a_latched_hold_and_is_output_transparent():
     phase=TrafficControlPhase.hold, light_state=1, target=True,
     allowed=False, event_id=201, session_id=201, distance=0.0, v_ego=0.0,
   )
-  observe["trafficRadarState"].mode = 1
+  observe["trafficRadarState"].mode = mode
   plan = base_plan(a_target=0.4, should_stop=False)
   original = plan_output(plan)
   observe["trafficRadarState"].publishMonoTime = NOW_NS + 50_000_000

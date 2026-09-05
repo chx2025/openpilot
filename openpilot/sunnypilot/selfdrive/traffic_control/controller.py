@@ -15,7 +15,7 @@ STOP_EVIDENCE_LOSS_GRACE_S = 2.0
 
 class TrafficControlMode(IntEnum):
   off = 0
-  observe = 1
+  observe = 1  # Legacy diagnostic mode; the production switch no longer selects it.
   shadow = 2
   stopOnly = 3
   stopGo = 4

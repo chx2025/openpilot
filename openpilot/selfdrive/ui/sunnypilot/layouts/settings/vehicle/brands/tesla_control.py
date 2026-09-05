@@ -174,7 +174,7 @@ class TeslaControlSettingsAdapter:
     )
     self.traffic_control_mode = toggle_item_sp(
       title=tr("Traffic Light Control (Experimental)"),
-      description=tr("When off, traffic-light data is recorded in the background without changing control. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."),  # noqa: E501
+      description=tr("When off, Traffic control is fully disabled; raw Tesla traffic-light data remains available for diagnostics. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."),  # noqa: E501
       param=TRAFFIC_SIGNAL_CONTROL_PARAM,
     )
     self.traffic_stop_reference = option_item_sp(

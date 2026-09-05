@@ -1982,8 +1982,8 @@ msgid "Adjust how far before Tesla's reported traffic-control point the vehicle 
 msgstr "调整车辆在 Tesla 报告的交通控制点前方多远停车。数值大时提前停车，数值小时接近停车点。无需重启，下一次识别交通灯时生效。"
 
 #: openpilot/selfdrive/ui/sunnypilot/layouts/settings/vehicle/brands/tesla_control.py
-msgid "When off, traffic-light data is recorded in the background without changing control. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."
-msgstr "关闭时仅在后台记录交通灯数据，不改变车辆控制。开启后，确认红灯时可自动停车；确认绿灯且前方安全时可自动起步。"
+msgid "When off, Traffic control is fully disabled; raw Tesla traffic-light data remains available for diagnostics. When on, confirmed red lights can stop the vehicle and confirmed green lights can start it when the path is clear."
+msgstr "关闭时完全禁用交通灯控制，但仍保留原始 Tesla 交通灯数据供诊断，不再推算候选停车状态。开启后，确认红灯时可自动停车；确认绿灯且前方安全时可自动起步。"
 
 #: openpilot/system/ui/widgets/network.py
 msgid "Tethering Password"

@@ -97,8 +97,14 @@ from pinning a vehicle behind a departing queue, avoids a hard ownership switch
 at 0.3 m/s, and does not give a stale or far lead slot authority over the final
 stop-line guard.
 
+The production switch now selects Off or Stop/Go. Off clears the Traffic
+controller's candidate/session state; it no longer runs online Observe. Raw
+Tesla CAN observations and web diagnostics remain independent and available.
+Legacy Observe mode value 1 is retained for historical diagnostics and must
+remain output-transparent; existing offline replay can explicitly run Stop/Go.
+
 The GO request is bounded and deduplicated per stop session and never modifies
-Tesla vehicle state, CAN, or other vehicle signals. Traffic Off and Observe are
+Tesla vehicle state, CAN, or other vehicle signals. Traffic Off and legacy Observe are
 output-transparent even if a prior STOP/HOLD/START was latched. `active` means
 that Traffic changed or maintains part of the complete published plan,
 including a future-only trajectory constraint; a Traffic candidate completely

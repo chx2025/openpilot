@@ -44,14 +44,55 @@ def test_independent_traffic_radar_service_uses_the_existing_twenty_hz_slot():
   assert SERVICE_LIST["trafficRadarState"].decimation == 5
 
 
-def test_user_switch_maps_off_to_observation_and_on_to_stop_go():
-  observed = trafficcontrold.build_source(FakeParams(False))
+def test_user_switch_maps_off_to_disabled_and_on_to_stop_go():
+  disabled = trafficcontrold.build_source(FakeParams(False))
   active = trafficcontrold.build_source(FakeParams(True))
 
-  assert observed.controller.config.mode == TrafficControlMode.observe
-  assert observed.go_policy == TrafficRadarGoPolicy.passive
+  assert disabled.controller.config.mode == TrafficControlMode.off
+  assert disabled.go_policy == TrafficRadarGoPolicy.passive
   assert active.controller.config.mode == TrafficControlMode.stopGo
   assert active.go_policy == TrafficRadarGoPolicy.active
+
+
+def test_disabled_source_does_not_compute_stop_candidates_but_keeps_raw_distance():
+  from openpilot.sunnypilot.selfdrive.traffic_control.tests.test_radar_state import red_light_sm
+  source = trafficcontrold.build_source(FakeParams(False))
+  sm = red_light_sm()
+  for now_ns in range(100_000_000, 1_100_000_000, 100_000_000):
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    target = source.update(sm, now_ns).trafficRadarState
+    assert target.mode == int(TrafficControlMode.off)
+    assert target.phase == int(TrafficControlPhase.off)
+    assert not target.targetPresent
+    assert not target.controlAllowed
+    assert not target.plannerStartRequested
+    assert target.stopSessionId == 0
+    assert target.rawDistance == sm["carStateSP"].teslaTrafficControl.distance
+
+
+def test_disabling_clears_session_and_reenabling_requires_new_confirmation():
+  from openpilot.sunnypilot.selfdrive.traffic_control.tests.test_radar_state import red_light_sm
+  params = FakeParams(True)
+  source = trafficcontrold.build_source(params)
+  sm = red_light_sm()
+  for now_ns in range(100_000_000, 1_100_000_000, 100_000_000):
+    sm["carStateSP"].teslaTrafficControl.frameMonoTime = now_ns
+    target = source.update(sm, now_ns).trafficRadarState
+  assert target.stopSessionId > 0 and target.controlAllowed
+
+  params.enabled = False
+  trafficcontrold.refresh_source_config(source, params)
+  assert source.controller.stop_session_id == 0
+  sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_100_000_000
+  target = source.update(sm, 1_100_000_000).trafficRadarState
+  assert target.mode == 0 and target.stopSessionId == 0 and not target.controlAllowed
+
+  params.enabled = True
+  trafficcontrold.refresh_source_config(source, params)
+  sm["carStateSP"].teslaTrafficControl.frameMonoTime = 1_200_000_000
+  target = source.update(sm, 1_200_000_000).trafficRadarState
+  assert target.phase == int(TrafficControlPhase.redCandidate)
+  assert not target.controlAllowed
 
 
 def test_manual_stop_reference_uses_fixed_cp_style_geometry():

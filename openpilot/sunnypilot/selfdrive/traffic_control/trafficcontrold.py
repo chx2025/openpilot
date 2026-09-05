@@ -26,9 +26,9 @@ def read_source_config(params: Params) -> tuple[TrafficControlConfig, TrafficRad
     max_control_speed = 60.0 / 3.6
   control_enabled = params.get_bool(TRAFFIC_SIGNAL_CONTROL_PARAM)
   config = TrafficControlConfig(
-    # The user-facing switch is intentionally binary: disabled still records
-    # counterfactual observations, while enabled permits stop and bounded GO.
-    mode=TrafficControlMode.stopGo if control_enabled else TrafficControlMode.observe,
+    # Disabled clears controller evidence instead of running counterfactual
+    # Observe sessions. Raw Tesla CAN diagnostics are produced independently.
+    mode=TrafficControlMode.stopGo if control_enabled else TrafficControlMode.off,
     default_stop_reference=reference,
     max_control_speed=max_control_speed,
   )
