@@ -202,22 +202,19 @@ def make_run_policy(vision_runner, policy_runners: list, features_slice: slice, 
 
     if 'prev_feat' in unpacked_dict:
       prev_feat_dev = unpacked_dict['prev_feat']
-      feat_buf = shift_and_sample(feat_q, prev_feat_dev.reshape(1, 1, -1), sample_skip_fn)
-      inputs['features_buffer'] = feat_buf if len(fb := input_shapes['features_buffer']) <= 3 else feat_buf.reshape(fb)
+      inputs['features_buffer'] = shift_and_sample(feat_q, prev_feat_dev.reshape(1, 1, -1), sample_skip_fn).reshape(input_shapes['features_buffer'])
 
     if vision_runner:
       vision_out_cast = next(iter(vision_runner({road_key: img, wide_key: big_img}).values())).cast('float32').realize()
       if 'features_buffer' not in inputs:
         new_feat = vision_out_cast[:, features_slice].reshape(1, -1).unsqueeze(0)
-        feat_buf = shift_and_sample(feat_q, new_feat, sample_skip_fn).realize()
-        inputs['features_buffer'] = feat_buf if len(fb := input_shapes['features_buffer']) <= 3 else feat_buf.reshape(fb)
+        inputs['features_buffer'] = shift_and_sample(feat_q, new_feat, sample_skip_fn).realize()
       policy_outs = [next(iter(pol_runner(inputs).values())).cast('float32').realize() for pol_runner in policy_runners]
       return (vision_out_cast, *policy_outs) if len(policy_outs) > 1 else (vision_out_cast, policy_outs[0])
 
     inputs.update({road_key: img, wide_key: big_img})
     if 'features_buffer' not in inputs:
-      feat_buf = sample_skip_fn(feat_q)
-      inputs['features_buffer'] = feat_buf if len(fb := input_shapes['features_buffer']) <= 3 else feat_buf.reshape(fb)
+      inputs['features_buffer'] = sample_skip_fn(feat_q).reshape(input_shapes['features_buffer'])
 
     policy_out = next(iter(policy_runners[0](inputs).values())).cast('float32').realize()
     if 'features_buffer' not in inputs and features_slice is not None:
@@ -301,7 +298,7 @@ def _load_policy_runners(args: argparse.Namespace) -> tuple[list, list]:
 
 
 if __name__ == "__main__":
-  if 'USB' in os.getenv('DEV', '') or os.getenv('USBGPU'):
+  if 'USB' in os.getenv('DEV', '') or os.getenv('CHESTNUT'):
     from openpilot.system.hardware.chestnut.flash import link_up
     for _ in range(10):
       if link_up():

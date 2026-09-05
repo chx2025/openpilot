@@ -25,3 +25,16 @@ is not authoritative.
   hash can be verified and reused without downloading again.
 - Default Big requires its official compiled artifact. Downloaded LM/TT/IDM
   bundles remain independent of the optional big ONNX source.
+
+## Model artifact and execution compatibility
+
+The supported pickle format and compiler input-shape rules follow the selected
+sunnypilot source baseline. When upstream retires an old format, retire its
+local loader and execution branches too. Previously downloaded artifacts do
+not justify retaining a parallel model runtime or legacy shape rules.
+
+Use matching official artifacts for the selected runtime. Keep downloaded
+files until explicitly removed, but do not silently convert their metadata,
+claim compatibility, or select an older execution path to keep them running.
+The stock and modeld_v2 runners remain upstream-owned; hardware adapters must
+not introduce an independent QCOM-warp or fused-runner implementation.

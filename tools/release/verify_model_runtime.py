@@ -100,7 +100,7 @@ def main():
     "functional_pass": True, "synthetic_inputs": True, "vehicle_messages_sent": 0,
     "modeld_source": str(args.modeld_source or Path(module.__file__)),
     "artifact": str(args.artifact) if args.artifact else "active selected bundle",
-    "chestnut": not args.small, "warp_device": model.WARP_DEV, "legacy": model.is_legacy_model,
+    "chestnut": not args.small, "warp_device": model.WARP_DEV,
     "load_seconds": load_seconds, "frames": len(latencies), "target_hz": model.constants.MODEL_FREQ,
     "mean_ms": float(np.mean(latencies) * 1000), "p95_ms": float(np.percentile(latencies, 95) * 1000),
     "over_budget_frames": sum(n > interval for n in latencies),

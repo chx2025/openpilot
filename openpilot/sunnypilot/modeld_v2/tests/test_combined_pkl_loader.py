@@ -59,6 +59,20 @@ class TestFindDrivingPkl(OpenpilotTestCase):
 # Init — assertion guard
 
 class TestModelStateCombinedInit(OpenpilotTestCase):
+  def test_rejects_retired_nested_pickle_format(self, model_state_factory, monkeypatch):
+    archetype = ARCHETYPES['supercombo_non20hz']
+    current = tests_helpers.make_pkl_data(archetype)
+    retired = {
+      'metadata': current['metadata'],
+      (CAM_W, CAM_H): {
+        'warp_enqueue': current[(CAM_W, CAM_H)],
+        'run_policy': current['run_policy'],
+      },
+    }
+    monkeypatch.setattr(tests_helpers, 'make_pkl_data', lambda _: retired)
+    with self.assertRaisesRegex(KeyError, 'run_policy'):
+      model_state_factory(archetype)
+
   def test_v24_warp_metadata_is_not_a_policy(self, model_state_factory):
     for original in ARCHETYPES.values():
       archetype = deepcopy(original)
