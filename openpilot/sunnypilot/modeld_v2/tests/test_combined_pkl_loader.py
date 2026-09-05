@@ -5,6 +5,8 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+from copy import deepcopy
+
 from openpilot.common.parameterized import parameterized
 
 import openpilot.sunnypilot.models.helpers as helpers
@@ -57,6 +59,15 @@ class TestFindDrivingPkl(OpenpilotTestCase):
 # Init — assertion guard
 
 class TestModelStateCombinedInit(OpenpilotTestCase):
+  def test_v24_warp_metadata_is_not_a_policy(self, model_state_factory):
+    for original in ARCHETYPES.values():
+      archetype = deepcopy(original)
+      archetype.metadata_structure['warp_dev'] = 'CPU'
+      state = model_state_factory(archetype)
+      assert state.WARP_DEV == 'CPU'
+      assert state._combined_model_type == archetype.expected_model_type
+      assert 'warp_dev' not in getattr(state, '_policy_keys', [])
+
   def test_asserts_when_no_pkl(self, monkeypatch):
     bundle = DummyBundle(models=[], is_20hz=True)
     monkeypatch.setattr(helpers, 'get_active_bundle', lambda params=None, *, chestnut=None: bundle)

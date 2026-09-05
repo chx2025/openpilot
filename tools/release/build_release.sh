@@ -68,6 +68,7 @@ for policy in /sys/devices/system/cpu/cpufreq/policy*; do
 done
 
 "$SCONS"
+python3 tools/release/check_model_artifacts.py
 if [ -n "$INCLUDE_BIG_MODEL" ]; then
   test -f openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl.chunkmanifest
 fi

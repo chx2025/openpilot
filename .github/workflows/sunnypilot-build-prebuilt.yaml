@@ -162,6 +162,7 @@ jobs:
             openpilot/selfdrive/locationd openpilot/sunnypilot/selfdrive/locationd
           echo "Building rest of sunnypilot"
           /usr/bin/time -v scons -j$(nproc) cache_dir="$SCONS_CACHE" --minimal
+          python3 tools/release/check_model_artifacts.py
           touch ${BUILD_DIR}/prebuilt
           if [[ "${{ runner.debug }}" == "1" ]]; then
             ls -la ${BUILD_DIR}

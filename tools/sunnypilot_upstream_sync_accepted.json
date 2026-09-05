@@ -50,6 +50,12 @@
   "68be7773955e2a0dd7901ea604ba3301bed13daf": {
     "reason": "integrated official tinygrad e837e367 as the model ABI base while preserving the audited USB/UT3G runtime patch"
   },
+  "047ae41c0d9fe3ae5656d1541a376d6fbf17c9a3": {
+    "reason": "ported same-device warp metadata, enqueue telemetry and v24 catalog; retained downloaded legacy bundle support, fallback and C3XL controls; exclude warp_dev from policy metadata"
+  },
+  "302f3ad892038144edabc5626bda2294a4ff9b11": {
+    "reason": "adapted DM artifact completeness to the local native-SCons release flow: existing SConscript builds both DM warps, release gates now require both; official HF publishing workflow is not used locally"
+  },
   "47db84ebfb47f82bfe3ebb3d78cb13d4bc9a91a3": {
     "reason": "ported big-model ONNX LFS hash generation and regression coverage without replacing local default-model selection semantics"
   }

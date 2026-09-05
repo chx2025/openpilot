@@ -144,6 +144,25 @@ def test_non_finite_big_model_plan_becomes_fallback_error():
     modeld_module.validate_model_outputs(chestnut=True, outputs=outputs)
 
 
+def test_runtime_forwards_enqueue_callback_without_losing_fallback():
+  params = FakeParams()
+  calls = []
+
+  class Model:
+    def run(self, *args, after_enqueue=None):
+      after_enqueue()
+      return {"plan": np.array([1.0])}
+
+  model = Model()
+  active, output, fell_back = modeld_module.run_model_with_fallback(
+    model, None, params, None, (), {}, {}, False, after_enqueue=lambda: calls.append("telemetry"),
+  )
+  assert active is model
+  assert not fell_back
+  assert calls == ["telemetry"]
+  assert output["plan"][0] == 1.0
+
+
 def test_missing_qcom_selection_queues_exact_default_fallback_ref():
   params = FakeParams()
   params.values["ModelManager_ActiveBundleChestnut"] = {

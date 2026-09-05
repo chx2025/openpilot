@@ -6,6 +6,7 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
+from collections.abc import Callable
 import os
 os.environ['GMMU'] = '0'
 from openpilot.common.hardware import COMMA_HARDWARE
@@ -105,9 +106,9 @@ def load_models_with_fallback(*, chestnut, load_big, load_small, params, update_
   return model, small_model
 
 
-def run_model_with_fallback(model, small_model, params, chestnut_state, bufs, transforms, inputs, prepare_only):
+def run_model_with_fallback(model, small_model, params, chestnut_state, bufs, transforms, inputs, prepare_only, after_enqueue=None):
   try:
-    return model, model.run(bufs, transforms, inputs, prepare_only), False
+    return model, model.run(bufs, transforms, inputs, prepare_only, after_enqueue=after_enqueue), False
   except Exception as error:
     if not params.get_bool("ChestnutActive"):
       raise
@@ -177,12 +178,13 @@ class ModelState(ModelStateBase):
     if loading_progress_callback is not None:
       loading_progress_callback(80)
 
-    self.WARP_DEV = 'QCOM' if COMMA_HARDWARE else 'CPU'
-    self.DEV = 'AMD' if self.chestnut else self.WARP_DEV
-    self.QUEUE_DEV = self.DEV
     metadata = jits['metadata']
+    self.WARP_DEV = metadata.get('warp_dev', 'QCOM' if COMMA_HARDWARE else 'CPU')
+    self.DEV = 'AMD' if self.chestnut else ('QCOM' if COMMA_HARDWARE else 'CPU')
+    self.QUEUE_DEV = self.DEV
 
-    self.is_legacy_model = 'run_policy' not in jits  # remove after next recompile
+    # Keep already-downloaded pre-v24 bundles usable during the catalog transition.
+    self.is_legacy_model = 'run_policy' not in jits
     if self.is_legacy_model:
       self.warp = jits[(cam_w, cam_h)]['warp_enqueue']
       self.run_policy = jits[(cam_w, cam_h)]['run_policy']
@@ -202,7 +204,7 @@ class ModelState(ModelStateBase):
                                                                           frame_skip, device=self.QUEUE_DEV)
     else:
       vision_metadata = metadata['vision']
-      policy_keys = [k for k in metadata if k != 'vision']
+      policy_keys = [k for k in metadata if k not in ('vision', 'warp_dev')]
       if policy_keys == ['policy']:
         self._combined_model_type = 'split'
       else:
@@ -289,7 +291,8 @@ class ModelState(ModelStateBase):
     return self._desire_key
 
   def run(self, bufs: dict[str, VisionBuf], transforms: dict[str, np.ndarray],
-                inputs: dict[str, np.ndarray], prepare_only: bool) -> dict[str, np.ndarray] | None:
+          inputs: dict[str, np.ndarray], prepare_only: bool,
+          after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray] | None:
     for key in bufs.keys():
       ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
       yuv_size = self.frame_buf_params[key][3]
@@ -323,8 +326,13 @@ class ModelState(ModelStateBase):
       warped = self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames[road_key], big_frame=self.full_frames[wide_key])
       raw_outputs = self.run_policy(**{k: self.input_queues[k] for k in POLICY_INPUTS if k in self.input_queues}, warped=warped)
 
+    if after_enqueue is not None:
+      after_enqueue()
+
     if self._combined_model_type == 'supercombo':
       model_output = raw_outputs.numpy().flatten()
+      if self.chestnut and not np.all(np.isfinite(model_output)):
+        raise RuntimeError("model output not finite")
       sliced = {k: model_output[np.newaxis, v] for k, v in self.vision_output_slices.items()}
       outputs = self.parser.parse_outputs(sliced)
       if 'prev_feat' in self.numpy_inputs:
@@ -577,8 +585,11 @@ def main(demo=False):
       inputs['action_t'] = np.array([lat_action_t, long_action_t], dtype=np.float32)
 
     mt1 = time.perf_counter()
+    send_chestnut = (chestnut_state is not None and
+                    run_count % round(model.constants.MODEL_FREQ / SERVICE_LIST['chestnutState'].frequency) == 0)
     model, model_output, fell_back = run_model_with_fallback(
       model, small_model, params, chestnut_state, bufs, transforms, inputs, prepare_only,
+      after_enqueue=chestnut_state.send if send_chestnut else None,
     )
     if fell_back:
       run_count = 0
@@ -623,9 +634,6 @@ def main(demo=False):
       pm.send('cameraOdometry', posenet_send)
       pm.send('modelDataV2SP', mdv2sp_send)
     last_vipc_frame_id = meta_main.frame_id
-
-    if chestnut_state is not None and run_count % round(model.constants.MODEL_FREQ / SERVICE_LIST['chestnutState'].frequency) == 0:
-      chestnut_state.send()
 
 if __name__ == "__main__":
   try:
