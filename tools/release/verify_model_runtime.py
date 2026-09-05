@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -16,11 +17,14 @@ def main():
   parser.add_argument("--repo", type=Path, required=True)
   parser.add_argument("--modeld-source", type=Path)
   parser.add_argument("--artifact", type=Path)
+  parser.add_argument("--catalog", type=Path, help="Official catalog for an explicit artifact's generation/rate/overrides")
   parser.add_argument("--small", action="store_true")
   parser.add_argument("--seconds", type=float, default=30)
   args = parser.parse_args()
   if args.seconds <= 0:
     parser.error("seconds must be positive")
+  if args.artifact and not args.catalog:
+    parser.error("an explicit artifact requires its catalog metadata")
   repo = args.repo.resolve()
   os.chdir(repo)
   sys.path.insert(0, str(repo))
@@ -44,9 +48,17 @@ def main():
     from openpilot.sunnypilot.modeld_v2 import modeld as module
 
   if args.artifact:
-    os.environ["COMBINED_MODEL_PKL"] = str(args.artifact.resolve())
-    # Explicit artifacts have their own architecture; never borrow active-bundle overrides.
-    module.get_active_bundle = lambda **kwargs: None
+    matches = [b for b in json.loads(args.catalog.read_text())["bundles"]
+               if any(m["artifact"]["file_name"] == args.artifact.name for m in b["models"])]
+    if len(matches) != 1:
+      raise RuntimeError("explicit artifact must match exactly one catalog bundle")
+    metadata = matches[0]
+    bundle = SimpleNamespace(generation=int(metadata["generation"]), is20hz=metadata.get("is_20hz", False),
+                             overrides=[SimpleNamespace(key=k, value=v) for k, v in metadata.get("overrides", {}).items()])
+    # Process-local injection: use the artifact's own metadata without changing selection Params.
+    os.environ.pop("COMBINED_MODEL_PKL", None)
+    module.get_active_bundle = lambda **kwargs: bundle
+    module._find_driving_pkl = lambda _: str(args.artifact.resolve())
 
   started = time.monotonic()
   model = module.ModelState(1928, 1208, chestnut=not args.small,
