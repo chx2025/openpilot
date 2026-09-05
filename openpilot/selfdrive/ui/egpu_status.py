@@ -99,8 +99,8 @@ def resolve_egpu_connection(device_state) -> bool:
 
 def egpu_panel_style(*, compact: bool) -> EgpuPanelStyle:
   return EgpuPanelStyle(
-    font_size=48,
-    line_height=58,
+    font_size=80,
+    line_height=97,
     panel_width=1200,
     bottom_gap=73 if compact else 293,
     background_alpha=0,
