@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 import time
 
 import pyray as rl
@@ -9,9 +8,8 @@ import pyray as rl
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.onroad.hud_renderer import UI_CONFIG
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
-from openpilot.system.ui.lib.application import FontWeight, gui_app
+from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 
 
@@ -19,23 +17,15 @@ RED = rl.Color(255, 72, 72, 255)
 AMBER = rl.Color(255, 190, 50, 255)
 GREEN = rl.Color(53, 220, 118, 255)
 LAMP_OFF = rl.Color(65, 69, 76, 220)
-CARD = rl.Color(12, 15, 19, 160)
 BORDER = rl.Color(255, 255, 255, 38)
-TEXT = rl.Color(245, 247, 250, 255)
 MUTED = rl.Color(190, 197, 205, 255)
-CONTROL_BADGE = rl.Color(36, 112, 184, 230)
-TRAFFIC_CARD_WIDTH = 940.0
-TRAFFIC_CARD_HEIGHT = 240.0
+TRAFFIC_CARD_WIDTH = 64.0
+TRAFFIC_CARD_HEIGHT = 128.0
 TRAFFIC_CARD_TOP_OFFSET = 47.0
-TRAFFIC_DISTANCE_FONT_SIZE = 82
-TRAFFIC_DETAIL_FONT_SIZE = 52
-TRAFFIC_SOURCE_FONT_SIZE = 36
-TRAFFIC_SOURCE_BADGE_HEIGHT = 58.0
-TRAFFIC_SOURCE_BADGE_PADDING = 22.0
-TRAFFIC_LIGHT_HOUSING_WIDTH = 92.0
-TRAFFIC_LIGHT_HOUSING_HEIGHT = 192.0
-TRAFFIC_LIGHT_RADIUS = 22.0
-TRAFFIC_TEXT_X_OFFSET = 140.0
+TRAFFIC_LIGHT_HOUSING_WIDTH = 52.0
+TRAFFIC_LIGHT_HOUSING_HEIGHT = 116.0
+TRAFFIC_LIGHT_RADIUS = 10.0
+CONTROL_OUTLINE = rl.Color(64, 156, 255, 255)
 TRAFFIC_ACTION_NOTICE_HOLD_S = 2.0
 TRAFFIC_ACTIONS = (1, 2, 3, 4, 5)
 TRAFFIC_STOP_NOTICE_PHASES = (
@@ -52,6 +42,12 @@ def traffic_card_rect(rect: rl.Rectangle) -> rl.Rectangle:
     TRAFFIC_CARD_WIDTH,
     TRAFFIC_CARD_HEIGHT,
   )
+
+
+def traffic_control_highlighted(state: TrafficSignalDisplayState) -> bool:
+  # No recent-action latch: blue means control is applied in the current plan.
+  return bool(state.visible and state.control_active and not state.driver_override_active
+              and state.phase not in (int(TrafficControlPhase.off), int(TrafficControlPhase.passed)))
 
 
 @dataclass(frozen=True)
@@ -243,15 +239,13 @@ def traffic_notice_text(notice: TrafficActionNotice) -> tuple[str, rl.Color]:
 
 
 class TrafficControlRenderer(Widget):
-  """Compact traffic-light card driven by the already-published final plan."""
+  """Icon-only traffic signal driven by the already-published final plan."""
 
   def __init__(self) -> None:
     super().__init__()
     self.state = TrafficSignalDisplayState()
     self.notice: TrafficActionNotice | None = None
     self._notice_latch = TrafficActionNoticeLatch()
-    self.font = gui_app.font(FontWeight.BOLD)
-    self.font_regular = gui_app.font(FontWeight.NORMAL)
 
   def update(self) -> None:
     sm = ui_state.sm
@@ -274,62 +268,20 @@ class TrafficControlRenderer(Widget):
     if not self.state.visible:
       return
 
-    # Keep the signal card close to the header so it remains visible above the
-    # expanded eGPU diagnostics on the left side.
-    card = traffic_card_rect(rect)
-    x, y = card.x, card.y
-    rl.draw_rectangle_rounded(card, 0.28, 12, CARD)
-    rl.draw_rectangle_rounded_lines_ex(card, 0.28, 12, 2, BORDER)
+    icon = traffic_card_rect(rect)
+    housing = rl.Rectangle(icon.x + 6, icon.y + 6, TRAFFIC_LIGHT_HOUSING_WIDTH, TRAFFIC_LIGHT_HOUSING_HEIGHT)
+    highlighted = traffic_control_highlighted(self.state)
+    if highlighted:
+      rl.draw_rectangle_rounded(icon, 0.6, 12, rl.Color(CONTROL_OUTLINE.r, CONTROL_OUTLINE.g, CONTROL_OUTLINE.b, 38))
+    rl.draw_rectangle_rounded(housing, 0.6, 12, rl.Color(12, 15, 19, 210))
+    rl.draw_rectangle_rounded_lines_ex(housing, 0.6, 12, 2.5 if highlighted else 1.0,
+                                       CONTROL_OUTLINE if highlighted else BORDER)
 
-    housing = rl.Rectangle(x + 22, y + 24, TRAFFIC_LIGHT_HOUSING_WIDTH, TRAFFIC_LIGHT_HOUSING_HEIGHT)
-    rl.draw_rectangle_rounded(housing, 0.45, 10, rl.Color(0, 0, 0, 190))
-    colors = (RED, AMBER, GREEN)
-    states = (1, 3, 2)
-    for index, (color, state) in enumerate(zip(colors, states, strict=True)):
-      center = rl.Vector2(housing.x + housing.width / 2, housing.y + 40 + index * 56)
-      active = self.state.has_signal and self.state.light_state == state
-      if self.state.has_signal and self.state.flashing and state == 2:
+    for index, (color, light) in enumerate(zip((RED, AMBER, GREEN), (1, 3, 2), strict=True)):
+      center = rl.Vector2(housing.x + housing.width / 2, housing.y + housing.height * (2 * index + 1) / 6)
+      active = self.state.has_signal and self.state.light_state == light
+      if self.state.has_signal and self.state.flashing and light == 2:
         active = int(gui_app.frame / max(1, gui_app.target_fps // 2)) % 2 == 0
       if active:
-        glow = 6.0 + 4.0 * math.sin(gui_app.frame / max(1, gui_app.target_fps) * math.pi)
-        rl.draw_circle_v(center, 20.0 + glow, rl.Color(color.r, color.g, color.b, 42))
+        rl.draw_circle_v(center, TRAFFIC_LIGHT_RADIUS + 3, rl.Color(color.r, color.g, color.b, 35))
       rl.draw_circle_v(center, TRAFFIC_LIGHT_RADIUS, color if active else LAMP_OFF)
-
-    distance_text = f"{self.state.distance_m:.0f} m" if self.state.has_signal else "-- m"
-    distance_size = TRAFFIC_DISTANCE_FONT_SIZE
-    distance_pos = rl.Vector2(x + TRAFFIC_TEXT_X_OFFSET, y + 22)
-    rl.draw_text_ex(self.font, distance_text, distance_pos, distance_size, 0, TEXT)
-
-    source = tr("Tesla Traffic Control") if self.notice is not None else ""
-    if source:
-      source_size = measure_text_cached(self.font_regular, source, TRAFFIC_SOURCE_FONT_SIZE, 0)
-      badge_width = source_size.x + 2.0 * TRAFFIC_SOURCE_BADGE_PADDING
-      badge = rl.Rectangle(
-        card.x + card.width - badge_width - 22.0,
-        y + 32.0,
-        badge_width,
-        TRAFFIC_SOURCE_BADGE_HEIGHT,
-      )
-      rl.draw_rectangle_rounded(badge, 0.45, 8, CONTROL_BADGE)
-      rl.draw_text_ex(
-        self.font_regular,
-        source,
-        rl.Vector2(
-          badge.x + TRAFFIC_SOURCE_BADGE_PADDING,
-          badge.y + (badge.height - source_size.y) / 2.0,
-        ),
-        TRAFFIC_SOURCE_FONT_SIZE,
-        0,
-        TEXT,
-      )
-
-    detail, detail_color = traffic_notice_text(self.notice) if self.notice is not None else ("", MUTED)
-    if detail:
-      rl.draw_text_ex(
-        self.font_regular,
-        detail,
-        rl.Vector2(x + TRAFFIC_TEXT_X_OFFSET, y + 154),
-        TRAFFIC_DETAIL_FONT_SIZE,
-        0,
-        detail_color,
-      )

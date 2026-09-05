@@ -11,6 +11,9 @@ from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 
+BOTTOM_STATUS_FONT_SIZE = 34
+BOTTOM_STATUS_COLOR = rl.WHITE
+
 
 @dataclass
 class UiElement:
@@ -46,17 +49,17 @@ def build_device_resource_elements(device_state) -> list[UiElement]:
   memory_used = int(device_state.memoryUsagePercent)
   disk_free = int(round(float(device_state.freeSpacePercent)))
   return [
-    UiElement(cpu_value, "CPU", "°", rl.WHITE),
-    UiElement(str(memory_used), "MEM", "%", rl.WHITE),
-    UiElement(str(disk_free), "DSK", "%", rl.WHITE),
+    UiElement(cpu_value, "CPU", "°", BOTTOM_STATUS_COLOR),
+    UiElement(str(memory_used), "MEM", "%", BOTTOM_STATUS_COLOR),
+    UiElement(str(disk_free), "DSK", "%", BOTTOM_STATUS_COLOR),
   ]
 
 
-def build_bottom_status_elements(device_state, egpu_text: str = "", egpu_color: rl.Color = rl.WHITE) -> list[UiElement]:
+def build_bottom_status_elements(device_state, egpu_text: str = "") -> list[UiElement]:
   resources = build_device_resource_elements(device_state)
   if not egpu_text:
     return resources
-  return [UiElement(egpu_text, "", "", egpu_color), *resources]
+  return [UiElement(egpu_text, "", "", BOTTOM_STATUS_COLOR), *resources]
 
 
 class LeadInfoElement:

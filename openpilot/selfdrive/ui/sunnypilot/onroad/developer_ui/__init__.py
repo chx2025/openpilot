@@ -14,7 +14,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
   AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
-  build_bottom_status_elements,
+  build_bottom_status_elements, BOTTOM_STATUS_FONT_SIZE, BOTTOM_STATUS_COLOR,
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -158,13 +158,12 @@ class DeveloperUiRenderer(Widget):
       memory_used_mb=int(telemetry.memoryUsedMb), memory_total_mb=int(telemetry.memoryTotalMb),
       gpu_usage_percent=int(telemetry.gpuUsagePercent),
     )
-    egpu_color = rl.Color(80, 220, 120, 255) if egpu.healthy else rl.Color(255, 180, 60, 255)
-    elements = build_bottom_status_elements(sm['deviceState'], egpu.text if egpu.visible else "", egpu_color)
+    elements = build_bottom_status_elements(sm['deviceState'], egpu.text if egpu.visible else "")
 
     if not elements:
       return
 
-    font_size = 34
+    font_size = BOTTOM_STATUS_FONT_SIZE
     element_widths = []
     for element in elements:
       element.measure(self._font_bold, font_size)
@@ -184,12 +183,12 @@ class DeveloperUiRenderer(Widget):
       current_x += element_widths[i] + gap_width
 
   def _draw_bottom_dev_ui_element(self, center_x: int, y: int, element: UiElement) -> None:
-    font_size = 34
+    font_size = BOTTOM_STATUS_FONT_SIZE
     start_x = center_x - element.total_width / 2
 
-    rl.draw_text_ex(self._font_bold, element.label_text, rl.Vector2(start_x, y - font_size // 2), font_size, 0, rl.WHITE)
+    rl.draw_text_ex(self._font_bold, element.label_text, rl.Vector2(start_x, y - font_size // 2), font_size, 0, BOTTOM_STATUS_COLOR)
     rl.draw_text_ex(self._font_bold, element.val_text, rl.Vector2(start_x + element.label_width, y - font_size // 2), font_size, 0, element.color)
 
     if element.unit:
       rl.draw_text_ex(self._font_bold, element.unit_text, rl.Vector2(start_x + element.label_width + element.val_width, y - font_size // 2),
-                      font_size, 0, rl.WHITE)
+                      font_size, 0, BOTTOM_STATUS_COLOR)

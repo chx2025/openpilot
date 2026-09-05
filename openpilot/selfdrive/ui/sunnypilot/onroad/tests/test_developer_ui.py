@@ -1,8 +1,10 @@
 from types import SimpleNamespace
+import pyray as rl
 
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   build_bottom_status_elements,
   build_device_resource_elements,
+  BOTTOM_STATUS_FONT_SIZE,
 )
 
 
@@ -38,3 +40,21 @@ def test_bottom_status_puts_compact_gpu_text_before_device_resources():
   assert elements[0].label == ""
   assert elements[0].value.startswith("IDM: 20.0FPS")
   assert [item.label for item in elements[1:]] == ["CPU", "MEM", "DSK"]
+  assert all(item.color == rl.WHITE for item in elements)
+
+
+def test_gpu_and_device_text_use_identical_font_size_and_color(monkeypatch):
+  from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiRenderer
+  import openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements as element_module
+  renderer = DeveloperUiRenderer.__new__(DeveloperUiRenderer)
+  renderer._font_bold = object()
+  monkeypatch.setattr(element_module, "measure_text_cached", lambda font, text, size, spacing: SimpleNamespace(x=len(text) * size))
+  calls = []
+  monkeypatch.setattr(rl, "draw_text_ex", lambda *args: calls.append(args))
+  elements = build_bottom_status_elements(SimpleNamespace(cpuTempC=[63], memoryUsagePercent=38, freeSpacePercent=40), "CTM: 19.6FPS")
+  for element in elements:
+    element.measure(renderer._font_bold, BOTTOM_STATUS_FONT_SIZE)
+    renderer._draw_bottom_dev_ui_element(100, 40, element)
+  assert calls
+  assert all(call[0] is renderer._font_bold and call[3] == 34 for call in calls)
+  assert all(call[5] == rl.WHITE for call in calls)
