@@ -2,7 +2,8 @@ import threading
 import unittest
 
 from openpilot.sunnypilot.modeld_v2.egpu_loader import (
-  C3XL_AM_POWER_LIMIT_W, C3XL_MODEL_LOAD_TIMEOUT, C3XL_TINYGRAD_CACHE_HOME, EgpuModelLoadError, configure_default_device, load_with_timeout,
+  C3XL_AM_POWER_LIMIT_W, C3XL_AMD_USB_POLL_US, C3XL_MODEL_LOAD_TIMEOUT, C3XL_TINYGRAD_CACHE_HOME,
+  EgpuModelLoadError, configure_default_device, load_with_timeout,
 )
 
 
@@ -44,6 +45,20 @@ class TestEgpuLoading(unittest.TestCase):
     environment = {}
     configure_default_device(True, environment, c3xl=False)
     self.assertNotIn("AM_POWER_LIMIT", environment)
+
+  def test_c3xl_defaults_usb_poll_to_100us_without_overriding_explicit_value(self):
+    environment = {}
+    configure_default_device(True, environment, c3xl=True)
+    self.assertEqual(C3XL_AMD_USB_POLL_US, 100)
+    self.assertEqual(environment["AMD_USB_POLL_US"], "100")
+    environment = {"AMD_USB_POLL_US": "500"}
+    configure_default_device(True, environment, c3xl=True)
+    self.assertEqual(environment["AMD_USB_POLL_US"], "500")
+
+  def test_standard_hardware_does_not_set_usb_poll_interval(self):
+    environment = {}
+    configure_default_device(True, environment)
+    self.assertNotIn("AMD_USB_POLL_US", environment)
 
   def test_propagates_loader_exception(self):
     original = RuntimeError("USB AMD initialization failed")
