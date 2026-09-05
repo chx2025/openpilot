@@ -871,3 +871,23 @@ msgstr "✓ 已訂閱"
 msgid "🔥 Firehose Mode 🔥"
 msgstr "🔥 Firehose 模式 🔥"
 
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop at Red Lights / Stop Signs"
+msgstr "紅綠燈／停止標誌停等"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop for red lights and stop signs using the driving model's own predicted trajectory to place a virtual stop-line obstacle for the planner. No separate traffic light detector is required."
+msgstr "利用駕駛模型自身預測的行駛軌跡，在停止線位置放置虛擬障礙物，讓規劃器據此煞車，藉此在紅綠燈與停止標誌前停等。不需要額外的紅綠燈偵測器。"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Stop Line Position Adjust"
+msgstr "停止線位置微調"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "Fine-tune where the virtual stop-line obstacle is placed. Positive values move it further away (stop later, closer to the line); negative values pull it closer to the car (stop earlier, further back from the line)."
+msgstr "微調虛擬停止線障礙物的放置位置。正值會將其移動至較遠處（較晚煞車、較接近停止線）；負值則會將其拉近至本車（較早煞車、停在較後方）。"
+
+#: selfdrive\ui\sunnypilot\layouts\settings\cruise.py
+msgid "meters"
+msgstr "米"
+

@@ -87,6 +87,23 @@ class CruiseLayout(Widget):
       description=tr("Enable toggle to allow the model to determine when to use sunnypilot ACC or sunnypilot End to End Longitudinal."),
       param="DynamicExperimentalControl")
 
+    self.traffic_stop_toggle = toggle_item_sp(
+      title=tr("Stop at Red Lights / Stop Signs"),
+      description=tr("Stop for red lights and stop signs using the driving model's own predicted trajectory to place "
+                      "a virtual stop-line obstacle for the planner. No separate traffic light detector is required."),
+      param="TrafficStopEnabled",
+      callback=self._on_traffic_stop_toggle)
+
+    self.traffic_stop_distance_adjust = option_item_sp(
+      title=tr("Stop Line Position Adjust"),
+      description=tr("Fine-tune where the virtual stop-line obstacle is placed. Positive values move it further away "
+                      "(stop later, closer to the line); negative values pull it closer to the car "
+                      "(stop earlier, further back from the line)."),
+      param="TrafficStopDistanceAdjust",
+      min_value=-5, max_value=5, value_change_step=1,
+      label_callback=self._get_traffic_stop_distance_adjust_label,
+      inline=True)
+
     items = [
     #   self.icbm_toggle,
       self.dec_toggle,
@@ -95,9 +112,19 @@ class CruiseLayout(Widget):
       self.custom_acc_toggle,
       self.custom_acc_short_increment,
       self.custom_acc_long_increment,
+      self.traffic_stop_toggle,
+      self.traffic_stop_distance_adjust,
       self.sla_settings_button,
     ]
     return items
+
+  @staticmethod
+  def _get_traffic_stop_distance_adjust_label(value):
+    sign = "+" if value > 0 else ("-" if value < 0 else "")
+    return f"{sign}{abs(value)} {tr('meters')}"
+
+  def _on_traffic_stop_toggle(self, state):
+    self.traffic_stop_distance_adjust.set_visible(state)
 
   def _render(self, rect):
     if self._current_panel == PanelType.SLA:
@@ -110,6 +137,8 @@ class CruiseLayout(Widget):
     self._scroller.show_event()
     self.icbm_toggle.show_description(True)
     self.custom_acc_toggle.show_description(True)
+    self.traffic_stop_toggle.show_description(True)
+    self._on_traffic_stop_toggle(self.traffic_stop_toggle.action_item.get_state())
 
   def _set_current_panel(self, panel: PanelType):
     self._current_panel = panel
@@ -147,15 +176,18 @@ class CruiseLayout(Widget):
         self.dec_toggle.action_item.set_enabled(has_long)
         self.scc_v_toggle.action_item.set_enabled(True)
         self.scc_m_toggle.action_item.set_enabled(True)
+        self.traffic_stop_toggle.action_item.set_enabled(has_long)
       else:
         ui_state.params.remove("CustomAccIncrementsEnabled")
         ui_state.params.remove("DynamicExperimentalControl")
         ui_state.params.remove("SmartCruiseControlVision")
         ui_state.params.remove("SmartCruiseControlMap")
+        ui_state.params.remove("TrafficStopEnabled")
         self.custom_acc_toggle.action_item.set_enabled(False)
         self.dec_toggle.action_item.set_enabled(False)
         self.scc_v_toggle.action_item.set_enabled(False)
         self.scc_m_toggle.action_item.set_enabled(False)
+        self.traffic_stop_toggle.action_item.set_enabled(False)
 
     else:
       has_icbm = has_long = False
