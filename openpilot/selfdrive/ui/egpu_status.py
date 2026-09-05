@@ -197,6 +197,9 @@ def draw_egpu_status_panel(rect: rl.Rectangle, font: rl.Font, *, compact: bool) 
   model_big = bool(model_alive and sm["modelV2"].big)
   telemetry = sm["chestnutState"]
   telemetry_valid = bool(sm.alive["chestnutState"] and sm.valid["chestnutState"] and telemetry.metricsValid)
+  # 模型在 eGPU(PCIe L0)运行时也视为已连接，避免热插拔后 USB 管理口未重枚举导致的假断开
+  if not connected and telemetry_valid and int(telemetry.pcieLtssm) == 0x78:
+    connected = True
   active_bundle = ui_state.active_bundle
   model_name = ""
   if isinstance(active_bundle, dict):

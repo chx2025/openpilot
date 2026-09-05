@@ -68,6 +68,10 @@ class SidebarSP:
 
   def _update_egpu_status(self):
     present = resolve_egpu_connection(ui_state.sm["deviceState"])
+    # 模型在 eGPU(PCIe L0)运行时也视为已连接，避免热插拔后 USB 管理口未重枚举导致的假 OFFLINE
+    if not present and ui_state.sm.alive["chestnutState"] and ui_state.sm.valid["chestnutState"] and \
+       int(ui_state.sm["chestnutState"].pcieLtssm) == 0x78:
+      present = True
     eject_status = ui_state.params.get("UsbGpuEjectStatus")
     speed_mbps = chestnut_usb_speed_mbps(ui_state.sm["deviceState"])
     telemetry = ui_state.sm["chestnutState"]

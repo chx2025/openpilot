@@ -94,7 +94,7 @@ class UIState(UIStateSP):
     self.experimental_mode_confirmed: bool = self.params.get_bool("ExperimentalModeConfirmed")
     self.chestnut_present: bool = False
     self.chestnut_compiled: bool = chestnut_model_ready(self.params)
-    self.chestnut_active: bool | None = self.params.get("ChestnutActive")
+    self.chestnut_active: bool = self.params.get_bool("ChestnutActive")
     self.chestnut_loading: bool = self.params.get_bool("ChestnutLoading")
     self.chestnut_loading_progress = self._read_chestnut_loading_progress()
     self.chestnut_state = ChestnutState.DISCONNECTED
@@ -266,7 +266,7 @@ class UIState(UIStateSP):
       self.chestnut_state = ChestnutState.FAILED
     elif self.chestnut_loading or not model_seen:
       self.chestnut_state = ChestnutState.LOADING
-    elif self.chestnut_active is False:
+    elif not self.chestnut_active:
       self.chestnut_state = ChestnutState.FAILED
     else:
       self.chestnut_state = ChestnutState.ACTIVE
@@ -289,7 +289,7 @@ class UIState(UIStateSP):
     self.experimental_mode_confirmed = self.params.get_bool("ExperimentalModeConfirmed")
     if not self.chestnut_compiled:
       self.chestnut_compiled = chestnut_model_ready(self.params)
-    self.chestnut_active = self.params.get("ChestnutActive")
+    self.chestnut_active = self.params.get_bool("ChestnutActive")
     self.chestnut_loading = self.params.get_bool("ChestnutLoading")
     self.chestnut_loading_progress = self._read_chestnut_loading_progress()
 
