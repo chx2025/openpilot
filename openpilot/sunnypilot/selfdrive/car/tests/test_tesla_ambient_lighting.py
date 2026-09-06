@@ -4,7 +4,7 @@ from opendbc.can import CANPacker, CANParser
 
 from openpilot.sunnypilot.selfdrive.car.tesla.ambient_lighting import AmbientLightingController, red_frame, REQUEST_PARAM
 
-TEMPLATE = bytes.fromhex("111234563206feab")
+TEMPLATE = bytes.fromhex("0cffd5aa00f801")  # Captured from the vehicle at 0x679@VEH.
 
 
 @pytest.mark.parametrize("side,targets", [("left", [1, 0, 1, 0, 1, 0]), ("right", [0, 1, 0, 1, 0, 1])])
@@ -15,13 +15,13 @@ def test_red_only_and_preserves_unrelated_template_bits(side, targets):
   v = parser.vl["UI_ambientLightingCtrls"]
   assert [v["UI_rgbTarget" + suffix] for suffix in ("DOORFL", "DOORFR", "DOORRL", "DOORRR", "IPFL", "IPFR")] == targets
   assert [v["UI_rgbLightingColorHex" + c] for c in ("Red", "Green", "Blue")] == [255, 0, 0]
-  assert v["UI_rgbBrightnessLevel"] == 50
+  assert v["UI_rgbBrightnessLevel"] == 100
   assert v["UI_rgbEnableState"] == 1 and v["UI_rgbEffectType"] == 0 and v["UI_audioVisualizerState"] == 0
-  assert data[6] & 0xFE == TEMPLATE[6] & 0xFE and data[7] == TEMPLATE[7]
+  assert data[6] & 0xFE == TEMPLATE[6] & 0xFE
 
 
-@pytest.mark.parametrize("data,side", [(TEMPLATE, "both"), (b"", "left"), (b"\0" * 8, "left"), (b"\0" * 4 + b"\x7f" * 4, "right")])
-def test_invalid_request_or_brightness(data, side):
+@pytest.mark.parametrize("data,side", [(TEMPLATE, "both"), (b"", "left"), (b"\0" * 8, "left")])
+def test_invalid_request_or_length(data, side):
   with pytest.raises(ValueError):
     red_frame(data, side)
 

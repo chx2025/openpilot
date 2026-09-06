@@ -12,19 +12,17 @@ FRESH_NS = 1_000_000_000
 DURATION_NS = 3_000_000_000
 INTERVAL_NS = 100_000_000
 MAX_FRAMES = 30
-# Existing HW4 DBC: FL/RL doors + left IP, or FR/RR doors + right IP.
+# Captured HW4 frame is seven bytes: FL/RL doors + left IP, or FR/RR doors + right IP.
 TARGETS = {"left": (0xA8, 0), "right": (0x50, 1)}
 
 
 def red_frame(template: bytes, side: str) -> bytes:
-  if side not in TARGETS or len(template) != 8:
+  if side not in TARGETS or len(template) != 7:
     raise ValueError("只支持左侧或右侧红色测试")
-  brightness = template[4] & 0x7F
-  if not 1 <= brightness <= 100:
-    raise ValueError("请先在原车开启氛围灯并设置有效亮度")
   data = bytearray(template)
   data[0] = (data[0] & 1) | 2  # Preserve power override, ON, instant transition.
   data[1:4] = bytes((255, 0, 0))
+  data[4] = (data[4] & 0x80) | 100  # The live template reports 0; force a visible test level.
   data[5] = (data[5] & 0x06) | TARGETS[side][0]  # No audio visualizer; clear all other targets.
   data[6] = (data[6] & 0xFE) | TARGETS[side][1]
   return bytes(data)
@@ -45,7 +43,8 @@ class AmbientLightingController:
       self._observe_frame(now_ns, address, data, source)
 
   def _observe_frame(self, now_ns, address, data, source):
-    if len(data) != 8:
+    expected_length = 7 if address == ADDRESS else 8
+    if len(data) != expected_length:
       return
     if (address, source) in ((ADDRESS, BUS), (0x118, 0), (0x257, 0)):
       self.frames[address] = (bytes(data), now_ns)
