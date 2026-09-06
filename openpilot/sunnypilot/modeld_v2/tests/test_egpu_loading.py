@@ -46,14 +46,14 @@ class TestEgpuLoading(unittest.TestCase):
     configure_default_device(True, environment, c3xl=False)
     self.assertNotIn("AM_POWER_LIMIT", environment)
 
-  def test_c3xl_defaults_usb_poll_to_100us_without_overriding_explicit_value(self):
+  def test_c3xl_defaults_usb_poll_to_official_500us_without_overriding_explicit_value(self):
     environment = {}
     configure_default_device(True, environment, c3xl=True)
-    self.assertEqual(C3XL_AMD_USB_POLL_US, 100)
-    self.assertEqual(environment["AMD_USB_POLL_US"], "100")
-    environment = {"AMD_USB_POLL_US": "500"}
-    configure_default_device(True, environment, c3xl=True)
+    self.assertEqual(C3XL_AMD_USB_POLL_US, 500)
     self.assertEqual(environment["AMD_USB_POLL_US"], "500")
+    environment = {"AMD_USB_POLL_US": "750"}
+    configure_default_device(True, environment, c3xl=True)
+    self.assertEqual(environment["AMD_USB_POLL_US"], "750")
 
   def test_standard_hardware_does_not_set_usb_poll_interval(self):
     environment = {}
