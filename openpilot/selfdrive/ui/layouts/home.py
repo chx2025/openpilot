@@ -1,12 +1,9 @@
 import time
 import pyray as rl
-from collections.abc import Callable
 from enum import IntEnum
 from openpilot.common.params import Params
 from openpilot.selfdrive.ui.widgets.offroad_alerts import UpdateAlert, OffroadAlert
-from openpilot.selfdrive.ui.widgets.exp_mode_button import ExperimentalModeButton
 from openpilot.selfdrive.ui.widgets.tesla_vehicle import TeslaVehicleWidget
-from openpilot.selfdrive.ui.widgets.setup import SetupWidget
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from openpilot.system.ui.lib.multilang import tr, trn
@@ -15,9 +12,8 @@ from openpilot.system.ui.widgets import Widget
 
 HEADER_HEIGHT = 80
 HEAD_BUTTON_FONT_SIZE = 40
-CONTENT_MARGIN = 40
+CONTENT_MARGIN = 24
 SPACING = 25
-RIGHT_COLUMN_WIDTH = 750
 REFRESH_INTERVAL = 10.0
 
 
@@ -39,7 +35,6 @@ class HomeLayout(Widget):
 
     self.current_state = HomeLayoutState.HOME
     self.last_refresh = 0
-    self.settings_callback: Callable[[], None] | None = None
 
     self.update_available = False
     self.alert_count = 0
@@ -49,43 +44,29 @@ class HomeLayout(Widget):
 
     self.header_rect = rl.Rectangle(0, 0, 0, 0)
     self.content_rect = rl.Rectangle(0, 0, 0, 0)
-    self.left_column_rect = rl.Rectangle(0, 0, 0, 0)
-    self.right_column_rect = rl.Rectangle(0, 0, 0, 0)
 
     self.update_notif_rect = rl.Rectangle(0, 0, 200, HEADER_HEIGHT - 10)
     self.alert_notif_rect = rl.Rectangle(0, 0, 220, HEADER_HEIGHT - 10)
 
     self._vehicle_widget = TeslaVehicleWidget()
-    self._setup_widget = SetupWidget()
 
-    self._exp_mode_button = ExperimentalModeButton()
     self._setup_callbacks()
 
   def show_event(self):
     super().show_event()
-    self._exp_mode_button.show_event()
     self.last_refresh = time.monotonic()
     self._refresh()
 
   def _setup_callbacks(self):
     self.update_alert.set_dismiss_callback(lambda: self._set_state(HomeLayoutState.HOME))
     self.offroad_alert.set_dismiss_callback(lambda: self._set_state(HomeLayoutState.HOME))
-    self._exp_mode_button.set_click_callback(lambda: self.settings_callback() if self.settings_callback else None)
-
-  def set_settings_callback(self, callback: Callable):
-    self.settings_callback = callback
 
   def _set_state(self, state: HomeLayoutState):
-    # propagate show/hide events
     if state != self.current_state:
-      if state == HomeLayoutState.HOME:
-        self._exp_mode_button.show_event()
-
       if state in self._layout_widgets:
         self._layout_widgets[state].show_event()
       if self.current_state in self._layout_widgets:
         self._layout_widgets[self.current_state].hide_event()
-
     self.current_state = state
 
   def _render(self, rect: rl.Rectangle):
@@ -94,7 +75,8 @@ class HomeLayout(Widget):
       self._refresh()
       self.last_refresh = current_time
 
-    self._render_header()
+    if self.update_available or self.alert_count:
+      self._render_header()
 
     # Render content based on current state
     if self.current_state == HomeLayoutState.HOME:
@@ -109,19 +91,12 @@ class HomeLayout(Widget):
       self._rect.x + CONTENT_MARGIN, self._rect.y + CONTENT_MARGIN, self._rect.width - 2 * CONTENT_MARGIN, HEADER_HEIGHT
     )
 
-    content_y = self._rect.y + CONTENT_MARGIN + HEADER_HEIGHT + SPACING
-    content_height = self._rect.height - CONTENT_MARGIN - HEADER_HEIGHT - SPACING - CONTENT_MARGIN
+    header_space = HEADER_HEIGHT + SPACING if self.update_available or self.alert_count else 0
+    content_y = self._rect.y + CONTENT_MARGIN + header_space
+    content_height = self._rect.height - 2 * CONTENT_MARGIN - header_space
 
     self.content_rect = rl.Rectangle(
       self._rect.x + CONTENT_MARGIN, content_y, self._rect.width - 2 * CONTENT_MARGIN, content_height
-    )
-
-    left_width = self.content_rect.width - RIGHT_COLUMN_WIDTH - SPACING
-
-    self.left_column_rect = rl.Rectangle(self.content_rect.x, self.content_rect.y, left_width, self.content_rect.height)
-
-    self.right_column_rect = rl.Rectangle(
-      self.content_rect.x + left_width + SPACING, self.content_rect.y, RIGHT_COLUMN_WIDTH, self.content_rect.height
     )
 
     self.update_notif_rect.x = self.header_rect.x
@@ -181,32 +156,13 @@ class HomeLayout(Widget):
     gui_label(version_rect, self._version_text, 48, rl.WHITE, alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT)
 
   def _render_home_content(self):
-    self._render_left_column()
-    self._render_right_column()
+    self._vehicle_widget.render(self.content_rect)
 
   def _render_update_view(self):
     self.update_alert.render(self.content_rect)
 
   def _render_alerts_view(self):
     self.offroad_alert.render(self.content_rect)
-
-  def _render_left_column(self):
-    self._vehicle_widget.render(self.left_column_rect)
-
-  def _render_right_column(self):
-    exp_height = 125
-    exp_rect = rl.Rectangle(
-      self.right_column_rect.x, self.right_column_rect.y, self.right_column_rect.width, exp_height
-    )
-    self._exp_mode_button.render(exp_rect)
-
-    setup_rect = rl.Rectangle(
-      self.right_column_rect.x,
-      self.right_column_rect.y + exp_height + SPACING,
-      self.right_column_rect.width,
-      self.right_column_rect.height - exp_height - SPACING,
-    )
-    self._setup_widget.render(setup_rect)
 
   def _refresh(self):
     self._version_text = self._get_version_text()
