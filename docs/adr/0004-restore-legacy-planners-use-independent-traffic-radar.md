@@ -81,19 +81,20 @@ Flashing-green advance STOP reuses this same controller and final-plan seam.
 The current DBC names color 0 NONE and color 4 OFF; neither color alone is a
 STOP or GO instruction. Only explicit OFF (4) can provide the dark half of a
 flashing candidate. NONE (0) is missing color evidence: it never counts as a
-blink and clears any unconfirmed candidate. Confirmation requires three
-sustained OFF pulses separated by sustained GREEN, on one in-range
-motion-consistent control point. Each observed half-cycle must last at least
-150 ms and successive dark edges must be 0.5 to 1.5 seconds apart. The third
-dark pulse also needs duration evidence from a later real CAN frame (either
-another dark frame or its return to GREEN). Repeated planner snapshots never
-prove a pulse duration, and dispatch latency never supplies the flash clock.
+blink and clears any unconfirmed candidate. Confirmation occurs on the second
+OFF edge after a complete GREEN/OFF/GREEN cycle on one in-range,
+motion-consistent control point. The initial GREEN, first OFF and intervening
+GREEN must each last at least 150 ms, and the two OFF edges must be 0.5 to
+1.5 seconds apart. Do not wait for the second OFF to finish or for a third
+pulse: that delay consumes the advance stopping margin. Repeated planner
+snapshots never prove duration or a new edge, and dispatch latency never
+supplies the flash clock. An isolated OFF or GREEN/OFF/OFF cannot confirm.
 Per-frame and whole-candidate station continuity prevent different targets or
 a frozen distance during motion from sharing evidence. Unsupported frames,
 out-of-range distances and real-frame gaps over the existing 750 ms freshness
 bound clear unconfirmed evidence without releasing an owned STOP.
 
-After confirmation the detector no longer recounts pulses. The existing flash
+After confirmation the detector no longer collects a new candidate. The existing flash
 STOP remains in one session through continued blinking; continuous same-track
 GREEN releases it after 1.5 seconds measured from the first real GREEN frame.
 OFF, NONE, invalid observations and target discontinuities restart that exit timer.
@@ -103,7 +104,9 @@ emergency-style stop. A rejected session remains rejected when it turns RED.
 These evidence gates reduce known false-trigger patterns; no color/distance
 stream can distinguish an identically shaped OEM error from a physical blink,
 or reconstruct blink edges that were never sampled. The 150 ms half-cycle is
-a filtering policy and needs actual flashing-signal log validation.
+a filtering policy and needs actual flashing-signal log validation. The second
+OFF edge is intentionally not duration-confirmed; a second short OFF error
+after an otherwise qualifying cycle remains the explicit earlier-response tradeoff.
 
 The traffic-light state machine remains independent of `radarState`, but the
 post-plan bounded START uses a separate fail-closed lead gate. Any current lead
@@ -174,9 +177,10 @@ when updating upstream; these tests do not substitute for MPC/route validation.
   seam.
 - Yellow PASS, driver gas override, and the configured maximum-speed bypass are
   event-scoped: the same intersection cannot reacquire STOP ownership late.
-- Flashing green requires three sustained in-range GREEN(2)/OFF(4)
-  pulses with real-frame timing and a continuous stop station. A short pulse,
-  partial sequence or GREEN/NONE sequence cannot create a control phase.
+- Flashing green confirms on the second OFF(4) edge after sustained
+  GREEN(2)/OFF(4)/GREEN(2), with real-frame timing and a continuous stop station.
+  An isolated OFF, short initial OFF/GREEN, partial sequence or GREEN/NONE
+  sequence cannot create a control phase. The second OFF needs no extra sample.
   Confirmed flash reuses yellow comfort admission; stable same-track GREEN for
   the maximum flash interval releases it without repeating candidate detection.
 - A new stop session always rebases to its confirming CAN distance. A sustained

@@ -18,23 +18,31 @@ def feed(c, frames, *, delays=None):
   return decisions
 
 
-FLASH = [(1.0, 2, 80), (1.2, 4, 80), (1.7, 2, 80),
-         (2.2, 4, 80), (2.7, 2, 80), (3.2, 4, 80), (3.4, 4, 80)]
+FLASH = [(1.0, 2, 80), (1.2, 4, 80), (1.7, 2, 80), (2.2, 4, 80)]
 
 
-def test_third_off_must_persist_in_real_frames_before_flash_stop():
+def test_second_off_edge_confirms_without_waiting_for_another_frame():
   c = controller()
   decisions = feed(c, FLASH)
   assert all(not decision.apply_constraint for decision in decisions[:-1])
   assert decisions[-1].phase == TrafficControlPhase.flashingGreenStop
 
 
-def test_two_hz_flash_confirms_on_third_off_completion_without_yellow():
+def test_two_hz_flash_confirms_on_second_off_edge_without_yellow():
   c = controller()
-  frames = [(1.0 + i * 0.5, 2 if i % 2 == 0 else 4, 80) for i in range(7)]
+  frames = [(1.0 + i * 0.5, 2 if i % 2 == 0 else 4, 80) for i in range(4)]
   decisions = feed(c, frames)
   assert all(not decision.apply_constraint for decision in decisions[:-1])
   assert decisions[-1].phase == TrafficControlPhase.flashingGreenStop
+
+
+@pytest.mark.parametrize("blocked", [{"enabled": False}, {"long_active": False}, {"gas": True}])
+def test_second_off_edge_cannot_bypass_control_permission(blocked):
+  c = controller()
+  feed(c, FLASH[:-1])
+  decision = update(c, 2.2, observation(80, 4, 2.2), v_ego=0.0, **blocked)
+  assert not decision.apply_constraint
+  assert decision.stop_session_id == 0
 
 
 def test_explicit_dbc_off_code_can_confirm_flash_without_becoming_a_red_command():
@@ -45,7 +53,7 @@ def test_explicit_dbc_off_code_can_confirm_flash_without_becoming_a_red_command(
       # Observer preserves DBC OFF but does not label it RED/GREEN eligible.
       raw = replace(raw, valid_for_control=False, quality=0)
     decision = update(c, t, raw, v_ego=0.0)
-    if t < 3.4:
+    if t < 2.2:
       assert not decision.apply_constraint
   assert decision.phase == TrafficControlPhase.flashingGreenStop
   assert decision.light_state == 4
@@ -74,14 +82,14 @@ def test_raw_can_decode_distinguishes_none_from_off_before_flash_control(dlc, da
       assert raw.quality == 0
       assert not raw.valid_for_control
     decision = update(c, t, raw, v_ego=0.0)
-    if dark_color == 0 or t < 3.4:
+    if dark_color == 0 or t < 2.2:
       assert not decision.apply_constraint
   assert c.flash_latched == (dark_color == 4)
 
 
 def test_none_interrupts_pending_off_flash_evidence():
   c = controller()
-  frames = FLASH[:4] + [(2.4, 0, 80)] + FLASH[4:]
+  frames = FLASH[:3] + [(2.0, 0, 80)] + FLASH[3:]
   assert all(not d.apply_constraint for d in feed(c, frames))
 
 
@@ -95,11 +103,31 @@ def test_periodic_green_none_never_counts_as_flash():
   assert not c.flash_latched
 
 
-def test_period_restart_cannot_borrow_a_none_pulse():
+def test_none_does_not_count_but_a_new_complete_cycle_can_confirm():
   c = controller()
   frames = [(1.0, 2, 80), (1.2, 0, 80), (1.4, 2, 80), (1.6, 0, 80),
             (1.8, 2, 80), (2.2, 4, 80), (2.4, 2, 80), (2.8, 4, 80), (3.0, 4, 80)]
+  decisions = feed(c, frames)
+  assert all(not d.apply_constraint for d in decisions[:-2])
+  assert decisions[-2].phase == TrafficControlPhase.flashingGreenStop
+
+
+@pytest.mark.parametrize("tail_color", [2, 4])
+def test_single_off_then_steady_color_never_confirms_flash(tail_color):
+  c = controller()
+  frames = [(1.0, 2, 80), (1.5, 4, 80)]
+  frames += [(2.0 + i * 0.5, tail_color, 80) for i in range(10)]
   assert all(not d.apply_constraint for d in feed(c, frames))
+
+
+@pytest.mark.parametrize(("second_off_time", "expected"), [(1.6, False), (1.7, True), (2.7, True), (2.8, False)])
+def test_second_off_edge_still_requires_a_valid_flash_period(second_off_time, expected):
+  c = controller()
+  frames = [(1.0, 2, 80), (1.2, 4, 80), (1.4, 2, 80)]
+  if second_off_time > 2.0:
+    frames += [(1.9, 2, 80), (2.4, 2, 80)]
+  decisions = feed(c, frames + [(second_off_time, 4, 80)])
+  assert decisions[-1].apply_constraint == expected
 
 
 def test_isolated_explicit_off_never_starts_or_releases_a_stop():
@@ -146,36 +174,38 @@ def test_short_glitches_with_continuous_high_rate_can_never_count(short_color):
 
 def test_green_target_jump_cannot_borrow_old_flash_pulses():
   c = controller()
-  frames = FLASH[:4] + [(2.7, 2, 150), (3.2, 4, 150), (3.4, 4, 150)]
+  frames = FLASH[:2] + [(1.7, 2, 150), (2.2, 4, 150), (2.4, 4, 150)]
   assert all(not d.apply_constraint for d in feed(c, frames))
 
 
 @pytest.mark.parametrize("invalid", [
-  observation(80, 0, 2.4),
-  observation(80, 5, 2.4),
-  observation(80, 4, 2.4, control_type=0),
-  observation(254, 4, 2.4),
+  observation(80, 0, 2.0),
+  observation(80, 5, 2.0),
+  observation(80, 4, 2.0, control_type=0),
+  observation(254, 4, 2.0),
 ])
 def test_invalid_tuple_clears_pending_flash_evidence(invalid):
   c = controller()
-  feed(c, FLASH[:4])
-  update(c, 2.4, invalid, v_ego=0.0)
-  assert all(not d.apply_constraint for d in feed(c, FLASH[4:]))
+  feed(c, FLASH[:3])
+  update(c, 2.0, invalid, v_ego=0.0)
+  decisions = feed(c, FLASH[3:])
+  assert decisions and all(not d.apply_constraint for d in decisions)
 
 
-def test_repeated_third_off_snapshot_does_not_count_as_pulse_duration():
+@pytest.mark.parametrize("repeated_color", [2, 4])
+def test_repeated_snapshot_cannot_supply_the_second_off_edge(repeated_color):
   c = controller()
   feed(c, FLASH[:-1])
-  repeated = update(c, 3.4, observation(80, 4, 3.2), v_ego=0.0)
+  repeated = update(c, 2.0, observation(80, repeated_color, 1.7), v_ego=0.0)
   assert not repeated.apply_constraint
-  actual = update(c, 3.45, observation(80, 4, 3.45), v_ego=0.0)
+  actual = update(c, 2.2, observation(80, 4, 2.2), v_ego=0.0)
   assert actual.phase == TrafficControlPhase.flashingGreenStop
 
 
 def test_sampling_gap_under_two_seconds_still_breaks_flash_evidence():
   c = controller()
-  feed(c, FLASH[:4])
-  frames = [(3.1, 2, 80), (3.6, 4, 80), (3.8, 4, 80)]
+  feed(c, FLASH[:3])
+  frames = [(2.6, 2, 80), (3.1, 4, 80), (3.3, 4, 80)]
   assert all(not d.apply_constraint for d in feed(c, frames))
 
 
@@ -192,7 +222,7 @@ def test_brief_empty_snapshot_does_not_break_fresh_two_hz_flash_evidence():
 def test_flash_confirmation_uses_can_time_independent_of_dispatch_delay():
   immediate, delayed = controller(), controller()
   expected = feed(immediate, FLASH)
-  actual = feed(delayed, FLASH, delays=[0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.6])
+  actual = feed(delayed, FLASH, delays=[0.0, 0.0, 0.0, 0.6])
   assert [d.phase for d in actual] == [d.phase for d in expected]
   assert actual[-1].phase == TrafficControlPhase.flashingGreenStop
 
@@ -229,12 +259,12 @@ def test_target_jump_interrupts_stable_green_confirmation():
   assert decisions[-1].phase == TrafficControlPhase.release
 
 
-def test_two_hz_confirmation_on_green_starts_stable_exit_timer_immediately():
+def test_two_hz_second_off_confirmation_starts_exit_timer_on_next_green():
   c = controller()
-  frames = [(1.0 + i * 0.5, 2 if i % 2 == 0 else 4, 80) for i in range(7)]
+  frames = [(1.0 + i * 0.5, 2 if i % 2 == 0 else 4, 80) for i in range(4)]
   feed(c, frames)
   assert c.flash_latched
-  decisions = feed(c, [(4.5, 2, 80), (5.0, 2, 80), (5.5, 2, 80)])
+  decisions = feed(c, [(3.0, 2, 80), (3.5, 2, 80), (4.0, 2, 80), (4.5, 2, 80)])
   assert all(d.phase == TrafficControlPhase.flashingGreenStop for d in decisions[:-1])
   assert decisions[-1].phase == TrafficControlPhase.release
 

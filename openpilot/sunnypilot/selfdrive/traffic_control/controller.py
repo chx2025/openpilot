@@ -57,7 +57,6 @@ class TrafficControlConfig:
   yellow_pass_decel: float = 3.0
   flash_interval_min_s: float = 0.5
   flash_interval_max_s: float = 1.5
-  flash_required_pulses: int = 3
   flash_min_half_cycle_s: float = 0.15
   far_candidate_confirm_s: float = 0.5
   farther_replacement_confirm_s: float = 1.0
@@ -164,11 +163,10 @@ class TeslaTrafficControlController:
 
   def _clear_flash_candidate(self) -> None:
     self.first_off_ns = 0
-    self.flash_pulse_count = 0
     self.flash_color = -1
     self.flash_color_since_ns = 0
     self.flash_last_frame_ns = 0
-    self.flash_off_counted = False
+    self.flash_off_confirmed = False
     self.flash_anchor_station: float | None = None
 
   def set_config(self, config: TrafficControlConfig) -> None:
@@ -378,10 +376,10 @@ class TeslaTrafficControlController:
     self._set_release(now_ns, "signal_lost_release")
 
   def _observe_flash_pattern(self, observation: TeslaTrafficControlObservation) -> bool:
-    """Confirm three sustained OFF pulses, separated by sustained GREEN.
+    """Confirm on the second OFF edge after sustained OFF and GREEN.
 
     Only real CAN frames prove duration. Repeated planner snapshots cannot
-    turn one OFF edge into a confirmed pulse. This detector never owns STOP;
+    turn one OFF edge into a repeated flash. This detector never owns STOP;
     it emits one confirmation and the existing latched STOP owns its exit.
     """
     # DBC NONE (0) means no recognized light, not an extinguished light. Only
@@ -412,15 +410,15 @@ class TeslaTrafficControlController:
         # Small per-frame jumps must not cumulatively bridge different control
         # points or a frozen distance while the vehicle is still moving.
         self._clear_flash_candidate()
+    confirmed = False
     min_half_ns = int(self.config.flash_min_half_cycle_s * 1e9)
     max_half_ns = int(self.config.flash_interval_max_s * 1e9) - min_half_ns
     duration_ns = frame_ns - self.flash_color_since_ns
-    if self.flash_color == 4 and self.first_off_ns and not self.flash_off_counted:
+    if self.flash_color == 4 and self.first_off_ns and not self.flash_off_confirmed:
       if duration_ns > max_half_ns or (color == 2 and duration_ns < min_half_ns):
         self._clear_flash_candidate()
       elif duration_ns >= min_half_ns:
-        self.flash_pulse_count += 1
-        self.flash_off_counted = True
+        self.flash_off_confirmed = True
 
     if color != self.flash_color:
       if color == 4:
@@ -430,11 +428,15 @@ class TeslaTrafficControlController:
           int(self.config.flash_interval_min_s * 1e9) <= period_ns
           <= int(self.config.flash_interval_max_s * 1e9)
         )
+        # A complete GREEN/OFF/GREEN cycle plus the next OFF edge proves
+        # repetition. Do not wait for that second OFF to finish or a third
+        # pulse: at 2 Hz those extra samples consume the stopping margin.
+        confirmed = bool(valid_green and valid_period and self.flash_off_confirmed)
         if not valid_green or (self.first_off_ns and not valid_period):
           self._clear_flash_candidate()
         if valid_green:
           self.first_off_ns = frame_ns
-          self.flash_off_counted = False
+          self.flash_off_confirmed = False
       self.flash_color = color
       self.flash_color_since_ns = frame_ns
     elif self.first_off_ns and duration_ns > max_half_ns:
@@ -445,10 +447,7 @@ class TeslaTrafficControlController:
     self.flash_last_frame_ns = frame_ns
     if self.flash_anchor_station is None and color == 2:
       self.flash_anchor_station = self.ego_station + observation.distance
-    return bool(
-      self.flash_pulse_count >= self.config.flash_required_pulses
-      and self.flash_off_counted
-    )
+    return confirmed
 
   def _far_stop_candidate(self, observation: TeslaTrafficControlObservation, v_ego: float) -> bool:
     if observation.light_state not in (1, 3):

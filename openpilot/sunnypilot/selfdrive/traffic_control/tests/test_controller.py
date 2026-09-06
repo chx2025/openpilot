@@ -633,7 +633,7 @@ def test_stop_only_mode_releases_the_stop_without_requesting_go():
   assert decision.phase == TrafficControlPhase.release
 
 
-def test_three_in_range_green_off_pulses_latch_flashing_green_stop():
+def test_second_in_range_off_edge_latches_flashing_green_stop():
   c = controller()
   update(c, 1.0, observation(80.0, 2, 1.0), v_ego=8.0)
   update(c, 1.1, observation(79.2, 2, 1.1), v_ego=8.0)
@@ -641,23 +641,16 @@ def test_three_in_range_green_off_pulses_latch_flashing_green_stop():
   assert first_off.phase == TrafficControlPhase.off
   update(c, 1.7, observation(74.4, 2, 1.7), v_ego=8.0)
   second_off = update(c, 2.2, observation(70.4, 4, 2.2), v_ego=8.0)
-  assert second_off.phase == TrafficControlPhase.off
-  assert not second_off.apply_constraint
-  update(c, 2.7, observation(66.4, 2, 2.7), v_ego=8.0)
-  third_off = update(c, 3.2, observation(62.4, 4, 3.2), v_ego=8.0)
-  assert not third_off.apply_constraint
-  confirmed_off = update(c, 3.4, observation(60.8, 4, 3.4), v_ego=8.0)
-  assert confirmed_off.phase == TrafficControlPhase.flashingGreenStop
-  assert confirmed_off.apply_constraint
+  assert second_off.phase == TrafficControlPhase.flashingGreenStop
+  assert second_off.apply_constraint
   assert c.flash_latched
 
 
-def test_irregular_third_green_off_pulse_resets_flash_candidate():
+def test_irregular_second_off_edge_resets_flash_candidate():
   c = controller()
   for now_s, distance, light in (
-    (1.0, 80.0, 2), (1.1, 79.2, 4),
-    (1.6, 75.2, 2), (2.1, 71.2, 4),
-    (2.6, 67.2, 2), (4.2, 54.4, 4),
+    (1.0, 80.0, 2), (1.2, 78.4, 4),
+    (1.7, 74.4, 2), (3.3, 61.6, 4),
   ):
     decision = update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
   assert decision.phase == TrafficControlPhase.off

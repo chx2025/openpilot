@@ -20,11 +20,11 @@ from openpilot.sunnypilot.selfdrive.traffic_control.tests.test_final_plan_arbitr
 from openpilot.sunnypilot.selfdrive.traffic_control.tests.test_radar_state import red_light_sm
 
 
-FLASH_FRAMES = ((1.0, 2), (1.2, 4), (1.7, 2), (2.2, 4), (2.7, 2), (3.2, 4), (3.4, 4))
+FLASH_FRAMES = ((1.0, 2), (1.2, 4), (1.7, 2), (2.2, 4))
 
 
 class FlashControlChain:
-  def __init__(self, *, v_ego=8.0, distance=80.0, near_lead=False):
+  def __init__(self, *, v_ego=8.0, distance=70.0, near_lead=False):
     self.source = TrafficRadarSource(
       TrafficControlConfig(mode=TrafficControlMode.stopGo), TrafficRadarGoPolicy.active,
     )
@@ -32,7 +32,7 @@ class FlashControlChain:
     self.source_sm["carState"].vEgo = v_ego
     self.source_sm["carState"].vCruise = 50.0
     self.initial_distance = distance
-    # This envelope includes the remaining 55.8 m when the third OFF confirms.
+    # The second OFF confirms with 55.4 m left, inside the comfort horizon.
     self.arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.3))
     self.plan_sm = fake_sm(v_ego=v_ego)
     self.plan_sm.values["carState"] = self.source_sm["carState"]
@@ -65,7 +65,7 @@ def test_confirmed_flash_stops_before_yellow_and_stable_green_releases_to_base()
   chain = FlashControlChain()
   for now_s, color in FLASH_FRAMES:
     target = chain.step(now_s, color)
-    if now_s < 3.4:
+    if now_s < 2.2:
       assert not target.targetPresent
       assert not target.plannerStartRequested
       assert plan_output(chain.plan) == chain.original_plan
@@ -84,7 +84,7 @@ def test_confirmed_flash_stops_before_yellow_and_stable_green_releases_to_base()
   assert not target.plannerStartRequested
   session_id = target.stopSessionId
 
-  for now_s in (3.7, 4.2, 4.7):
+  for now_s in (2.7, 3.2, 3.7):
     target = chain.step(now_s, 2)
     assert target.phase == int(TrafficControlPhase.flashingGreenStop)
     assert target.stopSessionId == session_id
@@ -92,7 +92,7 @@ def test_confirmed_flash_stops_before_yellow_and_stable_green_releases_to_base()
     assert not chain.display.startApplied
     assert chain.display.action == int(TrafficPlanAction.stop)
 
-  released = chain.step(5.2, 2)
+  released = chain.step(4.2, 2)
   assert released.phase == int(TrafficControlPhase.release)
   assert released.stopSessionId == session_id
   assert plan_output(chain.plan) == chain.original_plan
@@ -106,8 +106,8 @@ def test_continued_flashing_keeps_one_stop_session_and_does_not_delay_stable_gre
   session_id = chain.target.stopSessionId
 
   for now_s, color in (
-    (3.7, 2), (4.2, 4), (4.4, 4), (4.7, 2), (5.2, 4), (5.4, 4),
-    (5.7, 2), (6.2, 4), (6.4, 4), (6.7, 2), (7.2, 2), (7.7, 2),
+    (2.7, 2), (3.2, 4), (3.4, 4), (3.7, 2), (4.2, 4), (4.4, 4),
+    (4.7, 2), (5.2, 4), (5.4, 4), (5.7, 2), (6.2, 2), (6.7, 2),
   ):
     target = chain.step(now_s, color)
     assert target.phase == int(TrafficControlPhase.flashingGreenStop)
@@ -116,7 +116,7 @@ def test_continued_flashing_keeps_one_stop_session_and_does_not_delay_stable_gre
     assert chain.display.action == int(TrafficPlanAction.stop)
     assert not chain.display.startApplied
 
-  released = chain.step(8.2, 2)
+  released = chain.step(7.2, 2)
   assert released.phase == int(TrafficControlPhase.release)
   assert released.stopSessionId == session_id
   assert plan_output(chain.plan) == chain.original_plan
@@ -126,12 +126,12 @@ def test_flash_hold_release_still_blocks_active_go_for_a_near_lead():
   chain = FlashControlChain(v_ego=0.0, distance=5.0, near_lead=True)
   for now_s, color in FLASH_FRAMES:
     chain.step(now_s, color)
-  for now_s in (3.7, 4.2, 4.7):
+  for now_s in (2.7, 3.2, 3.7):
     target = chain.step(now_s, 2)
     assert not target.plannerStartRequested
     assert not chain.display.startApplied
 
-  released = chain.step(5.2, 2)
+  released = chain.step(4.2, 2)
   assert released.phase == int(TrafficControlPhase.release)
   assert released.plannerStartRequested
   assert chain.display.startBlockReason == int(TrafficStartBlockReason.physicalLead)
