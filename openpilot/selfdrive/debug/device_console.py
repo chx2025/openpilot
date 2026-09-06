@@ -106,6 +106,10 @@ def render_page() -> bytes:
     .vehicle-wheel small { color:#8996a3; font-size:12px; } .vehicle-wheel strong { display:block; color:#eef1f3; font-size:27px; font-weight:500; line-height:1.5; font-variant-numeric:tabular-nums; }
     .vehicle-wheel.warn strong { color:#f5616c; } .vehicle-stats { display:grid; gap:32px; border-left:1px solid #2a3037; padding-left:26px; }
     .vehicle-stats .vehicle-value { font-size:32px; margin-top:12px; } .vehicle-lights { background:#1a1e23; border-radius:16px; padding:16px; }
+    .vehicle-data-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:12px 0; }
+    .vehicle-data-cell { background:#1a1e23; border-radius:12px; padding:13px; min-width:0; }
+    .vehicle-data-cell small { color:#8996a3; display:block; font-size:11px; margin-bottom:6px; }
+    .vehicle-data-cell strong { color:#eef1f3; font-size:20px; font-weight:500; font-variant-numeric:tabular-nums; }
     .vehicle-light-head { display:flex; align-items:center; justify-content:space-between; color:#8996a3; font-size:12px; }
     .vehicle-light-head .vehicle-label { color:#e1e6e9; font-size:15px; } .vehicle-light-head svg { color:#f5616c; }
     .vehicle-light-buttons { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px; }
@@ -117,6 +121,7 @@ def render_page() -> bytes:
     .vehicle-details p { font-size:12px; color:#8996a3; margin:7px 0; }
     @media(max-width:600px) { #vehicle-panel { padding:18px; border-radius:18px; } .vehicle-body { grid-template-columns:1fr; gap:22px; }
       .vehicle-stats { border-left:0; border-top:1px solid #2a3037; padding:20px 0 0; grid-template-columns:1fr 1fr; gap:20px; }
+      .vehicle-data-grid { grid-template-columns:repeat(2,1fr); }
       .vehicle-stats .vehicle-value { font-size:29px; } #vehicle-soc { font-size:48px; } .vehicle-hero { gap:20px; }
       .vehicle-car-stage { max-width:390px; width:100%; margin:auto; } .vehicle-value { font-size:32px; }
     }
@@ -166,17 +171,22 @@ function renderVehicle(data) {
     <path d="M23 63h94l-12 41H35Z" fill="#111418"/><rect x="34" y="106" width="72" height="80" rx="8" fill="#262c33"/><path d="M35 190h70l12 29H23Z" fill="#111418"/>
     <path d="M29 35h82" stroke="#e5edf2" stroke-width="3"/><path d="M28 241h25m34 0h25" stroke="#f5616c" stroke-width="3"/>
     <path id="vehicle-light-left" d="M22 108v76" stroke="#71818f" stroke-width="3"/><path id="vehicle-light-right" d="M118 108v76" stroke="#71818f" stroke-width="3"/></svg>
-    <div class="vehicle-wheel"><small>左前</small><strong id="pressure-0">—</strong><small>bar</small></div><div class="vehicle-wheel"><small>右前</small><strong id="pressure-1">—</strong><small>bar</small></div><div class="vehicle-wheel"><small>左后</small><strong id="pressure-2">—</strong><small>bar</small></div><div class="vehicle-wheel"><small>右后</small><strong id="pressure-3">—</strong><small>bar</small></div></div>
+    <div class="vehicle-wheel"><small>左前</small><strong id="pressure-0">—</strong><small id="tpms-battery-0">电池 —</small></div><div class="vehicle-wheel"><small>右前</small><strong id="pressure-1">—</strong><small id="tpms-battery-1">电池 —</small></div><div class="vehicle-wheel"><small>左后</small><strong id="pressure-2">—</strong><small id="tpms-battery-2">电池 —</small></div><div class="vehicle-wheel"><small>右后</small><strong id="pressure-3">—</strong><small id="tpms-battery-3">电池 —</small></div></div>
     <div class="vehicle-stats"><div><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 2-3 20M18 2l3 20M12 3v5m0 8v5"/></svg>总里程</div><div class="vehicle-value" id="vehicle-odometer">—</div><div class="vehicle-note">km</div></div>
-    <div><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14 2-9 12h7l-2 8 9-12h-7Z"/></svg>观测电耗</div><div class="vehicle-value" id="vehicle-consumption">—</div><div class="vehicle-note">kWh/100 km</div></div></div></div>`;
+    <div><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14 2-9 12h7l-2 8 9-12h-7Z"/></svg>累计放电</div><div class="vehicle-value" id="vehicle-discharge">—</div><div class="vehicle-note">kWh</div></div>
+    <div><div class="vehicle-label">累计充电</div><div class="vehicle-value" id="vehicle-charge">—</div><div class="vehicle-note">kWh</div></div></div></div>
+    <div class="vehicle-data-grid"><div class="vehicle-data-cell"><small>高压电池电压</small><strong id="hv-voltage">—</strong></div><div class="vehicle-data-cell"><small>高压电池电流</small><strong id="hv-current">—</strong></div><div class="vehicle-data-cell"><small>高压电池功率</small><strong id="hv-power">—</strong></div><div class="vehicle-data-cell"><small>高压状态</small><strong id="hv-state">—</strong></div></div>
+    <div class="vehicle-data-grid"><div class="vehicle-data-cell"><small>左前刹车</small><strong id="brake-0">—</strong></div><div class="vehicle-data-cell"><small>右前刹车</small><strong id="brake-1">—</strong></div><div class="vehicle-data-cell"><small>左后刹车</small><strong id="brake-2">—</strong></div><div class="vehicle-data-cell"><small>右后刹车</small><strong id="brake-3">—</strong></div></div>`;
   const set=(id,value)=>document.getElementById(id).textContent=value;
-  set('vehicle-connection',[v.soc,v.odometer,v.consumption].some(value=>value&&value!=='—')?'车辆信息':'等待车辆');set('vehicle-soc',v.soc||'—');
+  set('vehicle-connection',[v.soc,v.odometer].some(value=>value&&value!=='—')?'车辆信息':'等待车辆');set('vehicle-soc',v.soc||'—');
   const soc=parseFloat(v.soc);document.getElementById('vehicle-battery-fill').style.width=(Number.isFinite(soc)?Math.max(0,Math.min(100,soc)):0)+'%';
   set('vehicle-ip','IP '+(data.device_ip||'—'));
   set('vehicle-range','—');set('vehicle-range-note',v.range==='待核实单位'?'单位待核实':'等待数据');
-  set('vehicle-odometer',(v.odometer||'—').replace(' km',''));set('vehicle-consumption',(v.consumption||'—').replace(' kWh/100 km',''));
-  for(let i=0;i<4;i++){const w=(v.pressure||[])[i]||{};set('pressure-'+i,(w.text||'—').replace(' bar',''));document.getElementById('pressure-'+i).parentElement.classList.toggle('warn',!!w.warning);}
-  set('vehicle-extra',(v.range_note||'等待续航信号')+'；累计放电 '+(v.discharge||'—')+' / 充电 '+(v.charge||'—')+'。'+(v.consumption_note||'')+'。氛围灯指令 '+(v.ambient?.hex_color||'—'));
+  set('vehicle-odometer',(v.odometer||'—').replace(' km',''));set('vehicle-discharge',(v.discharge||'—').replace(' kWh',''));set('vehicle-charge',(v.charge||'—').replace(' kWh',''));
+  for(let i=0;i<4;i++){const w=(v.pressure||[])[i]||{};set('pressure-'+i,(w.text||'—').replace(' bar',''));set('tpms-battery-'+i,'电池 '+(w.battery||'—'));document.getElementById('pressure-'+i).parentElement.classList.toggle('warn',!!w.warning);}
+  const hv=v.high_voltage||{};set('hv-voltage',hv.voltage||'—');set('hv-current',hv.current||'—');set('hv-power',hv.power||'—');set('hv-state',hv.hv_state||'—');
+  for(let i=0;i<4;i++)set('brake-'+i,(v.brakes||[])[i]?.text||'—');
+  set('vehicle-extra',(v.range_note||'等待续航信号')+'；接触器 '+(hv.contactor||'—')+'；电池状态 '+(hv.state||'—')+'；充电 '+(hv.charge_status||'—'));
   document.querySelectorAll('.ambient-red').forEach(b=>{b.disabled=ambientBusy;b.classList.toggle('unready',!data.ambient_test_available);});
   if(!ambientResultShown&&!ambientBusy)set('ambient-result',data.ambient_test_available?'可测试':'等待原车氛围灯信号');
 }
