@@ -30,6 +30,7 @@ from openpilot.selfdrive.debug.device_system_diagnostics import (
   collect_system_diagnostics,
 )
 from openpilot.selfdrive.debug.device_terminal import change_password, run_command, terminal_status
+from openpilot.selfdrive.debug.device_network import device_ip_address
 from openpilot.selfdrive.debug.driving_status import driving_status_snapshot
 from openpilot.selfdrive.debug.tesla_ambient_test import run_ambient_test
 from openpilot.selfdrive.debug.unknown_can_observer import start_unknown_can_observer
@@ -90,7 +91,7 @@ def render_page() -> bytes:
     .tabs { overflow-x:auto; } .tabs button { white-space:nowrap; }
     #vehicle-panel { margin:24px 0 30px; background:#111418; border:1px solid #282d33; border-radius:24px; padding:24px; }
     .vehicle-head { display:flex; align-items:center; justify-content:space-between; color:#dce3e8; letter-spacing:3px; font-size:16px; }
-    .vehicle-head span { font-size:12px; letter-spacing:0; color:#8a97a3; } .vehicle-head span::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:#6ee2b4; margin-right:8px; }
+    .vehicle-head span { font-size:12px; letter-spacing:0; color:#8a97a3; } .vehicle-head #vehicle-connection::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:#6ee2b4; margin-right:8px; }
     .vehicle-icon { width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; flex:none; }
     .vehicle-hero { display:grid; grid-template-columns:1.5fr 1fr; gap:36px; padding:30px 0 26px; }
     .vehicle-label { display:flex; align-items:center; gap:10px; color:#8996a3; font-size:13px; }
@@ -124,7 +125,7 @@ def render_page() -> bytes:
   <h1>车载设置</h1><p>连接设备局域网后可直接访问普通设置；任意 Bash 终端单独使用密码。</p>
   <div class="tabs"><button class="tab active" id="settings-tab" onclick="showPanel('settings')">设置</button><button class="tab" id="driving-tab" onclick="showPanel('driving')">行驶信息</button><button class="tab" id="logs-tab" onclick="showPanel('logs')">日志下载</button><button class="tab" id="turn-tab" onclick="showPanel('turn')">Tesla 验证</button><button class="tab" id="terminal-tab" onclick="showPanel('terminal')">终端</button></div>
   <section id="vehicle-panel" aria-label="Tesla 车辆信息">
-    <div class="vehicle-head">TESLA <span id="vehicle-connection">等待车辆</span></div><div id="vehicle-metrics"></div>
+    <div class="vehicle-head">TESLA <span id="vehicle-ip">IP —</span><span id="vehicle-connection">等待车辆</span></div><div id="vehicle-metrics"></div>
     <div class="vehicle-lights"><div class="vehicle-light-head"><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16c0-3-3-3-3-7a7 7 0 0 1 14 0c0 4-3 4-3 7M8 19h8m-6 3h4"/></svg>氛围灯</div><span>红色 · 3 秒</span></div>
     <div class="vehicle-light-buttons"><button class="ambient-red" onclick="runAmbient('left')" aria-label="左侧氛围灯，红色测试三秒" disabled>左侧<svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button><button class="ambient-red" onclick="runAmbient('right')" aria-label="右侧氛围灯，红色测试三秒" disabled>右侧<svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button></div></div>
     <div id="ambient-result" role="status">P 挡静止后可测试</div>
@@ -171,6 +172,7 @@ function renderVehicle(data) {
   const set=(id,value)=>document.getElementById(id).textContent=value;
   set('vehicle-connection',[v.soc,v.odometer,v.consumption].some(value=>value&&value!=='—')?'车辆信息':'等待车辆');set('vehicle-soc',v.soc||'—');
   const soc=parseFloat(v.soc);document.getElementById('vehicle-battery-fill').style.width=(Number.isFinite(soc)?Math.max(0,Math.min(100,soc)):0)+'%';
+  set('vehicle-ip','IP '+(data.device_ip||'—'));
   set('vehicle-range','—');set('vehicle-range-note',v.range==='待核实单位'?'单位待核实':'等待数据');
   set('vehicle-odometer',(v.odometer||'—').replace(' km',''));set('vehicle-consumption',(v.consumption||'—').replace(' kWh/100 km',''));
   for(let i=0;i<4;i++){const w=(v.pressure||[])[i]||{};set('pressure-'+i,(w.text||'—').replace(' bar',''));document.getElementById('pressure-'+i).parentElement.classList.toggle('warn',!!w.warning);}
@@ -527,7 +529,8 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
       return
     if path == "/api/vehicle":
       data = driving_status_snapshot()
-      self._json(HTTPStatus.OK, {"vehicle": data["vehicle"], "ambient_test_ready": data["ambient_test_ready"]})
+      self._json(HTTPStatus.OK, {"vehicle": data["vehicle"], "ambient_test_ready": data["ambient_test_ready"],
+                                "device_ip": device_ip_address()})
       return
     if path == "/api/driving-status":
       try:

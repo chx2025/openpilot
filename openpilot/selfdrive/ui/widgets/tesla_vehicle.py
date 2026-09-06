@@ -127,6 +127,7 @@ class TeslaVehicleWidget(Widget):
     rl.draw_rectangle_rounded(rect, .045, 18, bg)
     v = self.data.get("vehicle", {})
     text("TESLA", 46, 24, 260, 38, height=60)
+    text("IP " + (self.data.get("device_ip") or "—"), 760, 26, 635, 32, muted, rl.GuiTextAlignment.TEXT_ALIGN_RIGHT, 54)
     alive = not self.error and any(v.get(key) not in (None, "—") for key in ("soc", "odometer", "consumption"))
     rl.draw_circle_v(point(1460, 52), 6 * scale, green if alive else muted)
     text("车辆信息" if alive else "等待车辆", 1480, 26, 160, 27, muted, height=54)

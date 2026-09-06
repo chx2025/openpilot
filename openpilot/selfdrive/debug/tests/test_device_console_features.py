@@ -92,10 +92,11 @@ def test_speed_validation_reports_safety_block(monkeypatch, server):
 
 
 def test_vehicle_route_returns_shared_summary(monkeypatch, server):
+  monkeypatch.setattr(device_console, "device_ip_address", lambda: "192.168.10.179")
   snapshot = {"vehicle": {"soc": "72.5 %"}, "ambient_test_ready": False, "geometry": {}}
   monkeypatch.setattr(device_console, "driving_status_snapshot", lambda: snapshot)
   with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/api/vehicle", timeout=2) as response:
-    assert json.loads(response.read()) == {"vehicle": snapshot["vehicle"], "ambient_test_ready": False}
+    assert json.loads(response.read()) == {"vehicle": snapshot["vehicle"], "ambient_test_ready": False, "device_ip": "192.168.10.179"}
 
 
 def test_ambient_route_fixed_color_and_input_validation(monkeypatch, server):
