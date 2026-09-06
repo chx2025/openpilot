@@ -31,6 +31,7 @@ from openpilot.selfdrive.debug.device_system_diagnostics import (
 )
 from openpilot.selfdrive.debug.device_terminal import change_password, run_command, terminal_status
 from openpilot.selfdrive.debug.driving_status import driving_status_snapshot
+from openpilot.selfdrive.debug.tesla_ambient_test import run_ambient_test
 from openpilot.selfdrive.debug.unknown_can_observer import start_unknown_can_observer
 from openpilot.selfdrive.debug.tesla_speed_button_test import SpeedButtonAction, run_validation
 
@@ -86,10 +87,49 @@ def render_page() -> bytes:
     .log-range { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:16px 0; } .log-range label { display:grid; gap:6px; color:#cbd5e1; font-size:13px; } .log-range input { width:100%; box-sizing:border-box; }
     .log-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; } #log-download { background:#2563eb; } #log-delete { background:#dc2626; } #log-preview { min-height:52px; margin-top:14px; white-space:pre-wrap; }
     @media (max-width:600px) { .log-range, .chart-grid { grid-template-columns:1fr; } .chart-grid { gap:9px; } .signal-chart { height:210px; } }
+    .tabs { overflow-x:auto; } .tabs button { white-space:nowrap; }
+    #vehicle-panel { margin:24px 0 30px; background:#111418; border:1px solid #282d33; border-radius:24px; padding:24px; }
+    .vehicle-head { display:flex; align-items:center; justify-content:space-between; color:#dce3e8; letter-spacing:3px; font-size:16px; }
+    .vehicle-head span { font-size:12px; letter-spacing:0; color:#8a97a3; } .vehicle-head span::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:#6ee2b4; margin-right:8px; }
+    .vehicle-icon { width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+    .vehicle-hero { display:grid; grid-template-columns:1.5fr 1fr; gap:36px; padding:30px 0 26px; }
+    .vehicle-label { display:flex; align-items:center; gap:10px; color:#8996a3; font-size:13px; }
+    .vehicle-value { font-size:38px; font-weight:500; letter-spacing:-1.5px; line-height:1.25; font-variant-numeric:tabular-nums; color:#eef1f3; }
+    #vehicle-soc { font-size:64px; margin:8px 0 14px; } .battery-track { height:4px; border-radius:8px; background:#2d333a; overflow:hidden; }
+    #vehicle-battery-fill { height:100%; width:0; background:#6ee2b4; border-radius:8px; transition:width .3s; }
+    .vehicle-note { margin-top:5px; color:#8996a3; font-size:12px; } #vehicle-range { margin-top:12px; }
+    .vehicle-body { display:grid; grid-template-columns:1.6fr 1fr; gap:30px; align-items:center; padding:10px 0 24px; }
+    .vehicle-car-stage { height:265px; position:relative; min-width:0; } .vehicle-car { height:255px; width:132px; position:absolute; left:50%; top:4px; transform:translateX(-50%); }
+    .vehicle-wheel { position:absolute; width:88px; } .vehicle-wheel:nth-of-type(1) { left:0; top:14px; } .vehicle-wheel:nth-of-type(2) { right:0; top:14px; text-align:right; }
+    .vehicle-wheel:nth-of-type(3) { left:0; bottom:12px; } .vehicle-wheel:nth-of-type(4) { right:0; bottom:12px; text-align:right; }
+    .vehicle-wheel small { color:#8996a3; font-size:12px; } .vehicle-wheel strong { display:block; color:#eef1f3; font-size:27px; font-weight:500; line-height:1.5; font-variant-numeric:tabular-nums; }
+    .vehicle-wheel.warn strong { color:#f5616c; } .vehicle-stats { display:grid; gap:32px; border-left:1px solid #2a3037; padding-left:26px; }
+    .vehicle-stats .vehicle-value { font-size:32px; margin-top:12px; } .vehicle-lights { background:#1a1e23; border-radius:16px; padding:16px; }
+    .vehicle-light-head { display:flex; align-items:center; justify-content:space-between; color:#8996a3; font-size:12px; }
+    .vehicle-light-head .vehicle-label { color:#e1e6e9; font-size:15px; } .vehicle-light-head svg { color:#f5616c; }
+    .vehicle-light-buttons { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px; }
+    .ambient-red { display:flex; align-items:center; gap:12px; background:#2b2429; border:1px solid #523038; border-radius:10px; text-align:left; padding:14px; font-weight:500; }
+    .ambient-red::before { content:''; width:7px; height:7px; border-radius:50%; background:#f5616c; } .ambient-red svg { margin-left:auto; color:#f5616c; width:18px; }
+    .ambient-red:hover:not(:disabled) { background:#49272f; border-color:#f5616c; } .ambient-red:disabled { opacity:.4; }
+    #ambient-result { color:#8996a3; font-size:12px; margin-top:12px; min-height:18px; }
+    .vehicle-details { margin-top:12px; color:#8996a3; font-size:12px; line-height:1.8; } .vehicle-details summary { cursor:pointer; width:max-content; }
+    .vehicle-details p { font-size:12px; color:#8996a3; margin:7px 0; }
+    @media(max-width:600px) { #vehicle-panel { padding:18px; border-radius:18px; } .vehicle-body { grid-template-columns:1fr; gap:22px; }
+      .vehicle-stats { border-left:0; border-top:1px solid #2a3037; padding:20px 0 0; grid-template-columns:1fr 1fr; gap:20px; }
+      .vehicle-stats .vehicle-value { font-size:29px; } #vehicle-soc { font-size:48px; } .vehicle-hero { gap:20px; }
+      .vehicle-car-stage { max-width:390px; width:100%; margin:auto; } .vehicle-value { font-size:32px; }
+    }
   </style>
 </head><body><main>
   <h1>车载设置</h1><p>连接设备局域网后可直接访问普通设置；任意 Bash 终端单独使用密码。</p>
   <div class="tabs"><button class="tab active" id="settings-tab" onclick="showPanel('settings')">设置</button><button class="tab" id="driving-tab" onclick="showPanel('driving')">行驶信息</button><button class="tab" id="logs-tab" onclick="showPanel('logs')">日志下载</button><button class="tab" id="turn-tab" onclick="showPanel('turn')">Tesla 验证</button><button class="tab" id="terminal-tab" onclick="showPanel('terminal')">终端</button></div>
+  <section id="vehicle-panel" aria-label="Tesla 车辆信息">
+    <div class="vehicle-head">TESLA <span id="vehicle-connection">等待车辆</span></div><div id="vehicle-metrics"></div>
+    <div class="vehicle-lights"><div class="vehicle-light-head"><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16c0-3-3-3-3-7a7 7 0 0 1 14 0c0 4-3 4-3 7M8 19h8m-6 3h4"/></svg>氛围灯</div><span>红色 · 3 秒</span></div>
+    <div class="vehicle-light-buttons"><button class="ambient-red" onclick="runAmbient('left')" aria-label="左侧氛围灯，红色测试三秒" disabled>左侧<svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button><button class="ambient-red" onclick="runAmbient('right')" aria-label="右侧氛围灯，红色测试三秒" disabled>右侧<svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button></div></div>
+    <div id="ambient-result" role="status">P 挡静止后可测试</div>
+    <details class="vehicle-details"><summary>详细信息</summary><p id="vehicle-extra"></p><p id="ambient-detail">onroad、P 挡静止、原车氛围灯开启时可测试。10 Hz，持续 3 秒，最多 30 帧；实际变色请观察灯带。</p></details>
+  </section>
   <section id="settings-panel"><div id="mode" class="notice">正在读取设置…</div><div id="category-nav" class="category-nav"></div><div id="settings"></div></section>
   <section id="driving-panel" hidden><h1>行驶道路视图</h1><p>只读实时视图；融合 SP 模型与 HW4 Model Y 原车 CAN，不启动视频或屏幕采集。</p><div id="driving-state" class="notice">正在连接车辆数据…</div><div class="ped-coordinate-lab"><strong>行人坐标</strong><select id="pedestrian-coordinate-mode" onchange="setPedestrianCoordinateMode(this.value)"><option value="off">关闭（默认）</option><option value="dx_forward_dy_left">dX 前后 / dY 左右</option><option value="dx_forward_dy_right">dX 前后 / -dY 左右</option><option value="dy_forward_dx_left">dY 前后 / dX 左右</option><option value="dy_forward_dx_right">dY 前后 / -dX 左右</option></select><span>黄色/蓝色/粉色对应行人 #1/#2/#3；坐标单位为米。</span></div><canvas id="driving-canvas" aria-label="预测道路轨迹与原车感知"></canvas><div class="chart-grid"><article class="chart-card"><h2>横向 · OEM 0x488 / SP</h2><p>原车请求、SP 最终输出与实际方向盘转角；单位 deg，最近 60 秒。</p><canvas class="signal-chart" id="lateral-chart"></canvas></article><article class="chart-card"><h2>纵向加速度 · 0x2B9 / 0x209 / SP</h2><p>巡航上下限、FSD velocity profile、SP 规划/命令与实车；单位 m/s²。</p><canvas class="signal-chart" id="accel-chart"></canvas></article><article class="chart-card"><h2>纵向目标速度 · 0x2B9 / 0x209 / SP</h2><p>原车巡航、FSD 未来目标和 SP 速度输出；单位 km/h。</p><canvas class="signal-chart" id="speed-chart"></canvas></article><article class="chart-card"><h2>SP / FSD 车道线</h2><p>20m 前视横向偏移；SP modelV2 始终可用，FSD 0x239 仅在 CH 报文真实到达时显示。</p><canvas class="signal-chart" id="lane-chart"></canvas></article></div><div class="log-actions"><button id="unknown-export" onclick="exportUnknownCan()">导出 0x37A / 0x3A9 / 0x3B1 采样 JSON</button></div><div id="unknown-can-state" class="notice">后台采集最近 60 秒；等待目标报文。</div><details id="can-diagnostics" class="can-diagnostics"><summary>CAN 诊断详情（可选）</summary><div id="can-details" class="can-grid"></div></details><div id="driving-alert" class="notice drive-alert" hidden></div></section>
   <section id="turn-panel" hidden>
@@ -113,6 +153,46 @@ def render_page() -> bytes:
 <script>
 let settingsState = null, hotspotState = null, selectedCategory = null, currentPanel = 'settings', drivingLoading = false, logsStatus = null, logsInitialized = false, logsPreviewValid = false, lastDrivingData = null;
 const signalHistory = [], SIGNAL_WINDOW_MS = 60000;
+let ambientBusy = false, vehicleLoading = false, ambientResultShown = false;
+function renderVehicle(data) {
+  const v=data.vehicle||{}, root=document.getElementById('vehicle-metrics');
+  if(!root.children.length) root.innerHTML=`
+    <div class="vehicle-hero"><div><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="18" height="12" rx="2"/><path d="M23 10v4M6 9v6m4-6v6m4-6v6"/></svg>电量</div><div class="vehicle-value" id="vehicle-soc">—</div><div class="battery-track"><div id="vehicle-battery-fill"></div></div></div>
+    <div><div class="vehicle-label">续航</div><div class="vehicle-value" id="vehicle-range">—</div><div class="vehicle-note" id="vehicle-range-note"></div></div></div>
+    <div class="vehicle-body"><div class="vehicle-car-stage" aria-label="四轮胎压位置图">
+    <svg class="vehicle-car" viewBox="0 0 140 270" aria-hidden="true"><rect x="8" y="54" width="10" height="42" rx="4" fill="#050709"/><rect x="122" y="54" width="10" height="42" rx="4" fill="#050709"/><rect x="8" y="199" width="10" height="39" rx="4" fill="#050709"/><rect x="122" y="199" width="10" height="39" rx="4" fill="#050709"/>
+    <path d="M70 5C26 5 15 28 15 68v153c0 31 14 43 55 43s55-12 55-43V68C125 28 114 5 70 5Z" fill="#b2bbc4" stroke="#46505b" stroke-width="3"/>
+    <path d="M23 63h94l-12 41H35Z" fill="#111418"/><rect x="34" y="106" width="72" height="80" rx="8" fill="#262c33"/><path d="M35 190h70l12 29H23Z" fill="#111418"/>
+    <path d="M29 35h82" stroke="#e5edf2" stroke-width="3"/><path d="M28 241h25m34 0h25" stroke="#f5616c" stroke-width="3"/>
+    <path id="vehicle-light-left" d="M22 108v76" stroke="#71818f" stroke-width="3"/><path id="vehicle-light-right" d="M118 108v76" stroke="#71818f" stroke-width="3"/></svg>
+    <div class="vehicle-wheel"><small>左前</small><strong id="pressure-0">—</strong><small>bar</small></div><div class="vehicle-wheel"><small>右前</small><strong id="pressure-1">—</strong><small>bar</small></div><div class="vehicle-wheel"><small>左后</small><strong id="pressure-2">—</strong><small>bar</small></div><div class="vehicle-wheel"><small>右后</small><strong id="pressure-3">—</strong><small>bar</small></div></div>
+    <div class="vehicle-stats"><div><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 2-3 20M18 2l3 20M12 3v5m0 8v5"/></svg>总里程</div><div class="vehicle-value" id="vehicle-odometer">—</div><div class="vehicle-note">km</div></div>
+    <div><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14 2-9 12h7l-2 8 9-12h-7Z"/></svg>观测电耗</div><div class="vehicle-value" id="vehicle-consumption">—</div><div class="vehicle-note">kWh/100 km</div></div></div></div>`;
+  const set=(id,value)=>document.getElementById(id).textContent=value;
+  set('vehicle-connection',[v.soc,v.odometer,v.consumption].some(value=>value&&value!=='—')?'车辆信息':'等待车辆');set('vehicle-soc',v.soc||'—');
+  const soc=parseFloat(v.soc);document.getElementById('vehicle-battery-fill').style.width=(Number.isFinite(soc)?Math.max(0,Math.min(100,soc)):0)+'%';
+  set('vehicle-range','—');set('vehicle-range-note',v.range==='待核实单位'?'单位待核实':'等待数据');
+  set('vehicle-odometer',(v.odometer||'—').replace(' km',''));set('vehicle-consumption',(v.consumption||'—').replace(' kWh/100 km',''));
+  for(let i=0;i<4;i++){const w=(v.pressure||[])[i]||{};set('pressure-'+i,(w.text||'—').replace(' bar',''));document.getElementById('pressure-'+i).parentElement.classList.toggle('warn',!!w.warning);}
+  set('vehicle-extra',(v.range_note||'等待续航信号')+'；累计放电 '+(v.discharge||'—')+' / 充电 '+(v.charge||'—')+'。'+(v.consumption_note||'')+'。氛围灯指令 '+(v.ambient?.hex_color||'—'));
+  document.querySelectorAll('.ambient-red').forEach(b=>b.disabled=ambientBusy||!data.ambient_test_ready);
+  if(!ambientResultShown&&!ambientBusy)set('ambient-result',data.ambient_test_ready?'':'P 挡静止后可测试');
+}
+renderVehicle({});
+
+async function loadVehicle() {
+  if(vehicleLoading)return;vehicleLoading=true;
+  try{const r=await apiFetch('/api/vehicle',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);renderVehicle(await r.json());}
+  catch(e){renderVehicle({});document.getElementById('ambient-result').textContent='等待车辆连接';}
+  finally{vehicleLoading=false;}
+}
+async function runAmbient(side) {
+  if(ambientBusy)return;ambientBusy=true;ambientResultShown=true;document.querySelectorAll('.ambient-red').forEach(b=>b.disabled=true);
+  const status=document.getElementById('ambient-result');status.textContent=(side==='left'?'左侧':'右侧')+' · 正在发送 3 秒';document.getElementById('vehicle-light-'+side)?.setAttribute('stroke','#f5616c');
+  try{const r=await apiFetch('/api/tesla/ambient',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({side})});const result=await r.json();status.textContent=({sent:'测试结束 · 请观察灯带',no_echo:'未收到回显',rejected:'发送被拒绝',blocked:'测试已停止',timeout:'测试超时'})[result.state]||(r.ok?'测试结束':'暂不可测试');document.getElementById('ambient-detail').textContent=result.message||'未知结果';}
+  catch(e){status.textContent='连接失败';document.getElementById('ambient-detail').textContent='不能确认发送：'+e;}finally{ambientBusy=false;document.getElementById('vehicle-light-'+side)?.setAttribute('stroke','#71818f');loadVehicle();}
+}
+setInterval(()=>{if(!document.hidden)loadVehicle();},1000);loadVehicle();
 function apiFetch(url, options = {}) { return fetch(url, options); }
 let pedestrianCoordinateMode = localStorage.getItem('pedestrianCoordinateMode') || 'off';
 function setPedestrianCoordinateMode(value) { pedestrianCoordinateMode = value; localStorage.setItem('pedestrianCoordinateMode', value); loadDrivingStatus(); }
@@ -445,6 +525,10 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
       except ValueError as error:
         self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(error)})
       return
+    if path == "/api/vehicle":
+      data = driving_status_snapshot()
+      self._json(HTTPStatus.OK, {"vehicle": data["vehicle"], "ambient_test_ready": data["ambient_test_ready"]})
+      return
     if path == "/api/driving-status":
       try:
         self._json(HTTPStatus.OK, driving_status_snapshot())
@@ -481,6 +565,20 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
 
   def do_POST(self) -> None:
     if not self._authorize_api():
+      return
+    if self.path == "/api/tesla/ambient":
+      try:
+        length = int(self.headers.get("Content-Length", "0"))
+        if not 0 < length <= 256:
+          raise ValueError("请求内容无效")
+        payload = json.loads(self.rfile.read(length))
+        if not isinstance(payload, dict) or set(payload) != {"side"}:
+          raise ValueError("仅接受 side；颜色固定为红色")
+        self._json(HTTPStatus.OK, run_ambient_test(payload["side"]))
+      except ValueError as error:
+        self._json(HTTPStatus.BAD_REQUEST, {"message": str(error)})
+      except RuntimeError as error:
+        self._json(HTTPStatus.CONFLICT, {"message": str(error)})
       return
     if self.path == "/api/logs/delete":
       try:

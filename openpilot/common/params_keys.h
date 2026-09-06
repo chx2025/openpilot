@@ -252,6 +252,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TeslaTouchLongitudinalSwitch", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaApHybrid", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaDynamicApLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"TeslaAmbientLightingRequest", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
+    {"TeslaAmbientLightingStatus", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"TeslaSpeedButtonValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaTurnSignalValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
     // Retired: no runtime/UI consumers; retain compatibility with prebuilt native registries.

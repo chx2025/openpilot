@@ -83,3 +83,21 @@ def test_simplified_chinese_fallback_keeps_regular_weight_identity():
     6: "NotoSansCJKsc-Regular",
   }
   assert weight == 400
+
+
+def test_vehicle_card_and_can_results_have_runtime_glyphs():
+  root = Path(__file__).resolve().parents[3]
+  paths = (
+    "selfdrive/ui/widgets/tesla_vehicle.py",
+    "selfdrive/debug/tesla_vehicle_summary.py",
+    "selfdrive/debug/tesla_ambient_test.py",
+    "sunnypilot/selfdrive/car/tesla/ambient_lighting.py",
+  )
+  characters = set()
+  for path in paths:
+    for node in ast.walk(ast.parse((root / path).read_text())):
+      if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        characters.update(c for c in node.value if '\u4e00' <= c <= '\u9fff' or c in '·—…')
+  assert characters <= fallback_font_characters("zh-CHS", _runtime_extra_font_chars())
+  with TTFont(FONT_PATH) as font:
+    assert set(map(ord, characters)) <= set(font.getBestCmap())

@@ -22,6 +22,8 @@ VEH_MESSAGES = (
   "APP_roadDisturbance",
   "BMS_hvBusStatus",
   "BMS_status",
+  "BMS_socStatus",
+  "UI_range",
   "VCSEC_TPMSData",
   "VCSEC_TPMSDisplay",
   "TPMS_data",
@@ -851,6 +853,10 @@ class TeslaCanVisualization:
   def _battery_diagnostics(self, now_ns: int) -> dict[str, Any]:
     bus_frame = self._frame("BMS_hvBusStatus", now_ns, VEH_DIAGNOSTIC_STALE_NS)
     status_frame = self._frame("BMS_status", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    soc_frame = self._frame("BMS_socStatus", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    range_frame = self._frame("UI_range", now_ns, VEH_DIAGNOSTIC_STALE_NS)
+    soc = _measurement(soc_frame[0] if soc_frame else {}, "BMS_socUI")
+    rated_range = _measurement(range_frame[0] if range_frame else {}, "UI_ratedRange", (1023.0,), 0)
     bus_values = bus_frame[0] if bus_frame else {}
     status = status_frame[0] if status_frame else {}
     contactor_code = _int(status, "BMS_contactorState") if status_frame else None
@@ -859,7 +865,10 @@ class TeslaCanVisualization:
     requested_state_code = _int(status, "BMS_smStateRequest") if status_frame else None
     hv_code = _int(status, "BMS_hvState") if status_frame else None
     return {
-      "available": bool(bus_frame or status_frame),
+      "available": bool(bus_frame or status_frame or soc_frame or range_frame),
+      "soc_percent": soc if soc is not None and 0 <= soc <= 100 else None,
+      "rated_range_raw": rated_range,
+      "rated_range_unit_confirmed": False,
       "sources": sorted(filter(None, (self._bus(bus_frame), self._bus(status_frame)))),
       "dc_link_voltage_v": _measurement(bus_values, "BMS_dcLinkVoltage"),
       "pack_current_a": _measurement(bus_values, "BMS_packCurrent", (-3276.8,)),
