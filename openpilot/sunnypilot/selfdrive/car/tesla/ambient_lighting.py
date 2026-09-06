@@ -46,7 +46,7 @@ class AmbientLightingController:
     expected_length = 7 if address == ADDRESS else 8
     if len(data) != expected_length:
       return
-    if (address, source) in ((ADDRESS, BUS), (0x118, 0), (0x257, 0)):
+    if (address, source) == (ADDRESS, BUS):
       self.frames[address] = (bytes(data), now_ns)
     if self.active and address == ADDRESS and bytes(data) in self.active["payloads"] and source in (0x81, 0xC1):
       if source == 0xC1:
@@ -104,13 +104,8 @@ class AmbientLightingController:
         return []
     else:
       return []
-    if any(addr not in self.frames or not 0 <= now_ns - self.frames[addr][1] <= FRESH_NS for addr in (ADDRESS, 0x118, 0x257)):
-      self._finish("blocked", "缺少新鲜的氛围灯、挡位或车速 CAN，测试已停止")
-      return []
-    gear = (self.frames[0x118][0][2] >> 5) & 7
-    speed_raw = int.from_bytes(self.frames[0x257][0], "little") >> 12 & 0xFFF
-    if gear != 1 or speed_raw != 500:
-      self._finish("blocked", "仅支持 P 挡且车辆静止，测试已停止")
+    if ADDRESS not in self.frames or not 0 <= now_ns - self.frames[ADDRESS][1] <= FRESH_NS:
+      self._finish("blocked", "缺少新鲜的氛围灯 CAN，测试已停止")
       return []
     request = self.active or self.pending
     try:

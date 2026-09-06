@@ -127,7 +127,7 @@ def render_page() -> bytes:
   <section id="vehicle-panel" aria-label="Tesla 车辆信息">
     <div class="vehicle-head">TESLA <span id="vehicle-ip">IP —</span><span id="vehicle-connection">等待车辆</span></div><div id="vehicle-metrics"></div>
     <div class="vehicle-lights"><div class="vehicle-light-head"><div class="vehicle-label"><svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16c0-3-3-3-3-7a7 7 0 0 1 14 0c0 4-3 4-3 7M8 19h8m-6 3h4"/></svg>氛围灯</div><span>红色 · 3 秒</span></div>
-    <div class="vehicle-light-buttons"><button class="ambient-red" onclick="runAmbient('left')" aria-label="左侧氛围灯，红色测试三秒" disabled>左侧<svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button><button class="ambient-red" onclick="runAmbient('right')" aria-label="右侧氛围灯，红色测试三秒" disabled>右侧<svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button></div></div>
+    <div class="vehicle-light-buttons"><button class="ambient-red" onclick="runAmbient('left')" aria-label="左侧氛围灯，红色测试三秒">左侧<svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button><button class="ambient-red" onclick="runAmbient('right')" aria-label="右侧氛围灯，红色测试三秒">右侧<svg class="vehicle-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button></div></div>
     <div id="ambient-result" role="status">P 挡静止后可测试</div>
     <details class="vehicle-details"><summary>详细信息</summary><p id="vehicle-extra"></p><p id="ambient-detail">onroad、P 挡静止、原车氛围灯开启时可测试。10 Hz，持续 3 秒，最多 30 帧；实际变色请观察灯带。</p></details>
   </section>
@@ -177,7 +177,7 @@ function renderVehicle(data) {
   set('vehicle-odometer',(v.odometer||'—').replace(' km',''));set('vehicle-consumption',(v.consumption||'—').replace(' kWh/100 km',''));
   for(let i=0;i<4;i++){const w=(v.pressure||[])[i]||{};set('pressure-'+i,(w.text||'—').replace(' bar',''));document.getElementById('pressure-'+i).parentElement.classList.toggle('warn',!!w.warning);}
   set('vehicle-extra',(v.range_note||'等待续航信号')+'；累计放电 '+(v.discharge||'—')+' / 充电 '+(v.charge||'—')+'。'+(v.consumption_note||'')+'。氛围灯指令 '+(v.ambient?.hex_color||'—'));
-  document.querySelectorAll('.ambient-red').forEach(b=>b.disabled=ambientBusy||!data.ambient_test_ready);
+  document.querySelectorAll('.ambient-red').forEach(b=>{b.disabled=ambientBusy;b.classList.toggle('unready',!data.ambient_test_available);});
   if(!ambientResultShown&&!ambientBusy)set('ambient-result',data.ambient_test_ready?'':'P 挡静止后可测试');
 }
 renderVehicle({});
@@ -191,7 +191,7 @@ async function loadVehicle() {
 async function runAmbient(side) {
   if(ambientBusy)return;ambientBusy=true;ambientResultShown=true;document.querySelectorAll('.ambient-red').forEach(b=>b.disabled=true);
   const status=document.getElementById('ambient-result');status.textContent=(side==='left'?'左侧':'右侧')+' · 正在发送 3 秒';document.getElementById('vehicle-light-'+side)?.setAttribute('stroke','#f5616c');
-  try{const r=await apiFetch('/api/tesla/ambient',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({side})});const result=await r.json();status.textContent=({sent:'测试结束 · 请观察灯带',no_echo:'未收到回显',rejected:'发送被拒绝',blocked:'测试已停止',timeout:'测试超时'})[result.state]||(r.ok?'测试结束':'暂不可测试');document.getElementById('ambient-detail').textContent=result.message||'未知结果';}
+  try{const r=await apiFetch('/api/tesla/ambient',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({side})});const result=await r.json();status.textContent=({sent:'测试结束 · 请观察灯带',no_echo:'未收到回显',rejected:'发送被拒绝',blocked:'测试已停止',timeout:'测试超时'})[result.state]||(r.ok?'测试结束':result.message||'暂不可测试');document.getElementById('ambient-detail').textContent=result.message||'未知结果';}
   catch(e){status.textContent='连接失败';document.getElementById('ambient-detail').textContent='不能确认发送：'+e;}finally{ambientBusy=false;document.getElementById('vehicle-light-'+side)?.setAttribute('stroke','#71818f');loadVehicle();}
 }
 setInterval(()=>{if(!document.hidden)loadVehicle();},1000);loadVehicle();
@@ -529,7 +529,8 @@ class DeviceConsoleHandler(BaseHTTPRequestHandler):
       return
     if path == "/api/vehicle":
       data = driving_status_snapshot()
-      self._json(HTTPStatus.OK, {"vehicle": data["vehicle"], "ambient_test_ready": data["ambient_test_ready"],
+      self._json(HTTPStatus.OK, {"vehicle": data["vehicle"], "ambient_test_available": data["ambient_test_available"],
+                                "ambient_test_ready": data["ambient_test_ready"],
                                 "device_ip": device_ip_address()})
       return
     if path == "/api/driving-status":

@@ -4,6 +4,7 @@
 
 void PandaSafety::configureSafetyMode(bool is_onroad) {
   if (is_onroad && !safety_configured_) {
+    offroad_ambient_configured_ = false;
     updateMultiplexingMode();
 
     auto car_params = fetchCarParams();
@@ -14,6 +15,11 @@ void PandaSafety::configureSafetyMode(bool is_onroad) {
       safety_configured_ = true;
     }
   } else if (!is_onroad) {
+    const bool ambient_requested = params_.getBool("TeslaAmbientLightingOffroadActive");
+    if (ambient_requested != offroad_ambient_configured_) {
+      panda_->set_safety_model(cereal::CarParams::SafetyModel::NO_OUTPUT, ambient_requested ? 1U : 0U);
+      offroad_ambient_configured_ = ambient_requested;
+    }
     initialized_ = false;
     safety_configured_ = false;
     log_once_ = false;

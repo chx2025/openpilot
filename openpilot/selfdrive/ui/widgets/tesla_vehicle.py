@@ -70,10 +70,14 @@ class TeslaVehicleWidget(Widget):
     if self.details_open:
       self.details_open = False
       return
-    if not self.data.get("ambient_test_ready") or self.test_future is not None:
+    if self.test_future is not None:
       return
     for side, rect in self.buttons.items():
       if rl.check_collision_point_rec(mouse_pos, rect):
+        if not self.data.get("ambient_test_available"):
+          self.result = "等待原车氛围灯信号"
+          self.result_detail = "收到新鲜的原车 0x679 后才允许发送测试。"
+          return
         self.result = "正在发送 · 3 秒"
         self.active_side = side
         self.test_future = self.executor.submit(_request, "/api/tesla/ambient", {"side": side})
@@ -194,7 +198,7 @@ class TeslaVehicleWidget(Widget):
     icon("lamp", 65, 750, red)
     text("氛围灯", 112, 731, 255, 38, height=66)
     text("3 秒", 113, 792, 220, 28, muted, height=46)
-    enabled = self.data.get("ambient_test_ready") and self.test_future is None
+    enabled = self.data.get("ambient_test_available") and self.test_future is None
     self.buttons = {}
     for i, (side, title) in enumerate((("left", "左侧"), ("right", "右侧"))):
       x = 415 + i * 630

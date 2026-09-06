@@ -70,18 +70,16 @@ def test_delayed_loop_does_not_burst_to_catch_up():
 
 
 @pytest.mark.parametrize("gear,speed", [(4, 0), (1, 1)])
-def test_mid_test_motion_stops_transmission(gear, speed):
+def test_test_is_independent_of_gear_and_speed(gear, speed):
   c = ready_controller()
   c.take_can_sends(1_100_000_000)
   refresh(c, 1_200_000_000, gear, speed)
-  assert c.take_can_sends(1_200_000_000) == []
-  assert c.status["state"] == "blocked"
+  assert len(c.take_can_sends(1_200_000_000)) == 1
 
 
-@pytest.mark.parametrize("gear,speed,now", [(4, 0, 1.1), (1, 1, 1.1), (1, 0, 2.1), (1, 0, 5)])
-def test_blocks_motion_non_park_and_stale_data(gear, speed, now):
-  c = ready_controller(gear, speed)
-  assert c.take_can_sends(int(now * 1e9)) == []
+def test_blocks_stale_ambient_template():
+  c = ready_controller()
+  assert c.take_can_sends(2_100_000_001) == []
   assert c.status["state"] == "blocked"
 
 

@@ -212,6 +212,7 @@ class DrivingStatus:
       cruise_speed = _set_speed_kph(float(car_state.vCruiseCluster), float(controls_state.deprecated.vCruise))
       return {
         "vehicle": self.vehicle_summary.snapshot(oem_can, time.monotonic()),
+        "ambient_test_available": self._is_tesla_model_y() and oem_can.get("ambient_lighting", {}).get("available", False),
         "ambient_test_ready": (self._is_tesla_model_y() and self.sm.alive["carState"] and self.sm.valid["carState"]
                                and car_state.gearShifter == car.CarState.GearShifter.park and abs(car_state.vEgo) < 0.01
                                and not self.params.get_bool("IsOffroad") and oem_can.get("ambient_lighting", {}).get("available", False)),

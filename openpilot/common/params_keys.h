@@ -253,6 +253,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"TeslaApHybrid", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaDynamicApLongitudinal", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaAmbientLightingRequest", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
+    {"TeslaAmbientLightingOffroadActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL, "0"}},
     {"TeslaAmbientLightingStatus", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"TeslaSpeedButtonValidation", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"TeslaTurnSignalValidation", {PERSISTENT | BACKUP, BOOL, "0"}},

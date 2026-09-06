@@ -29,6 +29,7 @@ private:
   bool initialized_ = false;
   bool log_once_ = false;
   bool safety_configured_ = false;
+  bool offroad_ambient_configured_ = false;
   bool prev_obd_multiplexing_ = false;
   Panda *panda_;
   Params params_;
