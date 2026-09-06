@@ -19,6 +19,9 @@ class FakeParams:
   def put(self, key, value, block=False):
     self.values[key] = value
 
+  def remove(self, key):
+    self.values.pop(key, None)
+
   def get(self, key):
     return self.values.get(key)
 
@@ -110,7 +113,7 @@ def test_runtime_big_model_failure_switches_to_preloaded_small():
       raise RuntimeError("non-finite model output")
 
   active, output, fell_back = modeld_module.run_model_with_fallback(
-    FailingBigModel(), small_model, params, chestnut_state, (), {}, {}, False,
+    FailingBigModel(), small_model, params, chestnut_state, (), {}, {},
   )
 
   assert active is small_model
@@ -131,7 +134,7 @@ def test_runtime_big_model_failure_without_small_fallback_is_explicit():
 
   with pytest.raises(RuntimeError, match="small fallback unavailable"):
     modeld_module.run_model_with_fallback(
-      FailingBigModel(), None, params, None, (), {}, {}, False,
+      FailingBigModel(), None, params, None, (), {}, {},
     )
 
   assert params.values["ChestnutActive"] is False
@@ -155,7 +158,7 @@ def test_runtime_forwards_enqueue_callback_without_losing_fallback():
 
   model = Model()
   active, output, fell_back = modeld_module.run_model_with_fallback(
-    model, None, params, None, (), {}, {}, False, after_enqueue=lambda: calls.append("telemetry"),
+    model, None, params, None, (), {}, {}, after_enqueue=lambda: calls.append("telemetry"),
   )
   assert active is model
   assert not fell_back

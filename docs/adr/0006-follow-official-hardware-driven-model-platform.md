@@ -38,3 +38,11 @@ files until explicitly removed, but do not silently convert their metadata,
 claim compatibility, or select an older execution path to keep them running.
 The stock and modeld_v2 runners remain upstream-owned; hardware adapters must
 not introduce an independent QCOM-warp or fused-runner implementation.
+
+The 2026-09-06 C3XL validation follows sunnypilot PR #1993 at
+`d71635410d8bf4312ea358becd7f9e5e27fcf0d6` and its v25 Chestnut catalog.
+Supercombo bundles use upstream's packed NPY-to-AMD `run_model`; split bundles
+retain the upstream separate warp/policy path. The C3XL seam is limited to
+hardware detection, persistent firmware/cache configuration, the measured
+load timeout, loading progress, telemetry, power policy, and reliable fallback.
+It does not choose a model execution format or preserve a retired artifact ABI.

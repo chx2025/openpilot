@@ -22,7 +22,7 @@ def bundle_json(*, index=0, ref="model-ref", selector=REQUIRED_JSON_VERSION, is_
 def test_catalogs_use_official_qcom_and_chestnut_sources_without_rewriting_metadata():
   assert set(ModelFetcher.MODEL_SOURCES) == {"qcom", "chestnut"}
   assert ModelFetcher.MODEL_SOURCES["qcom"][0].endswith("driving_models_v22.json")
-  assert ModelFetcher.MODEL_SOURCES["chestnut"][0].endswith("driving_models_chestnut_v23.json")
+  assert ModelFetcher.MODEL_SOURCES["chestnut"][0].endswith("driving_models_chestnut_v25.json")
 
   bundle = ModelParser.parse_models({"bundles": [bundle_json(index=4, is_big=True)]})[0]
 

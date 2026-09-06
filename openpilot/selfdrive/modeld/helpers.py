@@ -11,6 +11,8 @@ from openpilot.common.hardware.usb import USB_DEVICES_PATH, is_chestnut_runtime_
 
 MODELS_DIR = Path(__file__).resolve().parent / 'models'
 TG_INPUT_DEVICES_PATH = MODELS_DIR / 'tg_input_devices.json'
+CHESTNUT_POWERED_VOLTAGE = 5000
+CHESTNUT_PCIE_READY = 0x78
 
 
 def get_tg_input_devices(process_name: str, chestnut: bool):
@@ -93,6 +95,5 @@ def chestnut_compiled() -> bool:
   return Path(get_manifest_path(modeld_pkl_path(chestnut=True))).is_file()
 
 
-# One-release compatibility aliases for local diagnostics and old tests.
-usbgpu_present = chestnut_present
-usbgpu_compiled = chestnut_compiled
+def chestnut_ready(state) -> bool:
+  return state.supplyVoltage >= CHESTNUT_POWERED_VOLTAGE and not state.supplyFault and state.pcieLtssm == CHESTNUT_PCIE_READY

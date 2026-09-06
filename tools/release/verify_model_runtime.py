@@ -84,7 +84,7 @@ def main():
               if k not in ("tfm", "big_tfm", "prev_feat")}
     before = time.monotonic()
     callback = telemetry.send if telemetry and len(latencies) % 20 == 0 else None
-    outputs = model.run(frames, transforms, inputs, False, after_enqueue=callback)
+    outputs = model.run(frames, transforms, inputs, after_enqueue=callback)
     elapsed = time.monotonic() - before
     if outputs is None or "plan" not in outputs:
       raise RuntimeError("missing model plan")

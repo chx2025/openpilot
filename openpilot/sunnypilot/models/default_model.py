@@ -8,14 +8,14 @@ import requests
 
 from openpilot.common.basedir import BASEDIR
 from openpilot.sunnypilot import get_file_hash
-from openpilot.selfdrive.modeld.helpers import usbgpu_present
+from openpilot.selfdrive.modeld.helpers import chestnut_present
 from openpilot.sunnypilot.models.fetcher import ModelFetcher
 from openpilot.sunnypilot.models.model_name import DEFAULT_MODEL, DEFAULT_BIG_MODEL
 
 
 def get_default_model(connected: bool | None = None) -> str:
   """Return the built-in model name without forcing UI callers to probe sysfs."""
-  connected = usbgpu_present() if connected is None else connected
+  connected = chestnut_present() if connected is None else connected
   return DEFAULT_BIG_MODEL if connected else DEFAULT_MODEL
 
 
