@@ -128,7 +128,9 @@ class TeslaCardAdapter:
       lateral_active=bool(car_control.latActive),
       brake_pressed=bool(car_state.brakePressed),
     )
-    return self.validation.take_can_sends(now_nanos)
+    self.ambient.update_blindspot(bool(getattr(car_state, "leftBlindspot", False)),
+                                  bool(getattr(car_state, "rightBlindspot", False)), now_nanos)
+    return self.validation.take_can_sends(now_nanos) + self.ambient.take_can_sends(now_nanos)
 
   def service_params(self, params) -> None:
     self.speed_limit_assist_configured = params.get("SpeedLimitMode", return_default=True) == Mode.assist

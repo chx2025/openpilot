@@ -23,7 +23,16 @@ SOC/range 位定义来自本地保存的 `tools/tesla_party_can_ble/ios/TeslaPar
 - 请求通过 Params 交给现有 card 发送线程，避免创建第二个 `sendcan` publisher。请求超时、过期、重复与并发有界处理。
 - Panda 检查固定红色、新鲜原车 0x679 模板、单侧目标、速率及三秒/30 帧上限。offroad 临时使用 `noOutput(param=1)`，该子模式的 TX 白名单只有 `0x679 / bus 1 / DLC 7`；结束后恢复普通 `noOutput(param=0)`。
 - 显示已提交帧数与 Panda 回显帧数；拒绝或无回显都不声称实车变色。原车报文仍可能覆盖红色。
-- `noOutput` 保持禁止发送；设备离线主页按钮不可用。实车需要运行 card 和 Tesla safety，建议从网页操作。
+- 普通 `noOutput(param=0)` 仍禁止所有发送；网页测试期间临时使用只放行固定红色 0x679 的 `noOutput(param=1)`，结束即恢复。
+
+## 盲区氛围灯提醒
+
+- 使用 CarState 已有的 `leftBlindspot` / `rightBlindspot`，来源为原车 `DAS_status` 的 `DAS_blindSpotRearLeft` / `DAS_blindSpotRearRight`。
+- 只把原厂枚举 1、2（WARNING_LEVEL_1 / WARNING_LEVEL_2）视为占用；0 是无告警，3 是 SNA，不触发灯光。
+- 左侧占用只选择左前门、左后门和左仪表台；右侧对应右边；两侧同时占用时同时选择两侧。
+- 每 100 ms 在固定红色亮度 100 与 0 之间切换，形成约 5 Hz 的完整闪烁周期。盲区清除后立即停止发送，由约 2 Hz 的原车 0x679 恢复原色。
+- 一次连续占用最多闪烁 15 秒、150 帧；必须先清除盲区状态才能重新开始，避免故障信号导致无限发送。
+- Panda 只接受新鲜原车模板、0x679 / bus 1 / DLC 7、红色、亮度 0/100 和左/右/双侧目标，其他颜色、目标、长度、总线及超限频率全部拒绝。
 
 ## 部署与实车核验
 

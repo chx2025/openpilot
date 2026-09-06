@@ -12,17 +12,20 @@ FRESH_NS = 1_000_000_000
 DURATION_NS = 3_000_000_000
 INTERVAL_NS = 100_000_000
 MAX_FRAMES = 30
+BLINDSPOT_DURATION_NS = 15_000_000_000
+BLINDSPOT_MAX_FRAMES = 150
 # Captured HW4 frame is seven bytes: FL/RL doors + left IP, or FR/RR doors + right IP.
-TARGETS = {"left": (0xA8, 0), "right": (0x50, 1)}
+MANUAL_TARGETS = ("left", "right")
+TARGETS = {"left": (0xA8, 0), "right": (0x50, 1), "both": (0xF8, 1)}
 
 
-def red_frame(template: bytes, side: str) -> bytes:
-  if side not in TARGETS or len(template) != 7:
+def red_frame(template: bytes, side: str, brightness: int = 100) -> bytes:
+  if side not in TARGETS or brightness not in (0, 100) or len(template) != 7:
     raise ValueError("只支持左侧或右侧红色测试")
   data = bytearray(template)
   data[0] = (data[0] & 1) | 2  # Preserve power override, ON, instant transition.
   data[1:4] = bytes((255, 0, 0))
-  data[4] = (data[4] & 0x80) | 100  # The live template reports 0; force a visible test level.
+  data[4] = (data[4] & 0x80) | brightness
   data[5] = (data[5] & 0x06) | TARGETS[side][0]  # No audio visualizer; clear all other targets.
   data[6] = (data[6] & 0xFE) | TARGETS[side][1]
   return bytes(data)
@@ -37,6 +40,27 @@ class AmbientLightingController:
     self.status = None
     self.last_id = None
     self.last_tx_ns = None
+    self.blindspot_side = None
+    self.blindspot_started_ns = None
+    self.blindspot_next_ns = 0
+    self.blindspot_count = 0
+    self.blindspot_on = True
+
+  def update_blindspot(self, left: bool, right: bool, now_ns: int) -> None:
+    side = "both" if left and right else "left" if left else "right" if right else None
+    with self.lock:
+      if side is None:
+        self.blindspot_side = None
+        self.blindspot_started_ns = None
+        self.blindspot_count = 0
+        self.blindspot_on = True
+        return
+      if self.blindspot_side is None:
+        self.blindspot_started_ns = now_ns
+        self.blindspot_next_ns = now_ns
+        self.blindspot_count = 0
+        self.blindspot_on = True
+      self.blindspot_side = side
 
   def observe_frame(self, now_ns, address, data, source):
     with self.lock:
@@ -68,7 +92,7 @@ class AmbientLightingController:
       try:
         value = json.loads(raw)
         if (isinstance(value, dict) and isinstance(value.get("id"), str) and isinstance(value.get("side"), str)
-            and value["side"] in TARGETS and isinstance(value.get("created_ns"), int)):
+            and value["side"] in MANUAL_TARGETS and isinstance(value.get("created_ns"), int)):
           request = value
       except (ValueError, TypeError):
         pass
@@ -86,6 +110,8 @@ class AmbientLightingController:
       return self._take_can_sends(now_ns)
 
   def _take_can_sends(self, now_ns):
+    if self.blindspot_side is not None:
+      return self._take_blindspot_sends(now_ns)
     if self.active:
       elapsed = now_ns - self.active["started_ns"]
       if elapsed >= DURATION_NS:
@@ -119,5 +145,18 @@ class AmbientLightingController:
     self.active["payloads"].add(data)
     self.active["count"] += 1
     self.active["next_ns"] = now_ns + INTERVAL_NS  # Never catch up with a burst after a delayed loop.
+    self.last_tx_ns = now_ns
+    return [CanData(ADDRESS, data, BUS)]
+
+  def _take_blindspot_sends(self, now_ns):
+    if (self.blindspot_started_ns is None or now_ns - self.blindspot_started_ns >= BLINDSPOT_DURATION_NS or
+        self.blindspot_count >= BLINDSPOT_MAX_FRAMES or now_ns < self.blindspot_next_ns):
+      return []
+    if ADDRESS not in self.frames or not 0 <= now_ns - self.frames[ADDRESS][1] <= FRESH_NS:
+      return []
+    data = red_frame(self.frames[ADDRESS][0], self.blindspot_side, brightness=100 if self.blindspot_on else 0)
+    self.blindspot_on = not self.blindspot_on
+    self.blindspot_count += 1
+    self.blindspot_next_ns = now_ns + INTERVAL_NS
     self.last_tx_ns = now_ns
     return [CanData(ADDRESS, data, BUS)]

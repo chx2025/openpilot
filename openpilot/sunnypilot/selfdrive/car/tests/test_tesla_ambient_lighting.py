@@ -20,7 +20,18 @@ def test_red_only_and_preserves_unrelated_template_bits(side, targets):
   assert data[6] & 0xFE == TEMPLATE[6] & 0xFE
 
 
-@pytest.mark.parametrize("data,side", [(TEMPLATE, "both"), (b"", "left"), (b"\0" * 8, "left")])
+@pytest.mark.parametrize("side,targets", [("left", [1, 0, 1, 0, 1, 0]), ("right", [0, 1, 0, 1, 0, 1]),
+                                          ("both", [1, 1, 1, 1, 1, 1])])
+def test_blindspot_frame_supports_flash_off_and_both_sides(side, targets):
+  data = red_frame(TEMPLATE, side, brightness=0)
+  parser = CANParser("tesla_modely_hw4_perception", [("UI_ambientLightingCtrls", 0)], 1)
+  parser.update([(1_000_000_000, [(0x679, data, 1)])])
+  values = parser.vl["UI_ambientLightingCtrls"]
+  assert values["UI_rgbBrightnessLevel"] == 0
+  assert [values["UI_rgbTarget" + suffix] for suffix in ("DOORFL", "DOORFR", "DOORRL", "DOORRR", "IPFL", "IPFR")] == targets
+
+
+@pytest.mark.parametrize("data,side", [(TEMPLATE, "invalid"), (b"", "left"), (b"\0" * 8, "left")])
 def test_invalid_request_or_length(data, side):
   with pytest.raises(ValueError):
     red_frame(data, side)
@@ -67,6 +78,40 @@ def test_delayed_loop_does_not_burst_to_catch_up():
   refresh(c, 2_000_000_000)
   assert len(c.take_can_sends(2_000_000_000)) == 1
   assert c.take_can_sends(2_000_000_001) == []
+
+
+@pytest.mark.parametrize("left,right,side,target_bytes", [
+  (True, False, "left", (0xA8, 0)), (False, True, "right", (0x50, 1)), (True, True, "both", (0xF8, 1)),
+])
+def test_blindspot_flashes_requested_side_at_five_hz(left, right, side, target_bytes):
+  c = AmbientLightingController()
+  c.observe_frame(1_000_000_000, 0x679, TEMPLATE, 1)
+  c.update_blindspot(left, right, 1_100_000_000)
+  frames = []
+  for index in range(4):
+    now = 1_100_000_000 + index * 100_000_000
+    refresh(c, now)
+    frames.extend(c.take_can_sends(now))
+  assert c.blindspot_side == side
+  assert [frame[1][4] & 0x7F for frame in frames] == [100, 0, 100, 0]
+  assert all((frame[1][5] & 0xF8, frame[1][6] & 1) == target_bytes for frame in frames)
+  c.update_blindspot(False, False, 1_500_000_000)
+  assert c.take_can_sends(1_500_000_000) == []
+
+
+def test_blindspot_alert_is_bounded_to_fifteen_seconds_and_rearms_after_clear():
+  c = AmbientLightingController()
+  c.update_blindspot(True, False, 1_000_000_000)
+  sent = []
+  for index in range(151):
+    now = 1_000_000_000 + index * 100_000_000
+    c.observe_frame(now, 0x679, TEMPLATE, 1)
+    sent.extend(c.take_can_sends(now))
+  assert len(sent) == 150
+  c.update_blindspot(False, False, 16_100_000_000)
+  c.update_blindspot(False, True, 17_100_000_000)
+  c.observe_frame(17_100_000_000, 0x679, TEMPLATE, 1)
+  assert len(c.take_can_sends(17_100_000_000)) == 1
 
 
 @pytest.mark.parametrize("gear,speed", [(4, 0), (1, 1)])
