@@ -211,14 +211,14 @@ class TeslaVehicleWidget(Widget):
     if self.result or self.error:
       text("等待车辆连接" if self.error else self.result, 48, 866, 1600, 26, muted, height=32)
     elif not enabled:
-      text("P 挡静止后可测试", 48, 866, 1600, 26, muted, height=32)
+      text("等待原车氛围灯信号", 48, 866, 1600, 26, muted, height=32)
 
     if self.details_open:
       rounded(32, 106, 1676, 575, rl.Color(35, 40, 47, 255), .09)
       text("更多信息", 76, 126, 1400, 48, height=74)
       lines = [v.get("range_note", "等待原车续航信号"),
                "累计放电  " + v.get("discharge", "—"), "累计充电  " + v.get("charge", "—"),
-               "电耗：连续观测至少 1 km 后显示", "测试：P 挡静止 / 原车灯开启 / onroad",
+               "电耗：连续观测至少 1 km 后显示", "测试：offroad / onroad 均可，固定红色 3 秒",
                getattr(self, "result_detail", "回显不代表变色；请观察左右灯带")]
       for i, value in enumerate(lines):
         text(value, 78, 216 + i * 74, 1580, 36, muted, height=66)
