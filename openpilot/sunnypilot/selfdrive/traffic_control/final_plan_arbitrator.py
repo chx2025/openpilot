@@ -357,10 +357,10 @@ class FinalPlanArbitrator:
     if not all(math.isfinite(value) for value in (raw_v_ego, a_ego, remaining_distance)):
       return False
     v_ego = max(0.0, raw_v_ego)
-    if phase == TrafficControlPhase.yellowStop:
-      # A yellow STOP must be comfortable, not merely possible at the maximum
-      # emergency envelope. Aggressive admission is capped at Standard so the
-      # personality setting cannot turn a dilemma-zone PASS into a harsh stop.
+    if phase in (TrafficControlPhase.yellowStop, TrafficControlPhase.flashingGreenStop):
+      # Yellow and flashing GREEN are advance warnings: STOP must fit the
+      # comfortable envelope. Aggressive admission is capped at Standard so
+      # a late warning cannot introduce a harsh stop.
       style = self._base_stop_style(sm, yellow_admission=True)
       max_brake = style.comfort_brake
       jerk_limit = style.jerk_limit * self._speed_jerk_scale(v_ego)
@@ -814,7 +814,7 @@ class FinalPlanArbitrator:
         inside_horizon = bool(
           phase == TrafficControlPhase.hold
           or remaining_distance <= self._traffic_activation_distance(
-            sm, yellow_admission=phase == TrafficControlPhase.yellowStop,
+            sm, yellow_admission=phase in (TrafficControlPhase.yellowStop, TrafficControlPhase.flashingGreenStop),
           )
         )
         if inside_horizon:

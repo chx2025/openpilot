@@ -58,10 +58,13 @@ class TrafficSignalDisplayState:
     mode = int(target.mode)
     light = int(target.lightState)
     raw_distance = float(target.rawDistance)
+    # Explicit DBC OFF (4) has no ordinary RED/GREEN quality. Only a confirmed
+    # flash STOP may animate it as the dark half of a flashing-green signal.
+    confirmed_off_flash = phase == int(TrafficControlPhase.flashingGreenStop) and light == 4
     has_signal = bool(
-      int(target.quality) > 0
+      (int(target.quality) > 0 or confirmed_off_flash)
       and 0.0 <= raw_distance <= 200.0
-      and 0 <= light <= 3
+      and (0 <= light <= 3 or confirmed_off_flash)
       and phase != int(TrafficControlPhase.passed)
     )
     return cls(

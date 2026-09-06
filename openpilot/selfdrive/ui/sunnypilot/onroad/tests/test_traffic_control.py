@@ -69,6 +69,16 @@ def test_view_model_marks_flashing_green_stop():
   assert state.flashing
 
 
+def test_explicit_off_animates_only_after_flash_confirmation():
+  raw_off = display_state(light=4, quality=0, phase=TrafficControlPhase.off)
+  confirmed = display_state(light=4, quality=0, phase=TrafficControlPhase.flashingGreenStop, applied=True)
+  assert not raw_off.has_signal
+  assert not raw_off.flashing
+  assert confirmed.light_state == 4
+  assert confirmed.has_signal and confirmed.flashing
+  assert traffic_control_highlighted(confirmed)
+
+
 def test_view_model_does_not_animate_historical_unconfirmed_flash_candidate():
   state = TrafficSignalDisplayState.from_plan(target(
     light=2, phase=TrafficControlPhase.greenFlashCandidate,

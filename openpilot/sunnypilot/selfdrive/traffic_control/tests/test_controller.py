@@ -287,11 +287,11 @@ def test_persistent_unsupported_color_evidence_smoothly_releases_a_moving_stop()
   stop_station = c.stop_station
 
   for now_s in (2.0, 2.5, 3.0, 3.5):
-    still_stopping = update(c, now_s, observation(45.0, 4, now_s), v_ego=5.0)
+    still_stopping = update(c, now_s, observation(45.0, 5, now_s), v_ego=5.0)
     assert still_stopping.phase in c.ACTIVE_PHASES
     assert c.stop_station == stop_station
 
-  released = update(c, 4.0, observation(45.0, 4, 4.0), v_ego=5.0)
+  released = update(c, 4.0, observation(45.0, 5, 4.0), v_ego=5.0)
   assert released.phase == TrafficControlPhase.release
   assert c.transition_reason == "signal_lost_release"
 
@@ -409,16 +409,16 @@ def test_vehicle_reaching_frozen_stop_station_enters_hold_during_transport_gap()
 
 def test_persistent_off_does_not_release_a_confirmed_flashing_stop():
   c = controller()
-  for now_s, distance, light in ((1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
-                                 (1.7, 74.4, 2), (2.2, 70.4, 0),
-                                 (2.7, 66.4, 2), (3.2, 62.4, 0)):
+  for now_s, distance, light in ((1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 4),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 4),
+                                 (2.7, 66.4, 2), (3.2, 62.4, 4), (3.4, 60.8, 4)):
     decision = update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
   assert decision.phase == TrafficControlPhase.flashingGreenStop
   session_id = c.stop_session_id
 
   for now_s, distance in ((3.7, 58.4), (4.2, 54.4), (4.7, 50.4),
                           (5.2, 46.4), (5.7, 42.4)):
-    decision = update(c, now_s, observation(distance, 0, now_s), v_ego=8.0)
+    decision = update(c, now_s, observation(distance, 4, now_s), v_ego=8.0)
 
   assert decision.phase == TrafficControlPhase.flashingGreenStop
   assert decision.stop_session_id == session_id
@@ -637,25 +637,27 @@ def test_three_in_range_green_off_pulses_latch_flashing_green_stop():
   c = controller()
   update(c, 1.0, observation(80.0, 2, 1.0), v_ego=8.0)
   update(c, 1.1, observation(79.2, 2, 1.1), v_ego=8.0)
-  first_off = update(c, 1.2, observation(78.4, 0, 1.2), v_ego=8.0)
+  first_off = update(c, 1.2, observation(78.4, 4, 1.2), v_ego=8.0)
   assert first_off.phase == TrafficControlPhase.off
   update(c, 1.7, observation(74.4, 2, 1.7), v_ego=8.0)
-  second_off = update(c, 2.2, observation(70.4, 0, 2.2), v_ego=8.0)
+  second_off = update(c, 2.2, observation(70.4, 4, 2.2), v_ego=8.0)
   assert second_off.phase == TrafficControlPhase.off
   assert not second_off.apply_constraint
   update(c, 2.7, observation(66.4, 2, 2.7), v_ego=8.0)
-  third_off = update(c, 3.2, observation(62.4, 0, 3.2), v_ego=8.0)
-  assert third_off.phase == TrafficControlPhase.flashingGreenStop
-  assert third_off.apply_constraint
+  third_off = update(c, 3.2, observation(62.4, 4, 3.2), v_ego=8.0)
+  assert not third_off.apply_constraint
+  confirmed_off = update(c, 3.4, observation(60.8, 4, 3.4), v_ego=8.0)
+  assert confirmed_off.phase == TrafficControlPhase.flashingGreenStop
+  assert confirmed_off.apply_constraint
   assert c.flash_latched
 
 
 def test_irregular_third_green_off_pulse_resets_flash_candidate():
   c = controller()
   for now_s, distance, light in (
-    (1.0, 80.0, 2), (1.1, 79.2, 0),
-    (1.6, 75.2, 2), (2.1, 71.2, 0),
-    (2.6, 67.2, 2), (4.2, 54.4, 0),
+    (1.0, 80.0, 2), (1.1, 79.2, 4),
+    (1.6, 75.2, 2), (2.1, 71.2, 4),
+    (2.6, 67.2, 2), (4.2, 54.4, 4),
   ):
     decision = update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
   assert decision.phase == TrafficControlPhase.off
@@ -667,9 +669,9 @@ def test_discontinuous_green_cannot_bypass_confirmed_flashing_green_stop():
   c = controller()
   armed = None
   for now_s, distance, light in (
-    (1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
-    (1.7, 74.4, 2), (2.2, 70.4, 0),
-    (2.7, 66.4, 2), (3.2, 62.4, 0),
+    (1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 4),
+    (1.7, 74.4, 2), (2.2, 70.4, 4),
+    (2.7, 66.4, 2), (3.2, 62.4, 4), (3.4, 60.8, 4),
   ):
     armed = update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
 
@@ -720,12 +722,12 @@ def test_single_off_cannot_overwrite_an_existing_release_session():
 
 def test_out_of_range_green_off_cadence_cannot_arm_inside_control_range():
   c = controller()
-  # Tesla publishes OFF as 254 m while a distant green lamp is flashing.
+  # Even a regular OFF cadence at the 254 m sentinel is untrusted.
   # Colors above 200 m are diagnostic-only and cannot establish future control evidence.
   for now_s, distance, light in (
-    (1.0, 210.0, 2), (1.9, 254.0, 0),
-    (2.5, 238.0, 2), (3.0, 254.0, 0),
-    (3.5, 223.0, 2), (4.0, 254.0, 0),
+    (1.0, 210.0, 2), (1.9, 254.0, 4),
+    (2.5, 238.0, 2), (3.0, 254.0, 4),
+    (3.5, 223.0, 2), (4.0, 254.0, 4),
   ):
     decision = update(c, now_s, observation(distance, light, now_s), v_ego=13.0)
     assert decision.phase == TrafficControlPhase.off
@@ -750,9 +752,9 @@ def test_single_far_green_off_dropout_cannot_create_a_flashing_green_stop():
 
 def test_turn_signal_does_not_shadow_a_confirmed_current_lane_flash_stop():
   c = controller()
-  for now_s, distance, light in ((1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
-                                 (1.7, 74.4, 2), (2.2, 70.4, 0),
-                                 (2.7, 66.4, 2), (3.2, 62.4, 0)):
+  for now_s, distance, light in ((1.0, 80.0, 2), (1.1, 79.2, 2), (1.2, 78.4, 4),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 4),
+                                 (2.7, 66.4, 2), (3.2, 62.4, 4), (3.4, 60.8, 4)):
     decision = update(c, now_s, observation(distance, light, now_s), v_ego=8.0, blinker=True)
   assert decision.phase == TrafficControlPhase.flashingGreenStop
   assert decision.stop_safety_allowed
@@ -774,9 +776,9 @@ def test_route4f_discontinuous_off_cannot_form_flash_but_yellow_can_stop():
 
 def test_flashing_green_stop_rejects_a_short_green_pulse_but_releases_on_stable_green():
   c = controller()
-  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
-                                 (1.7, 74.4, 2), (2.2, 70.4, 0),
-                                 (2.7, 66.4, 2), (3.2, 62.4, 0)):
+  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 4),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 4),
+                                 (2.7, 66.4, 2), (3.2, 62.4, 4), (3.4, 60.8, 4)):
     update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
   short_pulse = update(c, 3.7, observation(58.4, 2, 3.7), v_ego=8.0)
   assert short_pulse.phase == TrafficControlPhase.flashingGreenStop
@@ -789,9 +791,9 @@ def test_flashing_green_stop_rejects_a_short_green_pulse_but_releases_on_stable_
 
 def test_red_after_flashing_green_returns_to_ordinary_stop_and_can_release():
   c = controller()
-  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
-                                 (1.7, 74.4, 2), (2.2, 70.4, 0),
-                                 (2.7, 66.4, 2), (3.2, 62.4, 0)):
+  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 4),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 4),
+                                 (2.7, 66.4, 2), (3.2, 62.4, 4), (3.4, 60.8, 4)):
     update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
   assert c.flash_latched
 
@@ -809,9 +811,9 @@ def test_red_after_flashing_green_returns_to_ordinary_stop_and_can_release():
 
 def test_yellow_after_flashing_green_returns_to_ordinary_stop_and_can_release():
   c = controller()
-  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
-                                 (1.7, 74.4, 2), (2.2, 70.4, 0),
-                                 (2.7, 66.4, 2), (3.2, 62.4, 0)):
+  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 4),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 4),
+                                 (2.7, 66.4, 2), (3.2, 62.4, 4), (3.4, 60.8, 4)):
     update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
 
   first_yellow = update(c, 3.7, observation(58.4, 3, 3.7), v_ego=8.0)
@@ -1140,9 +1142,9 @@ def test_same_target_red_flicker_after_release_preserves_session():
 
 def test_flashing_green_latch_clears_after_passed_before_new_red():
   c = controller()
-  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 0),
-                                 (1.7, 74.4, 2), (2.2, 70.4, 0),
-                                 (2.7, 66.4, 2), (3.2, 62.4, 0)):
+  for now_s, distance, light in ((1.0, 80, 2), (1.1, 79.2, 2), (1.2, 78.4, 4),
+                                 (1.7, 74.4, 2), (2.2, 70.4, 4),
+                                 (2.7, 66.4, 2), (3.2, 62.4, 4), (3.4, 60.8, 4)):
     update(c, now_s, observation(distance, light, now_s), v_ego=8.0)
   assert c.flash_latched
   now_s = 3.2

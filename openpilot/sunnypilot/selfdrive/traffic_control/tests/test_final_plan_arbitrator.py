@@ -724,6 +724,80 @@ def test_early_yellow_with_clear_comfort_margin_still_stops():
   assert arbitrator.diagnostics.applied
 
 
+@pytest.mark.parametrize("personality", [
+  log.LongitudinalPersonality.relaxed,
+  log.LongitudinalPersonality.standard,
+  log.LongitudinalPersonality.aggressive,
+])
+def test_marginal_flashing_green_uses_comfort_admission_and_stays_rejected_after_red(personality):
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  flash = fake_sm(
+    phase=TrafficControlPhase.flashingGreenStop, light_state=4, target=True,
+    allowed=True, event_id=221, distance=40.0, v_ego=10.0, personality=personality,
+  )
+  plan = base_plan(a_target=0.4)
+  original = plan_output(plan)
+  arbitrator.apply(plan, flash, NOW_NS)
+
+  # Forty metres fits the hard braking envelope but not the comfortable
+  # yellow/flash envelope. An advance warning must not introduce a harsh STOP.
+  assert plan_output(plan) == original
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
+
+  flash["trafficRadarState"].phase = int(TrafficControlPhase.braking)
+  flash["trafficRadarState"].lightState = 1
+  flash["trafficRadarState"].distanceToStopPoint = 15.0
+  flash["trafficRadarState"].publishMonoTime = NOW_NS + 500_000_000
+  flash["carState"].vEgo = 5.0
+  red = base_plan(a_target=-0.5)
+  original = plan_output(red)
+  arbitrator.apply(red, flash, NOW_NS + 500_000_000)
+
+  assert plan_output(red) == original
+  assert arbitrator.diagnostics.action == TrafficPlanAction.none
+  assert not arbitrator.diagnostics.terminal_catch_active
+
+
+def test_aggressive_flashing_green_uses_the_earlier_comfort_activation_horizon():
+  flash = fake_sm(
+    phase=TrafficControlPhase.flashingGreenStop, light_state=4, target=True,
+    allowed=True, event_id=222, v_ego=15.0,
+    personality=log.LongitudinalPersonality.aggressive,
+  )
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  red_horizon = arbitrator._traffic_activation_distance(flash)
+  comfort_horizon = arbitrator._traffic_activation_distance(flash, yellow_admission=True)
+  flash["trafficRadarState"].distanceToStopPoint = (red_horizon + comfort_horizon) / 2.0
+  plan = base_plan(a_target=0.4)
+  arbitrator.apply(plan, flash, NOW_NS)
+
+  assert arbitrator.diagnostics.action == TrafficPlanAction.stop
+  assert arbitrator.diagnostics.applied
+  assert plan.aTarget < 0.0
+
+  # The ordinary RED activation distance retains its existing behavior.
+  red_arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  flash["trafficRadarState"].phase = int(TrafficControlPhase.braking)
+  flash["trafficRadarState"].lightState = 1
+  red_plan = base_plan(a_target=0.4)
+  original = plan_output(red_plan)
+  red_arbitrator.apply(red_plan, flash, NOW_NS)
+  assert plan_output(red_plan) == original
+
+
+def test_early_flashing_green_with_clear_comfort_margin_stops_before_yellow():
+  arbitrator = FinalPlanArbitrator(ns(longitudinalActuatorDelay=0.2))
+  flash = fake_sm(
+    phase=TrafficControlPhase.flashingGreenStop, light_state=4, target=True,
+    allowed=True, event_id=223, distance=60.0, v_ego=10.0,
+  )
+  plan = base_plan(a_target=0.4)
+  arbitrator.apply(plan, flash, NOW_NS)
+  assert arbitrator.diagnostics.action == TrafficPlanAction.stop
+  assert arbitrator.diagnostics.applied
+  assert not arbitrator.diagnostics.start_applied
+
+
 def test_decided_stop_sessions_do_not_recompute_stop_ownership_envelopes(monkeypatch):
   calls = 0
   original_required_distance = StopProfileGenerator.required_stop_distance
