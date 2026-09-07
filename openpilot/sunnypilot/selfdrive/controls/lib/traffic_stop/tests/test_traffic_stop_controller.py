@@ -6,6 +6,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.traffic_stop.traffic_stop_contr
   STOPPED_GRACE_FRAMES,
   STARTING_SUPPRESS_FRAMES,
   TRAFFIC_STOP_CAMERA_TO_FRONT_M,
+  TRAFFIC_STOP_TAKEOVER_SPEED_KPH,
 )
 
 
@@ -74,12 +75,13 @@ class TestTrafficStopController:
     assert result.v_cruise_limited is None
 
   def test_red_single_frame_trigger(self):
-    """Red-light detection has no debounce -- a single qualifying frame is enough."""
+    """Red-light detection has no debounce -- a single qualifying frame is enough, BUT only at
+    low speed. At high speed the controller stays in CRUISE and lets e2e handle the decel."""
     controller = TrafficStopController()
     model = approaching_red_light_model()
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    result = run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    result = run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller._state == TrafficStopState.STOPPING
     assert result.stop_dist_m is not None
 
@@ -109,16 +111,16 @@ class TestTrafficStopController:
     model = approaching_red_light_model()
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller._state == TrafficStopState.STOPPING
 
     cs_gas = MockCarState(gasPressed=True)
-    result = run_frames(controller, model, cs_gas, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    result = run_frames(controller, model, cs_gas, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert result.stop_dist_m is None
     assert controller._gas_suppress_frames == STARTING_SUPPRESS_FRAMES
 
-    result = run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    result = run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert result.stop_dist_m is None
 
@@ -138,11 +140,11 @@ class TestTrafficStopController:
     model = approaching_red_light_model()
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller._state == TrafficStopState.STOPPING
 
     rs_lead = MockRadarState(present=True, dRel=10.0)  # far closer than the ~15m filtered stop-line estimate
-    result = run_frames(controller, model, cs, rs_lead, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    result = run_frames(controller, model, cs, rs_lead, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert result.stop_dist_m is None
 
@@ -155,20 +157,20 @@ class TestTrafficStopController:
     # cancelled under cp's original 2.0m margin)
     controller_a = TrafficStopController()
     model_a = approaching_red_light_model(model_x_end=20.0)
-    run_frames(controller_a, model_a, cs, MockRadarState(present=False), v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    run_frames(controller_a, model_a, cs, MockRadarState(present=False), v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller_a._state == TrafficStopState.STOPPING
     result_a = run_frames(controller_a, model_a, cs, MockRadarState(present=True, dRel=23.0),
-                           v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+                           v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller_a._state == TrafficStopState.CRUISE
     assert result_a.stop_dist_m is None
 
     # lead 6m beyond the stop-line estimate: still outside even the widened 4.0m margin
     controller_b = TrafficStopController()
     model_b = approaching_red_light_model(model_x_end=20.0)
-    run_frames(controller_b, model_b, cs, MockRadarState(present=False), v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    run_frames(controller_b, model_b, cs, MockRadarState(present=False), v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller_b._state == TrafficStopState.STOPPING
     result_b = run_frames(controller_b, model_b, cs, MockRadarState(present=True, dRel=26.0),
-                           v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+                           v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller_b._state == TrafficStopState.STOPPING
     assert result_b.stop_dist_m is not None
 
@@ -241,12 +243,13 @@ class TestTrafficStopController:
     model = approaching_red_light_model()
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=5)
+    run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=5)
+    assert controller._state == TrafficStopState.STOPPING
     assert len(controller._stop_x_avg_hist) > 0
     hist_len_before = len(controller._stop_x_avg_hist)
 
     cs_gas = MockCarState(gasPressed=True)
-    run_frames(controller, model, cs_gas, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    run_frames(controller, model, cs_gas, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert len(controller._stop_x_avg_hist) >= hist_len_before
 
@@ -259,11 +262,81 @@ class TestTrafficStopController:
     rs = MockRadarState(present=False)
 
     baseline_ctrl = TrafficStopController()
-    baseline_result = run_frames(baseline_ctrl, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    baseline_result = run_frames(baseline_ctrl, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
 
     monkeypatch.setattr(tsc, "TRAFFIC_STOP_DISTANCE_ADJUST_M", 5.0)
     plus5_ctrl = TrafficStopController()
-    plus5_result = run_frames(plus5_ctrl, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    plus5_result = run_frames(plus5_ctrl, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
 
     assert abs((plus5_result.stop_dist_m - baseline_result.stop_dist_m) - 5.0) < 1e-6
     assert TRAFFIC_STOP_CAMERA_TO_FRONT_M == -1.5
+
+  # ------------------------------------------------------------------ #
+  # DELAYED TAKEOVER tests (v_ego must drop below threshold to engage) #
+  # ------------------------------------------------------------------ #
+
+  def test_takeover_threshold_constant_is_in_kph(self):
+    """Sanity check: TRAFFIC_STOP_TAKEOVER_SPEED_KPH is in kph. 4.0 m/s = 14.4 kph is below
+    the 20 kph default; 6.0 m/s = 21.6 kph is above it."""
+    assert 4.0 * 3.6 < TRAFFIC_STOP_TAKEOVER_SPEED_KPH
+    assert 6.0 * 3.6 > TRAFFIC_STOP_TAKEOVER_SPEED_KPH
+
+  def test_high_speed_does_not_engage_stopping(self):
+    """DELAYED TAKEOVER: at v_ego above TRAFFIC_STOP_TAKEOVER_SPEED_KPH, the controller stays
+    in CRUISE and returns (None, None). longitudinal_planner keeps e2e in the candidate pool
+    so e2e naturally decelerates without a mid-decel handoff blip (which was the original
+    "sudden accel-then-brake" problem)."""
+    controller = TrafficStopController()
+    model = approaching_red_light_model()
+    cs = MockCarState()
+    rs = MockRadarState(present=False)
+    # v_ego = 10 m/s = 36 kph, well above the 20 kph default threshold
+    result = run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
+    assert controller._state == TrafficStopState.CRUISE
+    assert result.stop_dist_m is None
+    assert result.v_cruise_limited is None
+
+  def test_engages_only_once_speed_drops_below_threshold(self):
+    """Same red-light signal, but v_ego has now dropped below the takeover threshold: the
+    controller takes over and enters STOPPING. This is the bridge between e2e doing the decel
+    at high speed and this controller handling the precision stop at low speed."""
+    controller = TrafficStopController()
+    model = approaching_red_light_model()
+    cs = MockCarState()
+    rs = MockRadarState(present=False)
+    # First, drive at high speed -- e2e is in control, controller is idle.
+    run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=-1.0, v_cruise=10.0, n=20)
+    assert controller._state == TrafficStopState.CRUISE
+    # Now speed has dropped below threshold (~5.5 m/s) -- controller takes over.
+    result = run_frames(controller, model, cs, rs, v_ego=4.0, a_ego=-1.0, v_cruise=10.0, n=1)
+    assert controller._state == TrafficStopState.STOPPING
+    assert result.stop_dist_m is not None
+
+  def test_at_threshold_speed_does_not_engage(self):
+    """Edge case: v_ego * 3.6 must be strictly less than the threshold (not equal). At
+    exactly the threshold we stay in CRUISE -- this prevents a strict-equality blip when v_ego
+    hovers around the boundary."""
+    controller = TrafficStopController()
+    model = approaching_red_light_model()
+    cs = MockCarState()
+    rs = MockRadarState(present=False)
+    v_ego = TRAFFIC_STOP_TAKEOVER_SPEED_KPH / 3.6  # exactly the threshold in m/s
+    result = run_frames(controller, model, cs, rs, v_ego=v_ego, a_ego=0.0, v_cruise=v_ego, n=1)
+    assert controller._state == TrafficStopState.CRUISE
+    assert result.stop_dist_m is None
+
+  def test_filter_histories_warm_up_even_when_idle(self):
+    """While the controller stays in CRUISE because of the high-speed gate, the model-x
+    median/avg filters should still be running and accumulating. This means by the time
+    v_ego drops below the threshold and the controller engages STOPPING, the filters are
+    already warm with the correct stop-line estimate -- not from 1-2 raw samples."""
+    controller = TrafficStopController()
+    model = approaching_red_light_model()
+    cs = MockCarState()
+    rs = MockRadarState(present=False)
+    # High speed for many frames; controller is in CRUISE because of the takeover gate.
+    run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=20)
+    assert controller._state == TrafficStopState.CRUISE
+    assert len(controller._stop_x_avg_hist) == 15  # saturated at the 15-frame window
+    assert len(controller._stop_x_median_hist) == 3  # saturated at the 3-frame window
+    assert len(controller._model_v_hist) == 10  # saturated at the 10-frame window

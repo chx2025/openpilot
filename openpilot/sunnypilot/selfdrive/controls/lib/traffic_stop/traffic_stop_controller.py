@@ -39,6 +39,16 @@ TRAFFIC_STOP_ENABLED = True
 # Positive = stop further away (later); negative = stop closer to the car (earlier).
 # Reasonable range: roughly -5 to +5 (meters).
 TRAFFIC_STOP_DISTANCE_ADJUST_M = 0.0
+
+# Only take over from e2e when the car has already slowed down close to the stop line.
+# At high speed, e2e naturally decelerates toward the model's predicted stop line, and a
+# mid-decel handoff to this controller causes a visible accel-then-brake blip -- the candidate
+# source seam is most jarring when traffic_stop suddenly caps v_cruise mid-deceleration.
+# By the time v_ego drops below this threshold (set in kph to match the other speed
+# breakpoints in this file; ~5.5 m/s), e2e has already done most of the decel and the handoff
+# is imperceptible. Lower = smoother handoff but traffic_stop has less time to stabilize
+# before STOPPED; higher = earlier handoff but risk of the original blip.
+TRAFFIC_STOP_TAKEOVER_SPEED_KPH = 20.0
 # ============================================================================
 
 STOP_MODEL_IDX = -2                            # 33-point model trajectory, 2nd-to-last point (cp: x[31])
@@ -247,8 +257,16 @@ class TrafficStopController:
       # XState.lead`), not specifically a lead closer than the stop line. If a real car is
       # already there, the MPC's own lead-following naturally produces the same stop; a
       # redundant virtual obstacle is unnecessary.
+      # DELAYED TAKEOVER FROM E2E: at high speed, e2e naturally decelerates toward the model's
+      # predicted stop line. A mid-decel handoff to this controller here causes a visible
+      # accel-then-brake blip (v_cruise_limited jumps in mid-deceleration; e2e and STOPPING
+      # compete in the candidates.min() pick). We only hand off once v_ego is below
+      # TRAFFIC_STOP_TAKEOVER_SPEED_KPH, at which point e2e has already done most of the
+      # decel and the handoff is smooth. Until then this controller returns (None, None) and
+      # longitudinal_planner.py keeps e2e in the candidate pool for natural decel.
       entry_allowed = is_traffic_stop_entry_allowed(steering_angle_deg)
       if (not lead_present and traffic_state == TrafficLightState.RED and
+          v_ego * 3.6 < TRAFFIC_STOP_TAKEOVER_SPEED_KPH and
           entry_allowed and self._gas_suppress_frames == 0):
         self._state = TrafficStopState.STOPPING
         self._reference_speed_kph = get_traffic_stop_reference_speed(v_ego * 3.6, None)
