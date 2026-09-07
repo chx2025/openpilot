@@ -18,7 +18,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.common.hardware import AGNOS, HARDWARE
 from openpilot.common.version import get_build_metadata, SP_BRANCH_MIGRATIONS
-from openpilot.sunnypilot.system.update_hooks import hydrate_lfs_checkout
+from openpilot.sunnypilot.system.update_hooks import hydrate_lfs_checkout, prepare_update_remote, update_command_timeout
 
 LOCK_FILE = os.getenv("UPDATER_LOCK_FILE", "/tmp/safe_staging_overlay.lock")
 STAGING_ROOT = os.getenv("UPDATER_STAGING_ROOT", "/data/safe_staging")
@@ -68,7 +68,16 @@ def write_time_to_param(params, param) -> None:
   params.put(param, t, block=True)
 
 def run(cmd: list[str], cwd: str | None = None) -> str:
-  return subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT, encoding='utf8')
+  env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+  try:
+    return subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT, encoding='utf8',
+                                   env=env, timeout=update_command_timeout(cmd))
+  except subprocess.TimeoutExpired as error:
+    output = error.output or b""
+    if isinstance(output, bytes):
+      output = output.decode('utf8', errors='replace')
+    raise subprocess.CalledProcessError(124, cmd, f"Git network operation timed out after {error.timeout}s. "
+                                       f"Check DNS and access to GitHub.\n{output}") from error
 
 
 def set_consistent_flag(consistent: bool) -> None:
@@ -332,14 +341,14 @@ class Updater:
 
     excluded_branches = ('release2', 'release2-staging')
 
+    setup_git_options(OVERLAY_MERGED)
+    prepare_update_remote(OVERLAY_MERGED, self.get_branch(OVERLAY_MERGED), run)
     try:
-      run(["git", "ls-remote", "origin", "HEAD"], OVERLAY_MERGED)
+      output = run(["git", "ls-remote", "--heads", "origin"], OVERLAY_MERGED)
       self._has_internet = True
     except subprocess.CalledProcessError:
       self._has_internet = False
-
-    setup_git_options(OVERLAY_MERGED)
-    output = run(["git", "ls-remote", "--heads"], OVERLAY_MERGED)
+      raise
 
     self.branches.clear()
     for line in output.split('\n'):
@@ -351,6 +360,8 @@ class Updater:
     cur_branch = self.get_branch(OVERLAY_MERGED)
     cur_commit = self.get_commit_hash(OVERLAY_MERGED)
     new_branch = self.target_branch
+    if new_branch not in self.branches:
+      raise RuntimeError(f"Update target branch is not available on origin: {new_branch}")
     new_commit = self.branches[new_branch]
     if (cur_branch, cur_commit) != (new_branch, new_commit):
       cloudlog.info(f"update available, {cur_branch} ({str(cur_commit)[:7]}) -> {new_branch} ({str(new_commit)[:7]})")
@@ -371,12 +382,13 @@ class Updater:
     run(["git", "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], OVERLAY_MERGED)
 
     branch = self.target_branch
-    git_fetch_output = run(["git", "fetch", "origin", branch], OVERLAY_MERGED)
+    prepare_update_remote(OVERLAY_MERGED, self.get_branch(OVERLAY_MERGED), run)
+    git_fetch_output = run(["git", "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"], OVERLAY_MERGED)
     cloudlog.info("git fetch success: %s", git_fetch_output)
 
     cloudlog.info("git reset in progress")
     cmds = [
-      ["git", "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
+      ["git", "checkout", "--force", "--no-recurse-submodules", "-B", branch, f"refs/remotes/origin/{branch}"],
       ["git", "branch", "--set-upstream-to", f"origin/{branch}"],
       ["git", "reset", "--hard"],
       ["git", "clean", "-xdff"],

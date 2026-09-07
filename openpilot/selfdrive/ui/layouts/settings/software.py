@@ -10,6 +10,7 @@ from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from openpilot.system.ui.widgets.list_view import button_item, text_item, ListItem
 from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
 from openpilot.system.ui.widgets.scroller_tici import Scroller
+from openpilot.sunnypilot.system.update_hooks import available_update_branches
 
 if gui_app.sunnypilot_ui():
   from openpilot.system.ui.sunnypilot.widgets.list_view import button_item_sp as button_item
@@ -184,7 +185,7 @@ class SoftwareLayout(Widget):
     # Get available branches and order
     current_git_branch = ui_state.params.get("GitBranch") or ""
     branches_str = ui_state.params.get("UpdaterAvailableBranches") or ""
-    branches = [b for b in branches_str.split(",") if b]
+    branches = available_update_branches(current_git_branch, branches_str)
 
     for b in [current_git_branch, "devel-staging", "devel", "nightly", "nightly-dev", "master"]:
       if b in branches:
