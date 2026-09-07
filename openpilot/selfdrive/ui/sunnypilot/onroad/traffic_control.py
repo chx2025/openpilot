@@ -90,11 +90,13 @@ class TrafficControlRenderer(Widget):
     if not sm.alive["longitudinalPlanSP"] or not sm.valid["longitudinalPlanSP"]:
       self.state = TrafficSignalDisplayState()
       return
-    if sm.updated["longitudinalPlanSP"]:
-      self.state = TrafficSignalDisplayState.from_plan(
-        sm["longitudinalPlanSP"].teslaTrafficControl,
-        valid=bool(sm.valid["longitudinalPlanSP"]),
-      )
+    # updated is a one-poll pulse, not an acknowledgement by this renderer.
+    # A skipped HUD frame must not leave an older lamp/control outline cached
+    # after a newer healthy plan has already arrived.
+    self.state = TrafficSignalDisplayState.from_plan(
+      sm["longitudinalPlanSP"].teslaTrafficControl,
+      valid=bool(sm.valid["longitudinalPlanSP"]),
+    )
 
   def _render(self, rect: rl.Rectangle) -> None:
     if not self.state.visible:

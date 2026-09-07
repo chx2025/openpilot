@@ -61,6 +61,72 @@ def test_view_model_displays_actual_signal_color():
   assert not state.flashing
 
 
+def test_renderer_consumes_latest_green_after_missing_update_pulse(monkeypatch):
+  renderer, sm = make_renderer(monkeypatch, target(light=1, applied=True, action=2))
+  renderer.update()
+  assert renderer.state.light_state == 1
+
+  # The HUD can skip a render while SubMaster continues polling. Its latest
+  # healthy message persists, but updated only describes the most recent poll.
+  sm["longitudinalPlanSP"] = SimpleNamespace(teslaTrafficControl=target(
+    light=2, phase=TrafficControlPhase.release, applied=False,
+  ))
+  sm.updated["longitudinalPlanSP"] = False
+  renderer.update()
+  assert renderer.state.light_state == 2
+  assert not traffic_control_highlighted(renderer.state)
+
+
+def test_renderer_recovers_latest_message_after_health_gap_without_update_pulse(monkeypatch):
+  renderer, sm = make_renderer(monkeypatch, target(light=1))
+  renderer.update()
+  sm.valid["longitudinalPlanSP"] = False
+  renderer.update()
+  assert not renderer.state.visible
+
+  sm["longitudinalPlanSP"] = SimpleNamespace(teslaTrafficControl=target(light=2))
+  sm.valid["longitudinalPlanSP"] = True
+  sm.updated["longitudinalPlanSP"] = False
+  renderer.update()
+  assert renderer.state.visible
+  assert renderer.state.light_state == 2
+
+
+def test_renderer_does_not_keep_control_attribution_after_off_message(monkeypatch):
+  renderer, sm = make_renderer(monkeypatch, target(light=1, applied=True, action=2))
+  renderer.update()
+  assert traffic_control_highlighted(renderer.state)
+  sm["longitudinalPlanSP"] = SimpleNamespace(teslaTrafficControl=target(mode=0, applied=False))
+  sm.updated["longitudinalPlanSP"] = False
+  renderer.update()
+  assert not renderer.state.visible
+  assert not traffic_control_highlighted(renderer.state)
+
+
+def test_renderer_draws_latest_green_even_while_stop_is_still_held(monkeypatch):
+  renderer, sm = make_renderer(monkeypatch, target(light=1, phase=TrafficControlPhase.hold, applied=True, action=2))
+  renderer.update()
+  sm["longitudinalPlanSP"] = SimpleNamespace(teslaTrafficControl=target(
+    light=2, phase=TrafficControlPhase.hold, applied=True, action=2,
+  ))
+  sm.updated["longitudinalPlanSP"] = False
+  renderer.update()
+
+  lamps = []
+  monkeypatch.setattr(rl, "draw_rectangle_rounded", lambda *_: None)
+  monkeypatch.setattr(rl, "draw_rectangle_rounded_lines_ex", lambda *_: None)
+  monkeypatch.setattr(rl, "draw_circle_v", lambda _center, radius, color: lamps.append((radius, color)))
+  renderer._render(rl.Rectangle(0, 0, 2160, 1080))
+  colors = [(c.r, c.g, c.b) for radius, c in lamps if radius == TRAFFIC_LIGHT_RADIUS]
+  off = traffic_control_module.LAMP_OFF
+  green = traffic_control_module.GREEN
+  assert colors == [(off.r, off.g, off.b), (off.r, off.g, off.b), (green.r, green.g, green.b)]
+  # A green lamp describes the observation; it does not falsely claim that
+  # the recorded HOLD/control constraint has already been released.
+  assert renderer.state.phase == int(TrafficControlPhase.hold)
+  assert traffic_control_highlighted(renderer.state)
+
+
 def test_view_model_marks_flashing_green_stop():
   state = TrafficSignalDisplayState.from_plan(target(
     light=0, phase=TrafficControlPhase.flashingGreenStop,
