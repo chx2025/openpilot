@@ -504,6 +504,8 @@ struct TeslaTrafficControl {
   visionLine @17 :Bool;
   frameMonoTime @18 :UInt64;
   quality @19 :UInt8;
+  rawAddress @20 :UInt32;
+  rawPayload @21 :Data;
 }
 
 struct TeslaTrafficControlPlan {

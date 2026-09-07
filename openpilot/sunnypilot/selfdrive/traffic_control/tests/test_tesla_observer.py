@@ -3,7 +3,12 @@ from itertools import permutations
 from opendbc.can import CANPacker
 import pytest
 
-from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import TeslaTrafficControlObserver
+import openpilot.cereal.messaging as messaging
+from openpilot.sunnypilot.selfdrive.traffic_control.tesla_observer import (
+  TeslaTrafficControlObservation,
+  TeslaTrafficControlObserver,
+  publish_tesla_traffic_control,
+)
 
 
 def _frame(values, bus=2):
@@ -34,6 +39,26 @@ def test_observer_accepts_party_traffic_light_and_rejects_veh_collision():
   assert observation.distance == 80
   assert observation.light_state == 1
   assert observation.quality == 2
+  assert observation.raw_address == address
+  assert observation.raw_payload == data
+
+
+def test_raw_frame_diagnostics_survive_car_state_sp_serialization():
+  address, data, _ = _frame({
+    "APP_tcControlType": 3,
+    "APP_tcControlDistance": 42,
+    "APP_tcControlLightState": 2,
+  })
+  observer = TeslaTrafficControlObserver()
+  observer.update([(1_234_567_890, [(address, data[:6], 2)])], 1_234_567_890)
+  message = messaging.new_message("carStateSP")
+  publish_tesla_traffic_control(message.carStateSP, observer.snapshot(1_234_567_890))
+  decoded = messaging.log_from_bytes(message.to_bytes()).carStateSP.teslaTrafficControl
+  restored = TeslaTrafficControlObservation.from_message(decoded)
+  assert restored.raw_address == 0x25D
+  assert restored.raw_payload == data[:6]
+  assert restored.frame_mono_time == 1_234_567_890
+  assert (restored.light_state, restored.control_type, restored.distance) == (2, 3, 42)
 
 
 def test_observer_treats_255_as_no_target_and_supports_shortened_dlc():
@@ -50,6 +75,7 @@ def test_observer_treats_255_as_no_target_and_supports_shortened_dlc():
   observation = observer.snapshot(2_000_000_000)
   assert observation.available
   assert observation.dlc == 6
+  assert observation.raw_payload == data[:6]
   assert observation.distance == 255
   assert not observation.valid_for_control
 

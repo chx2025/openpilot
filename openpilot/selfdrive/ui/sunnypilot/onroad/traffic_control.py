@@ -78,6 +78,30 @@ class TrafficSignalDisplayState:
     )
 
 
+_latest_traffic_display_state = TrafficSignalDisplayState()
+_latest_traffic_display_frame = 0
+
+
+def write_traffic_ui_debug(target, sm) -> None:
+  plan_available = bool(
+    sm.seen["longitudinalPlanSP"]
+    and sm.alive["longitudinalPlanSP"]
+    and sm.valid["longitudinalPlanSP"]
+  )
+  target.trafficPlanAvailable = plan_available
+  if plan_available:
+    plan = sm["longitudinalPlanSP"].teslaTrafficControl
+    target.trafficPlanMonoTime = int(sm.logMonoTime["longitudinalPlanSP"])
+    target.trafficPlanLightState = int(plan.lightState)
+    target.trafficPlanPhase = int(plan.phase)
+  target.trafficDisplayFrame = _latest_traffic_display_frame
+  target.trafficDisplayedVisible = _latest_traffic_display_state.visible
+  target.trafficDisplayedHasSignal = _latest_traffic_display_state.has_signal
+  target.trafficDisplayedLightState = _latest_traffic_display_state.light_state
+  target.trafficDisplayedPhase = _latest_traffic_display_state.phase
+  target.trafficDisplayedControlActive = _latest_traffic_display_state.control_active
+
+
 class TrafficControlRenderer(Widget):
   """Icon-only traffic signal driven by the already-published final plan."""
 
@@ -86,9 +110,12 @@ class TrafficControlRenderer(Widget):
     self.state = TrafficSignalDisplayState()
 
   def update(self) -> None:
+    global _latest_traffic_display_frame, _latest_traffic_display_state
     sm = ui_state.sm
     if not sm.alive["longitudinalPlanSP"] or not sm.valid["longitudinalPlanSP"]:
       self.state = TrafficSignalDisplayState()
+      _latest_traffic_display_state = self.state
+      _latest_traffic_display_frame = gui_app.frame
       return
     # updated is a one-poll pulse, not an acknowledgement by this renderer.
     # A skipped HUD frame must not leave an older lamp/control outline cached
@@ -97,6 +124,8 @@ class TrafficControlRenderer(Widget):
       sm["longitudinalPlanSP"].teslaTrafficControl,
       valid=bool(sm.valid["longitudinalPlanSP"]),
     )
+    _latest_traffic_display_state = self.state
+    _latest_traffic_display_frame = gui_app.frame
 
   def _render(self, rect: rl.Rectangle) -> None:
     if not self.state.visible:

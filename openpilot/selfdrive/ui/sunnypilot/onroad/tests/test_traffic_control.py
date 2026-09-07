@@ -2,6 +2,7 @@ from types import SimpleNamespace
 import pyray as rl
 import pytest
 
+import openpilot.cereal.messaging as messaging
 import openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control as traffic_control_module
 from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import (
   TrafficSignalDisplayState,
@@ -12,6 +13,7 @@ from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import (
   TRAFFIC_LIGHT_RADIUS,
   traffic_control_highlighted,
   traffic_card_rect,
+  write_traffic_ui_debug,
 )
 from openpilot.sunnypilot.selfdrive.traffic_control.controller import TrafficControlPhase
 
@@ -44,11 +46,13 @@ class FakeSubMaster(dict):
     self.alive = {"longitudinalPlanSP": True}
     self.valid = {"longitudinalPlanSP": True}
     self.updated = {"longitudinalPlanSP": True}
+    self.seen = {"longitudinalPlanSP": True}
+    self.logMonoTime = {"longitudinalPlanSP": 0}
 
 
 def make_renderer(monkeypatch, traffic_target):
   fake_sm = FakeSubMaster(traffic_target)
-  monkeypatch.setattr(traffic_control_module, "gui_app", SimpleNamespace(font=lambda _weight: object()))
+  monkeypatch.setattr(traffic_control_module, "gui_app", SimpleNamespace(font=lambda _weight: object(), frame=0))
   monkeypatch.setattr(traffic_control_module.ui_state, "sm", fake_sm)
   return traffic_control_module.TrafficControlRenderer(), fake_sm
 
@@ -125,6 +129,33 @@ def test_renderer_draws_latest_green_even_while_stop_is_still_held(monkeypatch):
   # the recorded HOLD/control constraint has already been released.
   assert renderer.state.phase == int(TrafficControlPhase.hold)
   assert traffic_control_highlighted(renderer.state)
+
+
+def test_ui_debug_records_plan_and_the_state_actually_consumed_by_renderer(monkeypatch):
+  renderer, sm = make_renderer(monkeypatch, target(light=1, phase=TrafficControlPhase.hold, applied=True))
+  renderer.update()
+  sm["longitudinalPlanSP"] = SimpleNamespace(teslaTrafficControl=target(
+    light=2, phase=TrafficControlPhase.hold, applied=True,
+  ))
+  sm.logMonoTime = {"longitudinalPlanSP": 123_456_789}
+  sm.seen = {"longitudinalPlanSP": True}
+  sm.updated["longitudinalPlanSP"] = False
+  monkeypatch.setattr(traffic_control_module.gui_app, "frame", 77)
+  renderer.update()
+
+  message = messaging.new_message("uiDebug")
+  write_traffic_ui_debug(message.uiDebug, sm)
+  debug = messaging.log_from_bytes(message.to_bytes()).uiDebug
+  assert debug.trafficPlanAvailable
+  assert debug.trafficPlanMonoTime == 123_456_789
+  assert debug.trafficPlanLightState == 2
+  assert debug.trafficPlanPhase == int(TrafficControlPhase.hold)
+  assert debug.trafficDisplayFrame == 77
+  assert debug.trafficDisplayedVisible
+  assert debug.trafficDisplayedHasSignal
+  assert debug.trafficDisplayedLightState == 2
+  assert debug.trafficDisplayedPhase == int(TrafficControlPhase.hold)
+  assert debug.trafficDisplayedControlActive
 
 
 def test_view_model_marks_flashing_green_stop():

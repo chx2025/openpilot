@@ -38,6 +38,8 @@ class TeslaTrafficControlObservation:
   vision_line: bool = False
   frame_mono_time: int = 0
   quality: int = 0
+  raw_address: int = 0
+  raw_payload: bytes = b""
 
   @classmethod
   def from_message(cls, msg) -> TeslaTrafficControlObservation:
@@ -51,6 +53,7 @@ class TeslaTrafficControlObservation:
       vision_light=bool(msg.visionLight), vision_sign=bool(msg.visionSign),
       vision_road_marking=bool(msg.visionRoadMarking), vision_line=bool(msg.visionLine),
       frame_mono_time=int(msg.frameMonoTime), quality=int(msg.quality),
+      raw_address=int(getattr(msg, "rawAddress", 0)), raw_payload=bytes(getattr(msg, "rawPayload", b"")),
     )
 
 
@@ -80,7 +83,8 @@ class TeslaTrafficControlObserver:
     return 2 if eligible else 1
 
   @classmethod
-  def _build(cls, values: dict[str, float], bus: int, dlc: int, timestamp_ns: int) -> TeslaTrafficControlObservation:
+  def _build(cls, values: dict[str, float], bus: int, dlc: int, timestamp_ns: int,
+             raw_address: int, raw_payload: bytes) -> TeslaTrafficControlObservation:
     control_type = int(values["APP_tcControlType"])
     control_source = int(values["APP_tcControlSource"])
     light_state = int(values["APP_tcControlLightState"])
@@ -108,6 +112,8 @@ class TeslaTrafficControlObserver:
       vision_line=bool(values["APP_tcVisionLine"]),
       frame_mono_time=timestamp_ns,
       quality=cls._quality(decoded, eligible),
+      raw_address=raw_address,
+      raw_payload=raw_payload,
     )
 
   def update(self, can_packets: list[tuple[int, list[tuple[int, bytes, int]]]], now_ns: int) -> None:
@@ -125,7 +131,10 @@ class TeslaTrafficControlObserver:
         parser = self.parsers[source]
         if address not in parser.update([(packet_mono_time, [(address, data, source)])]):
           continue
-        self.latest_by_bus[source] = self._build(dict(parser.vl["APP_trafficControl"]), source, len(data), packet_mono_time)
+        self.latest_by_bus[source] = self._build(
+          dict(parser.vl["APP_trafficControl"]), source, len(data), packet_mono_time,
+          address, bytes(data),
+        )
 
   def snapshot(self, now_ns: int) -> TeslaTrafficControlObservation:
     for bus in TRAFFIC_CONTROL_BUSES:
@@ -162,6 +171,8 @@ class TeslaTrafficControlObserver:
           vision_line=observation.vision_line,
           frame_mono_time=observation.frame_mono_time,
           quality=observation.quality,
+          raw_address=observation.raw_address,
+          raw_payload=observation.raw_payload,
         )
     return TeslaTrafficControlObservation()
 
@@ -188,3 +199,5 @@ def publish_tesla_traffic_control(builder, observation: TeslaTrafficControlObser
   target.visionLine = observation.vision_line
   target.frameMonoTime = observation.frame_mono_time
   target.quality = observation.quality
+  target.rawAddress = observation.raw_address
+  target.rawPayload = observation.raw_payload

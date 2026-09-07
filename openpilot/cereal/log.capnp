@@ -2394,6 +2394,16 @@ struct Sentinel {
 struct UIDebug {
   cpuTimeMillis @0 :Float32;
   frameTimeMillis @1 :Float32;
+  trafficPlanAvailable @2 :Bool;
+  trafficPlanMonoTime @3 :UInt64;
+  trafficPlanLightState @4 :UInt8;
+  trafficPlanPhase @5 :UInt8;
+  trafficDisplayFrame @6 :UInt64;
+  trafficDisplayedVisible @7 :Bool;
+  trafficDisplayedHasSignal @8 :Bool;
+  trafficDisplayedLightState @9 :UInt8;
+  trafficDisplayedPhase @10 :UInt8;
+  trafficDisplayedControlActive @11 :Bool;
 }
 
 struct ManagerState {

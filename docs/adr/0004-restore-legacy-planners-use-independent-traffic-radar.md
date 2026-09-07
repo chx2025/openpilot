@@ -162,6 +162,15 @@ diagnostic baseATarget retains the unmodified backend value. Tests exercise each
 real backend's publish method and transport-facing sink to protect this Seam
 when updating upstream; these tests do not substitute for MPC/route validation.
 
+Traffic timing diagnostics remain output-only. `carStateSP` carries the exact
+accepted src2 `0x25D` address and six/eight-byte payload beside its atomic
+decoded tuple and frame timestamp. `uiDebug` records the latest healthy plan
+color/phase and the color/phase actually consumed by the Traffic renderer,
+including its UI frame. No controller, planner, actuator, eligibility check, or
+vehicle-CAN path reads these diagnostic fields. C3XL continues to divert
+`carStateSP` into its bounded local diagnostic stream; `uiDebug` remains in
+the existing qlog stream, so diagnosis does not require full raw CAN logging.
+
 ## Consequences
 
 - The old “all planners reuse the upstream solver” decision is superseded for

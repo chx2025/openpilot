@@ -9,6 +9,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.main import MainLayout
 from openpilot.selfdrive.ui.mici.layouts.main import MiciMainLayout
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.selfdrive.ui.sunnypilot.onroad.traffic_control import write_traffic_ui_debug
 
 BIG_UI = gui_app.big_ui()
 
@@ -41,6 +42,7 @@ def main():
       msg = messaging.new_message('uiDebug')
       msg.uiDebug.cpuTimeMillis = (cpu_time + extra_cpu) * 1000
       msg.uiDebug.frameTimeMillis = frame_time * 1000
+      write_traffic_ui_debug(msg.uiDebug, ui_state.sm)
       pm.send('uiDebug', msg)
 
 
