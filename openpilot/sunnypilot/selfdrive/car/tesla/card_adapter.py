@@ -172,4 +172,5 @@ class TeslaCardAdapter:
 
     update_speed_limit = getattr(state, "update_speed_limit_target", None)
     if update_speed_limit is not None:
+      state.tesla_speed_limit_assist_enabled = self.speed_limit_assist_configured
       update_speed_limit(*speed_limit_context(self.sm, timestamp, self.speed_limit_assist_configured))

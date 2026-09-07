@@ -89,6 +89,19 @@ def test_non_assist_mode_never_exposes_automatic_speed_target():
   assert speed_limit_context(sm, 10.0, assist_configured=False) == (0.0, False)
 
 
+def test_assist_setting_is_forwarded_independently_of_stale_limit():
+  state = FakeState()
+  adapter = TeslaCardAdapter("tesla", SimpleNamespace(CS=state), FakeSubMaster())
+  adapter.speed_limit_assist_configured = True
+  adapter.update_context(10.0 + CONTEXT_STALE_S + 0.01)
+  assert state.tesla_speed_limit_assist_enabled is True
+  assert state.speed_limit[-1] == (0.0, False)
+  adapter.speed_limit_assist_configured = False
+  adapter.update_context(10.0)
+  assert state.tesla_speed_limit_assist_enabled is False
+  assert state.speed_limit[-1] == (0.0, False)
+
+
 def test_blindspot_state_is_forwarded_to_ambient_controller():
   adapter = TeslaCardAdapter("tesla", SimpleNamespace(CS=FakeState()), FakeSubMaster())
   car_state = SimpleNamespace(brakePressed=False, leftBlindspot=True, rightBlindspot=False)
