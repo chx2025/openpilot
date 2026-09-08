@@ -40,24 +40,30 @@ TRAFFIC_STOP_ENABLED = True
 # Reasonable range: roughly -5 to +5 (meters).
 TRAFFIC_STOP_DISTANCE_ADJUST_M = 0.0
 
-# Only take over from e2e when the car has already slowed down close to the stop line.
-# At high speed, e2e naturally decelerates toward the model's predicted stop line, and a
-# mid-decel handoff to this controller causes a visible accel-then-brake blip -- the candidate
-# source seam is most jarring when traffic_stop suddenly caps v_cruise mid-deceleration.
-# By the time v_ego drops below this threshold (set in kph to match the other speed
-# breakpoints in this file; ~8.3 m/s), e2e has done most of the decel and the handoff is
-# imperceptible. Lower = smoother handoff but traffic_stop has less time to stabilize
-# before STOPPED; higher = earlier handoff but risk of the original blip.
-# 30.0 kph chosen so heavy-city driving (25-35 kph typical approach) hands off cleanly
-# before traffic_stop's v_cruise soft-limit starts to bite.
-TRAFFIC_STOP_TAKEOVER_SPEED_KPH = 30.0
+# Only hand off from e2e to ACC-stop when the car is (a) driving dead-straight
+# (see TRAFFIC_STOP_ENTRY_STEERING_LIMIT_DEG in traffic_stop.py) AND (b) already
+# close to the model-predicted stop line. At distance, e2e naturally decelerates
+# toward the model's own predicted stop line, and a far-out handoff caused a
+# visible accel-then-brake blip (the candidate source seam is most jarring when
+# traffic_stop suddenly caps v_cruise mid-deceleration). By the time the car is
+# within this distance AND straight, e2e has done most of the decel and the
+# handoff is imperceptible. This replaces the old speed-based gate (30 kph),
+# which the user found too eager on the road.
+TRAFFIC_STOP_ENTRY_DISTANCE_M = 30.0
 # ============================================================================
 
 STOP_MODEL_IDX = -2                            # 33-point model trajectory, 2nd-to-last point (cp: x[31])
 NO_STOP_DISTANCE_M = 1000.0                    # "no lead" sentinel distance
 
-DEFAULT_COMFORT_BRAKE = 2.4                    # m/s^2 baseline for the v_cruise soft-limit formula (cp: comfortBrake)
-STOPPING_COMFORT_BRAKE_FACTOR = 0.9            # cp multiplies comfort_brake by this while actively braking (STOPPING only)
+# Comfort-brake ramp for the v_cruise soft-limit (replaces cp's fixed
+# DEFAULT_COMFORT_BRAKE * STOPPING_COMFORT_BRAKE_FACTOR = 2.16 m/s^2). User
+# requirement: start braking gently at 0.5 m/s^2 and ramp up over time to a
+# 1.8 m/s^2 maximum only if the approach actually needs it -- avoids the harsh
+# initial grab of a constant high comfort_brake while still being able to stop
+# decisively for a short stop line.
+TRAFFIC_STOP_COMFORT_BRAKE_INITIAL = 0.5       # m/s^2 starting decel
+TRAFFIC_STOP_COMFORT_BRAKE_MAX = 1.8           # m/s^2 cap
+TRAFFIC_STOP_COMFORT_BRAKE_RAMPUP_M_S3 = 0.25  # m/s^2 per second increase (jerk)
 
 # cancel an active stop if a real lead is this much closer than the stop line. cp's real default
 # is 2.0m; raised to 4.0m here so the worst-case final stopped gap to a real lead is ~4m instead
@@ -146,6 +152,7 @@ class TrafficStopController:
 
     self._reference_speed_kph: float = 0.0
     self._actual_stop_distance: float = 0.0
+    self._comfort_brake: float = TRAFFIC_STOP_COMFORT_BRAKE_INITIAL
 
   def _reset(self):
     """Reset the per-stop-event state back to cruise / no-obstacle. Deliberately does NOT clear
@@ -156,6 +163,7 @@ class TrafficStopController:
     self._start_sign_count = 0
     self._reference_speed_kph = 0.0
     self._actual_stop_distance = 0.0
+    self._comfort_brake = TRAFFIC_STOP_COMFORT_BRAKE_INITIAL
 
   def _check_model_stopping(self, v_cruise: float, model_v_traj, v_ego: float, a_ego: float,
                              model_x_end: float, model_y_traj, d_rel: float) -> TrafficLightState:
@@ -259,18 +267,20 @@ class TrafficStopController:
       # XState.lead`), not specifically a lead closer than the stop line. If a real car is
       # already there, the MPC's own lead-following naturally produces the same stop; a
       # redundant virtual obstacle is unnecessary.
-      # DELAYED TAKEOVER FROM E2E: at high speed, e2e naturally decelerates toward the model's
-      # predicted stop line. A mid-decel handoff to this controller here causes a visible
-      # accel-then-brake blip (v_cruise_limited jumps in mid-deceleration; e2e and STOPPING
-      # compete in the candidates.min() pick). We only hand off once v_ego is below
-      # TRAFFIC_STOP_TAKEOVER_SPEED_KPH, at which point e2e has already done most of the
-      # decel and the handoff is smooth. Until then this controller returns (None, None) and
+      # DISTANCE + STRAIGHT-LINE GATE (replaces the old speed gate): at distance, e2e
+      # naturally decelerates toward the model's predicted stop line, and a far-out handoff
+      # to this controller caused a visible accel-then-brake blip (v_cruise_limited jumps in
+      # mid-deceleration; e2e and STOPPING compete in the candidates.min() pick). We only
+      # hand off once the car is BOTH dead-straight (steering < 5°) AND within 30 m of the
+      # model-predicted stop line, at which point e2e has done most of the decel and the
+      # handoff is smooth. Until then this controller returns (None, None) and
       # longitudinal_planner.py keeps e2e in the candidate pool for natural decel.
       entry_allowed = is_traffic_stop_entry_allowed(steering_angle_deg)
+      entry_distance_near = stop_model_x_raw < TRAFFIC_STOP_ENTRY_DISTANCE_M
       if (not lead_present and traffic_state == TrafficLightState.RED and
-          v_ego * 3.6 < TRAFFIC_STOP_TAKEOVER_SPEED_KPH and
-          entry_allowed and self._gas_suppress_frames == 0):
+          entry_distance_near and entry_allowed and self._gas_suppress_frames == 0):
         self._state = TrafficStopState.STOPPING
+        self._comfort_brake = TRAFFIC_STOP_COMFORT_BRAKE_INITIAL
         self._reference_speed_kph = get_traffic_stop_reference_speed(v_ego * 3.6, None)
         self._actual_stop_distance = get_virtual_traffic_stop_distance(stop_model_x_rl, self._reference_speed_kph)
 
@@ -344,9 +354,15 @@ class TrafficStopController:
     else:
       v_cruise_limited = None
       if stop_dist < 300.0:
-        comfort_brake = DEFAULT_COMFORT_BRAKE * STOPPING_COMFORT_BRAKE_FACTOR
+        # Ramp comfort_brake from INITIAL 0.5 -> MAX 1.8 m/s^2 while actively braking.
+        # Gently start the approach, then progressively lean in only if the stop line is
+        # short enough to need it (user requirement: -0.5 slowly ramping up to -1.8).
+        self._comfort_brake = min(
+          TRAFFIC_STOP_COMFORT_BRAKE_MAX,
+          self._comfort_brake + DT_MDL * TRAFFIC_STOP_COMFORT_BRAKE_RAMPUP_M_S3,
+        )
         stop_dist_soft = max(stop_dist - 1.0, 0.0)
-        v_cruise_limited = (2 * comfort_brake * stop_dist_soft) ** 0.5
+        v_cruise_limited = (2 * self._comfort_brake * stop_dist_soft) ** 0.5
         v_cruise_limited = min(v_cruise_limited, v_ego)  # monotonic guard: never request more speed than current
 
     return TrafficStopResult(stop_dist_m=stop_dist, v_cruise_limited=v_cruise_limited)

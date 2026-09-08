@@ -6,7 +6,10 @@ from openpilot.sunnypilot.selfdrive.controls.lib.traffic_stop.traffic_stop_contr
   STOPPED_GRACE_FRAMES,
   STARTING_SUPPRESS_FRAMES,
   TRAFFIC_STOP_CAMERA_TO_FRONT_M,
-  TRAFFIC_STOP_TAKEOVER_SPEED_KPH,
+  TRAFFIC_STOP_ENTRY_DISTANCE_M,
+  TRAFFIC_STOP_COMFORT_BRAKE_INITIAL,
+  TRAFFIC_STOP_COMFORT_BRAKE_MAX,
+  TRAFFIC_STOP_COMFORT_BRAKE_RAMPUP_M_S3,
 )
 
 
@@ -86,10 +89,10 @@ class TestTrafficStopController:
     assert result.stop_dist_m is not None
 
   def test_steering_angle_blocks_entry(self):
-    """>=50 deg steering suppresses *new* entries into traffic-stop management."""
+    """>=5 deg steering suppresses *new* entries into traffic-stop management (dead-straight gate)."""
     controller = TrafficStopController()
-    model = approaching_red_light_model()
-    cs = MockCarState(steeringAngleDeg=60.0)
+    model = approaching_red_light_model()  # model_x_end=15 (< 30m: distance gate satisfied)
+    cs = MockCarState(steeringAngleDeg=6.0)  # just past the 5° threshold
     rs = MockRadarState(present=False)
     result = run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
@@ -271,72 +274,100 @@ class TestTrafficStopController:
     assert abs((plus5_result.stop_dist_m - baseline_result.stop_dist_m) - 5.0) < 1e-6
     assert TRAFFIC_STOP_CAMERA_TO_FRONT_M == -1.5
 
-  # ------------------------------------------------------------------ #
-  # DELAYED TAKEOVER tests (v_ego must drop below threshold to engage) #
-  # ------------------------------------------------------------------ #
+  # ------------------------------------------------------------------------ #
+  # DISTANCE + STRAIGHT-LINE GATE tests                                     #
+  # (replaces the old speed-based takeover: engage only when BOTH steering  #
+  #  abs < 5° AND stop-line distance < 30 m)                                #
+  # ------------------------------------------------------------------------ #
 
-  def test_takeover_threshold_constant_is_in_kph(self):
-    """Sanity check: TRAFFIC_STOP_TAKEOVER_SPEED_KPH is in kph. 4.0 m/s = 14.4 kph is below
-    the 20 kph default; 6.0 m/s = 21.6 kph is above it."""
-    assert 4.0 * 3.6 < TRAFFIC_STOP_TAKEOVER_SPEED_KPH
-    assert 6.0 * 3.6 > TRAFFIC_STOP_TAKEOVER_SPEED_KPH
+  def test_entry_distance_constant_is_in_meters(self):
+    """Sanity check: TRAFFIC_STOP_ENTRY_DISTANCE_M is a distance in meters, not a speed."""
+    assert TRAFFIC_STOP_ENTRY_DISTANCE_M == 30.0
 
-  def test_high_speed_does_not_engage_stopping(self):
-    """DELAYED TAKEOVER: at v_ego above TRAFFIC_STOP_TAKEOVER_SPEED_KPH, the controller stays
-    in CRUISE and returns (None, None). longitudinal_planner keeps e2e in the candidate pool
-    so e2e naturally decelerates without a mid-decel handoff blip (which was the original
-    "sudden accel-then-brake" problem)."""
+  def test_far_distance_does_not_engage_stopping(self):
+    """DISTANCE GATE: even with dead-straight steering and a red light, the controller stays
+    in CRUISE while the model-predicted stop line is farther than 30 m. longitudinal_planner
+    keeps e2e in the candidate pool so e2e naturally decelerates without a mid-decel handoff
+    blip (the original "sudden accel-then-brake" problem)."""
     controller = TrafficStopController()
-    model = approaching_red_light_model()
-    cs = MockCarState()
+    model = approaching_red_light_model(model_x_end=100.0)  # 100 m out
+    cs = MockCarState()  # steering = 0 (straight)
     rs = MockRadarState(present=False)
-    # v_ego = 10 m/s = 36 kph, well above the 20 kph default threshold
     result = run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert result.stop_dist_m is None
     assert result.v_cruise_limited is None
 
-  def test_engages_only_once_speed_drops_below_threshold(self):
-    """Same red-light signal, but v_ego has now dropped below the takeover threshold: the
-    controller takes over and enters STOPPING. This is the bridge between e2e doing the decel
-    at high speed and this controller handling the precision stop at low speed."""
+  def test_engages_when_near_and_straight(self):
+    """Same red-light signal, but the model stop line is now within 30 m and steering is
+    straight: the controller takes over and enters STOPPING."""
     controller = TrafficStopController()
-    model = approaching_red_light_model()
-    cs = MockCarState()
+    model = approaching_red_light_model(model_x_end=15.0)  # 15 m out
+    cs = MockCarState()  # steering = 0 (straight)
     rs = MockRadarState(present=False)
-    # First, drive at high speed -- e2e is in control, controller is idle.
-    run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=-1.0, v_cruise=10.0, n=20)
-    assert controller._state == TrafficStopState.CRUISE
-    # Now speed has dropped below threshold (~8.3 m/s for the 30 kph default) -- controller takes over.
-    result = run_frames(controller, model, cs, rs, v_ego=4.0, a_ego=-1.0, v_cruise=10.0, n=1)
+    result = run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
     assert controller._state == TrafficStopState.STOPPING
     assert result.stop_dist_m is not None
 
-  def test_at_threshold_speed_does_not_engage(self):
-    """Edge case: v_ego * 3.6 must be strictly less than the threshold (not equal). At
-    exactly the threshold we stay in CRUISE -- this prevents a strict-equality blip when v_ego
-    hovers around the boundary."""
+  def test_at_distance_threshold_does_not_engage(self):
+    """Edge case: stop-line distance must be strictly less than 30 m (not equal). At exactly
+    30 m we stay in CRUISE."""
     controller = TrafficStopController()
-    model = approaching_red_light_model()
+    model = approaching_red_light_model(model_x_end=TRAFFIC_STOP_ENTRY_DISTANCE_M)  # exactly 30 m
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    v_ego = TRAFFIC_STOP_TAKEOVER_SPEED_KPH / 3.6  # exactly the threshold in m/s
-    result = run_frames(controller, model, cs, rs, v_ego=v_ego, a_ego=0.0, v_cruise=v_ego, n=1)
+    result = run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert result.stop_dist_m is None
 
   def test_filter_histories_warm_up_even_when_idle(self):
-    """While the controller stays in CRUISE because of the high-speed gate, the model-x
+    """While the controller stays in CRUISE because of the distance gate, the model-x
     median/avg filters should still be running and accumulating. This means by the time
-    v_ego drops below the threshold and the controller engages STOPPING, the filters are
+    the stop line comes within 30 m and the controller engages STOPPING, the filters are
     already warm with the correct stop-line estimate -- not from 1-2 raw samples."""
     controller = TrafficStopController()
-    model = approaching_red_light_model()
+    model = approaching_red_light_model(model_x_end=100.0)
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    # High speed for many frames; controller is in CRUISE because of the takeover gate.
+    # Far away for many frames; controller is in CRUISE because of the distance gate.
     run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=0.0, v_cruise=10.0, n=20)
     assert controller._state == TrafficStopState.CRUISE
     assert len(controller._stop_x_avg_hist) == 15  # saturated at the 15-frame window
     assert len(controller._stop_x_median_hist) == 3  # saturated at the 3-frame window
     assert len(controller._model_v_hist) == 10  # saturated at the 10-frame window
+
+  # ------------------------------------------------------------------ #
+  # COMFORT-BRAKE RAMP tests (0.5 -> 1.8 m/s^2 while braking)          #
+  # ------------------------------------------------------------------ #
+
+  def test_comfort_brake_ramp_constants(self):
+    """Ramp constants must match the user spec: start 0.5, cap 1.8, positive ramp-up rate."""
+    assert TRAFFIC_STOP_COMFORT_BRAKE_INITIAL == 0.5
+    assert TRAFFIC_STOP_COMFORT_BRAKE_MAX == 1.8
+    assert TRAFFIC_STOP_COMFORT_BRAKE_RAMPUP_M_S3 > 0.0
+
+  def test_comfort_brake_starts_at_initial_and_ramps_up(self):
+    """On entry into STOPPING, comfort_brake resets to INITIAL, then climbs frame-by-frame
+    toward MAX (never jumping straight to the cap)."""
+    controller = TrafficStopController()
+    model = approaching_red_light_model(model_x_end=15.0)
+    cs = MockCarState()
+    rs = MockRadarState(present=False)
+    # First frame: enters STOPPING with comfort_brake == INITIAL (+1 frame of ramp)
+    result = run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
+    assert controller._state == TrafficStopState.STOPPING
+    assert result.v_cruise_limited is not None
+    assert controller._comfort_brake < TRAFFIC_STOP_COMFORT_BRAKE_INITIAL + 0.02  # still near INITIAL
+
+    # After many frames of braking, comfort_brake must be strictly above INITIAL (ramped up).
+    run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=40)
+    assert controller._comfort_brake > TRAFFIC_STOP_COMFORT_BRAKE_INITIAL
+
+  def test_comfort_brake_never_exceeds_max(self):
+    """Even after a very long braking approach, comfort_brake is capped at MAX."""
+    controller = TrafficStopController()
+    model = approaching_red_light_model(model_x_end=15.0, model_v_start=7.0, model_v_end=0.1)
+    cs = MockCarState()
+    rs = MockRadarState(present=False)
+    run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=500)
+    assert controller._comfort_brake <= TRAFFIC_STOP_COMFORT_BRAKE_MAX + 1e-6
