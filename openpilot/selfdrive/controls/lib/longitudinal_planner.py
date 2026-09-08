@@ -17,6 +17,7 @@ from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 from openpilot.sunnypilot.selfdrive.controls.lib.traffic_stop.traffic_stop_controller import TrafficStopController
+from openpilot.sunnypilot.selfdrive.controls.lib.turn_decel import TurnDecelController
 
 A_CRUISE_MAX_BP = [0., 2.77, 5.55, 8.33, 11.11, 13.89, 16.6, 19.4, 22.22, 25, 27.78, 33.33]
 A_CRUISE_MAX_VALS = [1.10, 0.9, 0.80, 0.65, 0.55, 0.45, 0.4, 0.35, 0.35, 0.33, 0.31, 0.29]
@@ -86,6 +87,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.traffic_stop_active = False
     self._traffic_stop_result = None
     self._prev_output_source = None
+
+    # Blinker-triggered slow-down for tight turns (sunnypilot addition).
+    # Active in both ACC (Normal) and Experimental Mode; applied as a
+    # post-candidate-min override on output_a_target (see update()).
+    self.turn_decel = TurnDecelController()
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -211,6 +217,29 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       j_taper = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
       output_a_target = taper_toward_less_conservative_output(output_a_target, self.output_a_target, j_taper, self.dt)
     self._prev_output_source = self.mpc.source
+
+    # Blinker-triggered slow-down (sunnypilot addition). Applied AFTER the
+    # candidate-source min() and the e2e-seam taper so it cannot be silently
+    # swallowed by an e2e accel override (the user's whole point: it must
+    # work in Experimental Mode too) AND it cannot be weakened by an even
+    # larger positive tap. It is a *driver-intent* constraint, not a
+    # physical-safety floor -- FCW/lead cut-ins still take precedence because
+    # they reach output_a_target through the candidates min pool above.
+    # `min()` so other sources can still push deceleration deeper if needed
+    # (e.g. a lead appearing in the same frame); `block_accel` clamps any
+    # positive a_target (accel) to 0 even when the controller is only
+    # watching (paused/at_target) -- that's the "保证不加速" requirement.
+    blinker_on = bool(sm['carState'].leftBlinker or sm['carState'].rightBlinker)
+    turn_decel_res = self.turn_decel.update(
+      blinker_on=blinker_on,
+      v_ego=v_ego,
+      steering_angle_deg=steer_angle_without_offset,
+      dt=self.dt,
+    )
+    if turn_decel_res.a_target_override is not None:
+      output_a_target = min(output_a_target, turn_decel_res.a_target_override)
+    if turn_decel_res.block_accel and output_a_target > 0.0:
+      output_a_target = 0.0
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
