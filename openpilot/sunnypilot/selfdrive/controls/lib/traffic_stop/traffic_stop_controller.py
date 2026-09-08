@@ -45,10 +45,12 @@ TRAFFIC_STOP_DISTANCE_ADJUST_M = 0.0
 # mid-decel handoff to this controller causes a visible accel-then-brake blip -- the candidate
 # source seam is most jarring when traffic_stop suddenly caps v_cruise mid-deceleration.
 # By the time v_ego drops below this threshold (set in kph to match the other speed
-# breakpoints in this file; ~5.5 m/s), e2e has already done most of the decel and the handoff
-# is imperceptible. Lower = smoother handoff but traffic_stop has less time to stabilize
+# breakpoints in this file; ~8.3 m/s), e2e has done most of the decel and the handoff is
+# imperceptible. Lower = smoother handoff but traffic_stop has less time to stabilize
 # before STOPPED; higher = earlier handoff but risk of the original blip.
-TRAFFIC_STOP_TAKEOVER_SPEED_KPH = 20.0
+# 30.0 kph chosen so heavy-city driving (25-35 kph typical approach) hands off cleanly
+# before traffic_stop's v_cruise soft-limit starts to bite.
+TRAFFIC_STOP_TAKEOVER_SPEED_KPH = 30.0
 # ============================================================================
 
 STOP_MODEL_IDX = -2                            # 33-point model trajectory, 2nd-to-last point (cp: x[31])

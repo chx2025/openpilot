@@ -81,7 +81,7 @@ class TestTrafficStopController:
     model = approaching_red_light_model()
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    result = run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    result = run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller._state == TrafficStopState.STOPPING
     assert result.stop_dist_m is not None
 
@@ -111,16 +111,16 @@ class TestTrafficStopController:
     model = approaching_red_light_model()
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller._state == TrafficStopState.STOPPING
 
     cs_gas = MockCarState(gasPressed=True)
-    result = run_frames(controller, model, cs_gas, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    result = run_frames(controller, model, cs_gas, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert result.stop_dist_m is None
     assert controller._gas_suppress_frames == STARTING_SUPPRESS_FRAMES
 
-    result = run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    result = run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert result.stop_dist_m is None
 
@@ -140,11 +140,11 @@ class TestTrafficStopController:
     model = approaching_red_light_model()
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller._state == TrafficStopState.STOPPING
 
     rs_lead = MockRadarState(present=True, dRel=10.0)  # far closer than the ~15m filtered stop-line estimate
-    result = run_frames(controller, model, cs, rs_lead, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    result = run_frames(controller, model, cs, rs_lead, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert result.stop_dist_m is None
 
@@ -157,20 +157,20 @@ class TestTrafficStopController:
     # cancelled under cp's original 2.0m margin)
     controller_a = TrafficStopController()
     model_a = approaching_red_light_model(model_x_end=20.0)
-    run_frames(controller_a, model_a, cs, MockRadarState(present=False), v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    run_frames(controller_a, model_a, cs, MockRadarState(present=False), v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller_a._state == TrafficStopState.STOPPING
     result_a = run_frames(controller_a, model_a, cs, MockRadarState(present=True, dRel=23.0),
-                           v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+                           v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller_a._state == TrafficStopState.CRUISE
     assert result_a.stop_dist_m is None
 
     # lead 6m beyond the stop-line estimate: still outside even the widened 4.0m margin
     controller_b = TrafficStopController()
     model_b = approaching_red_light_model(model_x_end=20.0)
-    run_frames(controller_b, model_b, cs, MockRadarState(present=False), v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    run_frames(controller_b, model_b, cs, MockRadarState(present=False), v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller_b._state == TrafficStopState.STOPPING
     result_b = run_frames(controller_b, model_b, cs, MockRadarState(present=True, dRel=26.0),
-                           v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+                           v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller_b._state == TrafficStopState.STOPPING
     assert result_b.stop_dist_m is not None
 
@@ -231,7 +231,7 @@ class TestTrafficStopController:
     model = approaching_red_light_model(model_x_end=5.0, model_v_start=5.0)
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    result = run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    result = run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert result.stop_dist_m is not None
     assert result.v_cruise_limited is not None
     assert result.v_cruise_limited <= 5.0
@@ -243,13 +243,13 @@ class TestTrafficStopController:
     model = approaching_red_light_model()
     cs = MockCarState()
     rs = MockRadarState(present=False)
-    run_frames(controller, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=5)
+    run_frames(controller, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=5)
     assert controller._state == TrafficStopState.STOPPING
     assert len(controller._stop_x_avg_hist) > 0
     hist_len_before = len(controller._stop_x_avg_hist)
 
     cs_gas = MockCarState(gasPressed=True)
-    run_frames(controller, model, cs_gas, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    run_frames(controller, model, cs_gas, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
     assert controller._state == TrafficStopState.CRUISE
     assert len(controller._stop_x_avg_hist) >= hist_len_before
 
@@ -262,11 +262,11 @@ class TestTrafficStopController:
     rs = MockRadarState(present=False)
 
     baseline_ctrl = TrafficStopController()
-    baseline_result = run_frames(baseline_ctrl, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    baseline_result = run_frames(baseline_ctrl, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
 
     monkeypatch.setattr(tsc, "TRAFFIC_STOP_DISTANCE_ADJUST_M", 5.0)
     plus5_ctrl = TrafficStopController()
-    plus5_result = run_frames(plus5_ctrl, model, cs, rs, v_ego=5.0, a_ego=0.0, v_cruise=5.0, n=1)
+    plus5_result = run_frames(plus5_ctrl, model, cs, rs, v_ego=7.0, a_ego=0.0, v_cruise=7.0, n=1)
 
     assert abs((plus5_result.stop_dist_m - baseline_result.stop_dist_m) - 5.0) < 1e-6
     assert TRAFFIC_STOP_CAMERA_TO_FRONT_M == -1.5
@@ -307,7 +307,7 @@ class TestTrafficStopController:
     # First, drive at high speed -- e2e is in control, controller is idle.
     run_frames(controller, model, cs, rs, v_ego=10.0, a_ego=-1.0, v_cruise=10.0, n=20)
     assert controller._state == TrafficStopState.CRUISE
-    # Now speed has dropped below threshold (~5.5 m/s) -- controller takes over.
+    # Now speed has dropped below threshold (~8.3 m/s for the 30 kph default) -- controller takes over.
     result = run_frames(controller, model, cs, rs, v_ego=4.0, a_ego=-1.0, v_cruise=10.0, n=1)
     assert controller._state == TrafficStopState.STOPPING
     assert result.stop_dist_m is not None
