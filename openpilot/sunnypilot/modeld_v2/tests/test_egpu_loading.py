@@ -35,7 +35,7 @@ class TestEgpuLoading(unittest.TestCase):
     configure_default_device(True, environment, c3xl=True)
     self.assertEqual(environment["XDG_CACHE_HOME"], "/custom/cache")
 
-  def test_c3xl_defaults_amd_power_limit_to_100w_without_overriding_explicit_value(self):
+  def test_comma_hardware_defaults_amd_power_limit_to_100w_without_overriding_explicit_value(self):
     environment = {}
     configure_default_device(True, environment, c3xl=True)
     self.assertEqual(C3XL_AM_POWER_LIMIT_W, 100)
@@ -45,9 +45,18 @@ class TestEgpuLoading(unittest.TestCase):
     configure_default_device(True, environment, c3xl=True)
     self.assertEqual(environment["AM_POWER_LIMIT"], "85")
 
-  def test_standard_hardware_does_not_set_amd_power_limit(self):
+  def test_standard_profile_still_sets_amd_power_limit(self):
+    """Power limit applies to any comma hardware, not just the C3XL profile. The
+    hardware-profile detection has proven unreliable on some units, and setting
+    the env var is harmless when no AMD GPU is present (AMDev never initializes
+    on the QCOM/LLVM path)."""
     environment = {}
     configure_default_device(True, environment, c3xl=False)
+    self.assertEqual(environment["AM_POWER_LIMIT"], "100")
+
+  def test_non_comma_hardware_does_not_set_amd_power_limit(self):
+    environment = {}
+    configure_default_device(False, environment)
     self.assertNotIn("AM_POWER_LIMIT", environment)
 
   def test_c3xl_defaults_usb_poll_to_official_500us_without_overriding_explicit_value(self):
