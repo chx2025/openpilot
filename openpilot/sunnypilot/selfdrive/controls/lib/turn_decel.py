@@ -1,0 +1,150 @@
+"""Blinker-triggered slow-down controller.
+
+独立模块：打转向灯后让车在低速 (15 km/h) 段沿弯道行驶，避免高速进入弯道
+撞护栏/路沿。规则：
+
+  1. 检测到任一转向灯开启，累计 dt 达到 2s 后开始 0.5 m/s² 减速
+  2. 持续减速到目标速度 15 km/h (4.167 m/s)；到目标后停减速但保持不加速
+  3. 方向盘角度 > 9° 时暂停执行减速（让弯道本身的几何减速接管），
+     但**保证不主动加速**（即使 base plan 想加速）
+  4. 方向盘角度 > 60° 且 v_ego > 15 km/h 时**不主动加速**（与转向灯无关，
+     仅大角度转向的安全锁）
+  5. 转向灯关闭：立刻停止减速、解除所有"不加速"约束
+  6. ACC (Normal) 模式和 Experimental Mode 都生效：在 longitudinal_planner
+     里以 post-candidate-min 的方式作用到 output_a_target，
+     不进入 candidates min 池，避免被 e2e/cruise 任何一方覆盖
+
+设计取舍：
+- 不进 candidates 池：candidates min 池是"谁更保守谁赢"的物理安全语义
+  (traffic_stop / FCW / lead)；转向灯减速是驾驶员意图 + 弯道安全，不属于
+  "碰撞避免"，不需要参与 min 投票
+- 改成 min(post_a_target, turn_decel_a) + clamp(>= 0 阻止)：
+  既不会让 turn_decel 触发不期望的硬减速（让 e2e 自由），也不会让
+  turn_decel 已被触发时被其他 source 偷走"不加速"约束
+- ramp 0.5s 平滑：避免阶跃式减速（特别是 e2e 突然切到 15km/h）
+- 始终允许 FCW/lead_brake 触发的更强减速通过：a_target 不会因为我们设了
+  floor(0) 而阻止真刹车（刹车是负加速度，floor(0) 不影响）
+
+公开 API：
+  TurnDecelController.update(...) -> TurnDecelResult
+  TurnDecelResult.a_target_override : float | None
+                                 （None = 控制器不覆盖）
+  TurnDecelResult.block_accel      : bool
+                                 （True = 阻止任何正加速度）
+  TurnDecelResult.active           : bool
+                                 （True = 控制器处于主动减速期）
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+# === 配置常量（按用户需求固定） ===
+# 转向灯开启后等多久开始减速（秒）
+BLINKER_DEBOUNCE_S: float = 2.0
+# 减速度（m/s²）正值；控制器输出 a_target = -DECEL_M_S2
+DECEL_M_S2: float = 0.5
+# 目标速度：减速到此速度后停止减速（km/h）
+TARGET_V_KPH: float = 15.0
+TARGET_V_MS: float = TARGET_V_KPH / 3.6  # ≈ 4.167 m/s
+# 方向盘角度 > 此值时暂停减速（deg）但仍阻止加速
+STEERING_PAUSE_DEG: float = 9.0
+# 方向盘角度 > 此值且 v_ego > 目标速度时阻止加速（deg，独立约束）
+STEERING_BLOCK_ACCEL_DEG: float = 60.0
+# 减速 ramp 时长：从 0 加速到目标减速度需要的时间（避免阶跃）
+DECEL_RAMP_S: float = 0.5
+
+
+@dataclass
+class TurnDecelResult:
+  a_target_override: float | None  # 负值（减速）；None = 控制器不强制
+  block_accel: bool               # True 时不允许任何正加速度
+  active: bool                    # 控制器是否在主动减速
+  phase: str                      # 'idle' / 'waiting' / 'paused' / 'deceling' / 'at_target'
+
+
+class TurnDecelController:
+  """无状态机，每帧由 longitudinal_planner 调 update()。
+
+  状态在内部维护：累计 blinker 开启时间、当前减速 ramp 值、转向灯上一次的
+  状态（用于检测上升沿和关闭事件）。
+  """
+
+  def __init__(self) -> None:
+    self._blinker_on_time: float = 0.0    # 转向灯累计开启时长（dt 累加）
+    self._blinker_on_last: bool = False   # 上一帧转向灯状态（用于检测下降沿）
+    self._decel_a: float = 0.0            # 当前 ramp 后的减速度（0..DECEL_M_S2）
+
+  def reset(self) -> None:
+    """外部强制重置（disengage、模式切换等）。"""
+    self._blinker_on_time = 0.0
+    self._blinker_on_last = False
+    self._decel_a = 0.0
+
+  def update(
+    self,
+    *,
+    blinker_on: bool,
+    v_ego: float,
+    steering_angle_deg: float,
+    dt: float,
+  ) -> TurnDecelResult:
+    """每帧调用一次。
+
+    Args:
+      blinker_on: 左/右任一转向灯开启（True=开启）
+      v_ego: 当前车速（m/s）
+      steering_angle_deg: 方向盘绝对角度（deg）
+      dt: 帧间隔（s），通常 0.05 (DT_MDL)
+
+    Returns:
+      TurnDecelResult 含 a_target_override / block_accel / active / phase
+    """
+    # ---- 1. 跟踪 blinker 开启/下降沿 ----
+    if blinker_on:
+      self._blinker_on_time += dt
+    else:
+      # 转向灯关闭：完全退出
+      if self._blinker_on_last:
+        self.reset()
+      # 慢速保守：关闭时也清 ramp
+      self._decel_a = 0.0
+      return TurnDecelResult(None, False, False, "idle")
+
+    self._blinker_on_last = True
+
+    # ---- 2. 大角度安全锁（独立于转向灯状态） ----
+    # 方向盘 > 60° 且 v_ego > 15 km/h：不主动加速
+    # 适用于：U-turn、入库、螺旋匝道等极端大角度场景
+    big_angle_block = (
+      abs(steering_angle_deg) > STEERING_BLOCK_ACCEL_DEG
+      and v_ego > TARGET_V_MS
+    )
+
+    # ---- 3. 还在 2s debounce 等待期 ----
+    if self._blinker_on_time < BLINKER_DEBOUNCE_S:
+      # 等待期不减速，但大角度时仍 block accel
+      return TurnDecelResult(None, big_angle_block, False, "waiting")
+
+    # ---- 4. 方向盘 > 9° 暂停减速（弯道几何减速接管）----
+    if abs(steering_angle_deg) > STEERING_PAUSE_DEG:
+      # ramp 立即清零，避免恢复时阶跃
+      self._decel_a = 0.0
+      # 暂停期不减速；大角度时仍 block accel
+      return TurnDecelResult(None, big_angle_block, False, "paused")
+
+    # ---- 5. 已到目标速度 15 km/h：停减速但保持不加速 ----
+    if v_ego <= TARGET_V_MS:
+      self._decel_a = 0.0
+      # 到目标后保持不加速（让弯道自己处理 + 驾驶员能加油门改主意）
+      return TurnDecelResult(None, True, False, "at_target")
+
+    # ---- 6. 主动减速 ----
+    # ramp 平滑：从 0 线性升到 DECEL_M_S2，时长 DECEL_RAMP_S
+    self._decel_a = min(DECEL_M_S2, self._decel_a + dt * DECEL_M_S2 / DECEL_RAMP_S)
+    return TurnDecelResult(
+      a_target_override=-self._decel_a,
+      block_accel=True,
+      active=True,
+      phase="deceling",
+    )
