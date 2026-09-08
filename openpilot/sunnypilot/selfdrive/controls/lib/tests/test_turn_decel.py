@@ -3,8 +3,10 @@
 Spec (from user requirement):
   1. After blinker on for 2s, apply 0.5 m/s² decel toward 15 km/h target.
   2. Steering > 9° pauses the decel but still blocks any accel.
-  3. Steering > 60° AND v_ego > 15 km/h blocks accel independently.
-  4. Blinker off -> instant reset, no override, no block.
+  3. Steering > 60° AND v_ego > 15 km/h blocks accel **independently of
+     blinker** (no active decel, just a passive guard rail).
+  4. Blinker off -> instant reset of the decel state machine; HOWEVER, if
+     rule 3 (steering > 60° + v > 15 km/h) still holds, keep block_accel.
   5. At-target (v_ego <= 15 km/h) -> stop decel, keep block_accel.
 
 The controller is intentionally placed in sunnypilot/ as a stand-alone module
@@ -168,6 +170,80 @@ def test_big_angle_below_target_does_not_block():
 def test_no_big_angle_no_block_at_high_speed():
   c = TurnDecelController()
   res = c.update(blinker_on=False, v_ego=20.0, steering_angle_deg=5.0, dt=DT)
+  assert res.block_accel is False
+  assert res.phase == "idle"
+
+
+# ===== 5b. big-angle block **independent of blinker** (the user's correction) =====
+def test_big_angle_block_with_blinker_off():
+  """User requirement: regardless of blinker state, steering > 60° AND
+  v_ego > 15 km/h must block accel. Covers U-turn, parking, spiral ramps
+  where the driver doesn't bother with the blinker."""
+  c = TurnDecelController()
+  res = c.update(blinker_on=False, v_ego=20.0, steering_angle_deg=80.0, dt=DT)
+  assert res.block_accel is True
+  assert res.a_target_override is None  # no active decel
+  assert res.active is False
+  assert res.phase == "big_angle_guard"
+
+
+def test_big_angle_block_with_blinker_off_persists_across_frames():
+  """As long as steering > 60° AND v > 15 km/h, keep blocking accel even
+  though no blinker is on."""
+  c = TurnDecelController()
+  for _ in range(50):
+    res = c.update(blinker_on=False, v_ego=25.0, steering_angle_deg=90.0, dt=DT)
+  assert res.phase == "big_angle_guard"
+  assert res.block_accel is True
+
+
+def test_big_angle_guard_releases_when_steering_straightened():
+  """When steering drops back below 60° (while blinker still off), the
+  big_angle_guard phase ends."""
+  c = TurnDecelController()
+  c.update(blinker_on=False, v_ego=20.0, steering_angle_deg=80.0, dt=DT)
+  assert c.update(blinker_on=False, v_ego=20.0, steering_angle_deg=80.0, dt=DT).phase == "big_angle_guard"
+  res = c.update(blinker_on=False, v_ego=20.0, steering_angle_deg=10.0, dt=DT)
+  assert res.phase == "idle"
+  assert res.block_accel is False
+
+
+def test_big_angle_guard_releases_at_target_speed():
+  """If v drops to <= 15 km/h while blinker off and steering > 60°, release
+  the block (driver may want to creep)."""
+  c = TurnDecelController()
+  c.update(blinker_on=False, v_ego=20.0, steering_angle_deg=80.0, dt=DT)
+  res = c.update(blinker_on=False, v_ego=TARGET_V_MS - 0.5, steering_angle_deg=80.0, dt=DT)
+  assert res.phase == "idle"
+  assert res.block_accel is False
+
+
+def test_big_angle_guard_does_not_start_blinker_decel_when_blinker_comes_back():
+  """If we're in big_angle_guard (blinker off) and the driver then turns
+  on the blinker, the debounce timer starts from 0 (because we reset on
+  the falling edge of the prior blinker-on period)."""
+  c = TurnDecelController()
+  # Enter big_angle_guard
+  c.update(blinker_on=False, v_ego=20.0, steering_angle_deg=80.0, dt=DT)
+  # Now blinker comes on (big angle still active)
+  res = c.update(blinker_on=True, v_ego=20.0, steering_angle_deg=80.0, dt=DT)
+  # Should be 'waiting' (just turned on, debounce timer fresh)
+  assert res.phase == "waiting"
+  assert res.block_accel is True  # still big_angle_block
+
+
+def test_big_angle_guard_boundary_at_exactly_60deg():
+  """Steering == 60° exactly does NOT trigger the block (strict >)."""
+  c = TurnDecelController()
+  res = c.update(blinker_on=False, v_ego=20.0, steering_angle_deg=STEERING_BLOCK_ACCEL_DEG, dt=DT)
+  assert res.block_accel is False
+  assert res.phase == "idle"
+
+
+def test_big_angle_guard_boundary_at_exactly_target_speed():
+  """v == 15 km/h exactly does NOT trigger the block (strict >)."""
+  c = TurnDecelController()
+  res = c.update(blinker_on=False, v_ego=TARGET_V_MS, steering_angle_deg=80.0, dt=DT)
   assert res.block_accel is False
   assert res.phase == "idle"
 
