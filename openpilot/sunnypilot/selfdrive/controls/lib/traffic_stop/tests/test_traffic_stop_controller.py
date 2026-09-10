@@ -337,13 +337,13 @@ class TestTrafficStopController:
     assert len(controller._model_v_hist) == 10  # saturated at the 10-frame window
 
   # ------------------------------------------------------------------ #
-  # COMFORT-BRAKE RAMP tests (0.5 -> 1.8 m/s^2 while braking)          #
+  # COMFORT-BRAKE RAMP tests (0.5 -> 2.5 m/s^2 while braking)          #
   # ------------------------------------------------------------------ #
 
   def test_comfort_brake_ramp_constants(self):
-    """Ramp constants must match the user spec: start 0.5, cap 1.8, positive ramp-up rate."""
+    """Ramp constants must match the user spec: start 0.5, cap 2.5, positive ramp-up rate."""
     assert TRAFFIC_STOP_COMFORT_BRAKE_INITIAL == 0.5
-    assert TRAFFIC_STOP_COMFORT_BRAKE_MAX == 1.8
+    assert TRAFFIC_STOP_COMFORT_BRAKE_MAX == 2.5
     assert TRAFFIC_STOP_COMFORT_BRAKE_RAMPUP_M_S3 > 0.0
 
   def test_comfort_brake_starts_at_initial_and_ramps_up(self):
