@@ -25,6 +25,14 @@ from openpilot.sunnypilot.models.model_name import DEFAULT_MODEL_REF
 DOWNLOAD_TIMEOUT = (30, 30)
 
 
+def _mirror_url(url: str) -> str:
+  # Ported from mr-one/openpilot c3xl-dev: for any HuggingFace-hosted artifact,
+  # prefer the hf-mirror.com mirror FIRST (mainland China networks usually
+  # cannot reach huggingface.co directly) and fall back to the original URL
+  # only if the mirror fails.
+  return url.replace("huggingface.co", "hf-mirror.com") if "huggingface.co" in url else url
+
+
 class DownloadCancelled(Exception):
   pass
 
@@ -51,6 +59,26 @@ class ModelManagerSP:
     self._chunk_size = 128 * 1000  # 128 KB chunks
     self._download_start_times: dict[str, float] = {}  # Track start time per model
     self._download_ref: bytes | str | None = None
+
+  def _get(self, url: str, session=None, stream: bool = True):
+    """GET with mirror-first ordering: for HuggingFace URLs the hf-mirror.com
+    mirror is tried FIRST and the original URL is the fallback (user request:
+    国内镜像优先，失败才用原始源). Non-HuggingFace URLs are unchanged."""
+    urls = [url]
+    mirror = _mirror_url(url)
+    if mirror != url:
+      # mirror first, original second
+      urls = [mirror, url]
+    last_err = None
+    for u in urls:
+      try:
+        if session is not None:
+          return session.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
+        return requests.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
+      except Exception as e:
+        last_err = e
+        cloudlog.warning(f"model download failed ({u}): {e}; trying next source")
+    raise last_err
 
   def _download_interrupted(self) -> bool:
     # only removal cancels: a different ref is a queued selection that
@@ -92,7 +120,7 @@ class ModelManagerSP:
     """Downloads a file with progress tracking"""
     self._download_start_times[model.fileName] = time.monotonic()
 
-    with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:  # noqa: ASYNC210
+    with self._get(url) as response:  # noqa: ASYNC210
       response.raise_for_status()
       total_size = int(response.headers.get("content-length", 0))
       bytes_downloaded = 0
@@ -136,7 +164,7 @@ class ModelManagerSP:
         chunk_url = get_chunk_name(base_url, i, num_chunks)
         chunk_path = get_chunk_name(base_path, i, num_chunks)
         chunk_downloaded = 0
-        with session.get(chunk_url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
+        with self._get(chunk_url, session=session) as response:
           response.raise_for_status()
           chunk_size = int(response.headers.get("content-length", 0))
           with open(chunk_path, 'wb') as f:  # noqa: ASYNC230
