@@ -89,8 +89,16 @@ class ModelManagerSP:
       for attempt in range(DOWNLOAD_RETRIES):
         try:
           if session is not None:
-            return session.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
-          return requests.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
+            resp = session.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
+          else:
+            resp = requests.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
+          # make the actually-used source visible in logs: mirror = domestic,
+          # original = foreign traffic. Answers "是不是在走国外流量" directly.
+          if u != url:
+            cloudlog.info(f"model download using MIRROR source: {u}")
+          elif mirror != url:
+            cloudlog.warning(f"model download using ORIGINAL (foreign) source: {u}")
+          return resp
         except Exception as e:
           last_err = e
           cloudlog.warning(f"model download failed ({u}, attempt {attempt + 1}/{DOWNLOAD_RETRIES}): {e}")
