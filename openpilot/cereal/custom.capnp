@@ -555,6 +555,21 @@ struct ModelDataV2SP @0xa1680744031fdb2d {
   laneTurnDirection @0 :TurnDirection;
   leftLaneChangeEdgeBlock @1 :Bool;
   rightLaneChangeEdgeBlock @2 :Bool;
+  smallModelPlan @3 :SmallModelPlan;
+
+  # Plan trajectory from the parallel small-model inference. When the chestnut
+  # (eGPU) big model is active, modeld also runs the small model every frame and
+  # publishes its plan here. The small model's stop-line prediction is markedly
+  # better than the big model's, so longitudinal consumers (traffic_stop) drive
+  # red-light handling from this when valid. When the small model is the active
+  # model (chestnut fallback), modelV2 already contains the small model's plan
+  # and this field is left valid=False.
+  struct SmallModelPlan {
+    valid @0 :Bool;
+    positionX @1 :List(Float32);
+    positionY @2 :List(Float32);
+    velocityX @3 :List(Float32);
+  }
 
   enum TurnDirection {
     none @0;

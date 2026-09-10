@@ -148,8 +148,13 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # (ACC) mode, Experimental Mode, or Dynamic Experimental Control's per-frame acc/blended
     # switching. The obstacle always feeds the MPC below; only the separate e2e *candidate*
     # further down gets excluded while a stop is active (see comment there).
+    # Small-model preference: when the chestnut (eGPU) big model is active, modeld publishes the
+    # parallel small-model plan on modelDataV2SP; the controller drives red-light handling from
+    # it when valid (its stop-line prediction is markedly better) and falls back to modelV2
+    # (the active model) otherwise.
     self._traffic_stop_result = self.traffic_stop_controller.update(
-      sm['modelV2'], sm['carState'], sm['radarState'], v_ego, self.output_a_target, v_cruise)
+      sm['modelV2'], sm['carState'], sm['radarState'], v_ego, self.output_a_target, v_cruise,
+      small_model_plan=sm['modelDataV2SP'].smallModelPlan)
     if self._traffic_stop_result.v_cruise_limited is not None:
       v_cruise = min(v_cruise, self._traffic_stop_result.v_cruise_limited)
     self.traffic_stop_active = self._traffic_stop_result.stop_dist_m is not None
