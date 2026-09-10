@@ -146,6 +146,28 @@ class ModelFetcher:
     "chestnut": (MODEL_URL_CHESTNUT, "_Chestnut"),
   }
 
+  # raw.githubusercontent.com is frequently unreachable from mainland-China
+  # networks (the device's typical hotspot/cellular uplink). jsDelivr's CDN
+  # mirrors the same GitHub branch and is stable there; tried per-URL after
+  # the original fails.
+  LIST_URL_RETRIES = 3
+  LIST_URL_TIMEOUT = (10, 30)
+
+  @staticmethod
+  def _jsdelivr_fallback(url: str) -> str:
+    # raw.githubusercontent.com/<owner>/<repo>/refs/heads/<branch>/<path>
+    #   -> cdn.jsdelivr.net/gh/<owner>/<repo>@<branch>/<path>
+    prefix = "https://raw.githubusercontent.com/"
+    if not url.startswith(prefix):
+      return url
+    parts = url[len(prefix):].split("/")
+    if len(parts) < 6 or parts[2] != "refs" or parts[3] != "heads":
+      return url
+    owner, repo = parts[0], parts[1]
+    branch = parts[4]  # parts[2:4] are the literal "refs"/"heads"
+    path = "/".join(parts[5:])
+    return f"https://cdn.jsdelivr.net/gh/{owner}/{repo}@{branch}/{path}"
+
   def __init__(self, params: Params):
     self.params = params
     self.model_parser = ModelParser()
@@ -166,11 +188,44 @@ class ModelFetcher:
   def _fetch_and_cache_models(self, source: str) -> list[custom.ModelManagerSP.ModelBundle] | None:
     """Fetches fresh model data from remote and updates cache.
     Returns None on transport errors. Raises on 404 and other fatal HTTP errors.
-    """
+    Each URL is retried LIST_URL_RETRIES times, then the jsDelivr CDN mirror
+    of the same GitHub branch is tried (device links frequently cannot reach
+    raw.githubusercontent.com directly)."""
     model_url, _ = self.MODEL_SOURCES[source]
-    try:
-      response = requests.get(model_url, timeout=10)
+    urls = [model_url]
+    mirror = self._jsdelivr_fallback(model_url)
+    if mirror != model_url:
+      urls.append(mirror)
 
+    response = None
+    last_err = None
+    for u in urls:
+      for attempt in range(self.LIST_URL_RETRIES):
+        try:
+          response = requests.get(u, timeout=self.LIST_URL_TIMEOUT)
+          break
+        except ConnectionError as e:
+          last_err = e
+          cloudlog.warning(f"DNS/connection error while fetching models ({u}, attempt {attempt + 1}): {e}")
+        except SSLError as e:
+          last_err = e
+          cloudlog.warning(f"SSL error while fetching models ({u}, attempt {attempt + 1}): {e}")
+        except RequestException as e:
+          last_err = e
+          cloudlog.warning(f"Request transport error while fetching models ({u}, attempt {attempt + 1}): {e}")
+        except Exception as e:
+          last_err = e
+          cloudlog.exception(f"Unexpected error fetching models: {e}")
+        if attempt < self.LIST_URL_RETRIES - 1:
+          time.sleep(min(2.0 * (2 ** attempt), 10.0))
+      if response is not None:
+        break
+
+    if response is None:
+      cloudlog.warning(f"All model-list sources failed for {source}: {last_err}")
+      return None
+
+    try:
       # Explicitly handle 404 differently
       if response.status_code == 404:
         cloudlog.error(f"Models URL returned 404 Not Found: {model_url}")

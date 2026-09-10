@@ -21,8 +21,16 @@ from openpilot.sunnypilot.models.helpers import (ACTIVE_BUNDLE_KEYS, get_active_
                                                   resolve_bundle_by_ref, validate_active_bundles, verify_file)
 from openpilot.sunnypilot.models.model_name import DEFAULT_MODEL_REF
 
-# (connect, read) seconds. read is per-request inactivity, not a total cap
-DOWNLOAD_TIMEOUT = (30, 30)
+# (connect, read) seconds. read is per-request inactivity, not a total cap.
+# read is generous (60s): on a car hotspot/cellular link, brief stalls well
+# over 30s are common and must not abort an otherwise healthy transfer.
+DOWNLOAD_TIMEOUT = (30, 60)
+# Per-URL attempts before moving to the next source (mirror -> original).
+# Device links (hotspot/4G) drop connections transiently; without retries a
+# single blip fails the whole artifact, which is the "works on PC but not on
+# device" failure mode.
+DOWNLOAD_RETRIES = 3
+DOWNLOAD_RETRY_BACKOFF_S = 2.0  # exponential: 1s, 2s, 4s... capped below
 
 
 def _mirror_url(url: str) -> str:
@@ -31,6 +39,10 @@ def _mirror_url(url: str) -> str:
   # cannot reach huggingface.co directly) and fall back to the original URL
   # only if the mirror fails.
   return url.replace("huggingface.co", "hf-mirror.com") if "huggingface.co" in url else url
+
+
+def _sleep_backoff(attempt: int) -> None:
+  time.sleep(min(DOWNLOAD_RETRY_BACKOFF_S * (2 ** attempt), 10.0))
 
 
 class DownloadCancelled(Exception):
@@ -61,9 +73,12 @@ class ModelManagerSP:
     self._download_ref: bytes | str | None = None
 
   def _get(self, url: str, session=None, stream: bool = True):
-    """GET with mirror-first ordering: for HuggingFace URLs the hf-mirror.com
-    mirror is tried FIRST and the original URL is the fallback (user request:
-    国内镜像优先，失败才用原始源). Non-HuggingFace URLs are unchanged."""
+    """GET with retries and mirror-first ordering: for HuggingFace URLs the
+    hf-mirror.com mirror is tried FIRST and the original URL is the fallback
+    (user request: 国内镜像优先，失败才用原始源). Each URL is attempted
+    DOWNLOAD_RETRIES times with exponential backoff before moving on, so a
+    transient hotspot/cellular blip doesn't fail the whole artifact.
+    Non-HuggingFace URLs are unchanged."""
     urls = [url]
     mirror = _mirror_url(url)
     if mirror != url:
@@ -71,13 +86,16 @@ class ModelManagerSP:
       urls = [mirror, url]
     last_err = None
     for u in urls:
-      try:
-        if session is not None:
-          return session.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
-        return requests.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
-      except Exception as e:
-        last_err = e
-        cloudlog.warning(f"model download failed ({u}): {e}; trying next source")
+      for attempt in range(DOWNLOAD_RETRIES):
+        try:
+          if session is not None:
+            return session.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
+          return requests.get(u, stream=stream, timeout=DOWNLOAD_TIMEOUT)
+        except Exception as e:
+          last_err = e
+          cloudlog.warning(f"model download failed ({u}, attempt {attempt + 1}/{DOWNLOAD_RETRIES}): {e}")
+          if attempt < DOWNLOAD_RETRIES - 1:
+            _sleep_backoff(attempt)
     raise last_err
 
   def _download_interrupted(self) -> bool:
@@ -164,22 +182,40 @@ class ModelManagerSP:
         chunk_url = get_chunk_name(base_url, i, num_chunks)
         chunk_path = get_chunk_name(base_path, i, num_chunks)
         chunk_downloaded = 0
-        with self._get(chunk_url, session=session) as response:
-          response.raise_for_status()
-          chunk_size = int(response.headers.get("content-length", 0))
-          with open(chunk_path, 'wb') as f:  # noqa: ASYNC230
-            for data in response.iter_content(chunk_size=self._chunk_size):
-              f.write(data)
-              chunk_downloaded += len(data)
-              if self._download_interrupted():
-                raise DownloadCancelled("Download cancelled")
-              intra = chunk_downloaded / max(chunk_size, 1)
-              progress = min(99.0, ((completed + intra) / num_chunks) * 100)
-              artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.downloading
-              artifact.downloadProgress.progress = progress
-              artifact.downloadProgress.eta = self._calculate_eta(artifact.fileName, progress)
-              self._sync_artifact_progress(artifact)
-              self._report_status()
+        # Retry the whole chunk on transient failure: a read-timeout inside
+        # iter_content raises here (outside _get's retry scope), and on a
+        # flaky device link this is the most common failure point. Reusing
+        # the session is safe: urllib3 discards the dead socket and opens a
+        # fresh connection for the next attempt.
+        for attempt in range(DOWNLOAD_RETRIES):
+          try:
+            with self._get(chunk_url, session=session) as response:
+              response.raise_for_status()
+              chunk_size = int(response.headers.get("content-length", 0))
+              with open(chunk_path, 'wb') as f:  # noqa: ASYNC230
+                for data in response.iter_content(chunk_size=self._chunk_size):
+                  f.write(data)
+                  chunk_downloaded += len(data)
+                  if self._download_interrupted():
+                    raise DownloadCancelled("Download cancelled")
+                  intra = chunk_downloaded / max(chunk_size, 1)
+                  progress = min(99.0, ((completed + intra) / num_chunks) * 100)
+                  artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.downloading
+                  artifact.downloadProgress.progress = progress
+                  artifact.downloadProgress.eta = self._calculate_eta(artifact.fileName, progress)
+                  self._sync_artifact_progress(artifact)
+                  self._report_status()
+            break  # chunk complete
+          except DownloadCancelled:
+            raise
+          except Exception as e:
+            chunk_downloaded = 0
+            cloudlog.warning(f"chunk {i + 1}/{num_chunks} of {artifact.fileName} failed "
+                             f"(attempt {attempt + 1}/{DOWNLOAD_RETRIES}): {e}")
+            if attempt < DOWNLOAD_RETRIES - 1:
+              _sleep_backoff(attempt)
+            else:
+              raise
         completed += 1
 
     with open(manifest_path, 'w') as f:  # noqa: ASYNC230
@@ -242,10 +278,16 @@ class ModelManagerSP:
         for i, chunk in enumerate(artifact.chunks):
           chunk_path = get_chunk_name(full_path, i, len(artifact.chunks))
           if not await verify_file(chunk_path, chunk.sha256):
+            # remove only the corrupt chunk so a retry re-fetches just it;
+            # every other valid chunk on disk stays for resume
+            if os.path.isfile(chunk_path):
+              os.remove(chunk_path)
             raise ValueError(f"Hash validation failed for chunk {i+1} of {filename}")
       else:
         await self._download_file(url, full_path, artifact)
         if not await verify_file(full_path, expected_hash):
+          if os.path.isfile(full_path):
+            os.remove(full_path)
           raise ValueError(f"Hash validation failed for {filename}")
 
       artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.downloaded
@@ -267,9 +309,13 @@ class ModelManagerSP:
 
     except Exception as e:
       cloudlog.error(f"Error downloading {filename}: {str(e)}")
-      for f in [full_path] + [p for p in (os.path.join(destination_path, f) for f in os.listdir(destination_path)) if filename in p]:
-        if os.path.isfile(f):  # noqa: ASYNC240
-          os.remove(f)
+      # Do NOT delete completed chunk files here: on a flaky device link a
+      # mid-download failure used to wipe every valid chunk, so each retry
+      # restarted from zero and the download never finished. verify_file()
+      # already rejects corrupt/incomplete chunks on the next attempt, and
+      # hash-mismatch cleanup above removes only the offending piece.
+      if not artifact.chunks and os.path.isfile(full_path):
+        os.remove(full_path)  # non-chunked partial file: no resume support, start clean
       artifact.downloadProgress.status = custom.ModelManagerSP.DownloadStatus.failed
       artifact.downloadProgress.eta = 0
       self._sync_artifact_progress(artifact)
