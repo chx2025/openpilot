@@ -58,13 +58,12 @@ NO_STOP_DISTANCE_M = 1000.0                    # "no lead" sentinel distance
 # Comfort-brake ramp for the v_cruise soft-limit (replaces cp's fixed
 # DEFAULT_COMFORT_BRAKE * STOPPING_COMFORT_BRAKE_FACTOR = 2.16 m/s^2). User
 # requirement: start braking gently at 0.5 m/s^2 and ramp up over time to a
-# 2.5 m/s^2 maximum only if the approach actually needs it -- avoids the harsh
+# 1.8 m/s^2 maximum only if the approach actually needs it -- avoids the harsh
 # initial grab of a constant high comfort_brake while still being able to stop
-# decisively for a short stop line. (Road-test tuning: 1.8 -> 2.5 cap and
-# faster 0.5 m/s^3 ramp-up after real-world feedback that the stop came in late.)
+# decisively for a short stop line.
 TRAFFIC_STOP_COMFORT_BRAKE_INITIAL = 0.5       # m/s^2 starting decel
-TRAFFIC_STOP_COMFORT_BRAKE_MAX = 2.5           # m/s^2 cap
-TRAFFIC_STOP_COMFORT_BRAKE_RAMPUP_M_S3 = 0.50  # m/s^2 per second increase (jerk)
+TRAFFIC_STOP_COMFORT_BRAKE_MAX = 1.8           # m/s^2 cap
+TRAFFIC_STOP_COMFORT_BRAKE_RAMPUP_M_S3 = 0.25  # m/s^2 per second increase (jerk)
 
 # cancel an active stop if a real lead is this much closer than the stop line. cp's real default
 # is 2.0m; raised to 4.0m here so the worst-case final stopped gap to a real lead is ~4m instead
