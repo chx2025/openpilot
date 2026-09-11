@@ -18,9 +18,8 @@ import pytest
 
 from openpilot.sunnypilot.selfdrive.controls.lib import turn_decel
 from openpilot.sunnypilot.selfdrive.controls.lib.turn_decel import (
-  BLINKER_DEBOUNCE_S, DECEL_INITIAL_M_S2, DECEL_MAX_M_S2, DECEL_RAMPUP_M_S3,
-  STEERING_BLOCK_ACCEL_DEG, STEERING_PAUSE_DEG, TARGET_V_KPH, TARGET_V_MS,
-  TurnDecelController,
+  BLINKER_DEBOUNCE_S, DECEL_M_S2, DECEL_RAMP_S, STEERING_BLOCK_ACCEL_DEG,
+  STEERING_PAUSE_DEG, TARGET_V_KPH, TARGET_V_MS, TurnDecelController,
 )
 
 
@@ -88,36 +87,21 @@ def test_decel_outputs_negative_target_a():
   res = run(c, 60, blinker_on=True, v_ego=20.0, steering_angle_deg=2.0)  # past 2s + ramp
   assert res.phase == "deceling"
   assert res.a_target_override is not None
-  # 60 frames = 3s: 2s debounce + 1s of decel ramp-up
-  # initial 0.5, rampup 0.2/s over 1s -> ~0.5 + 0.2 = 0.7 (a bit less due to first-frame clamp)
-  assert -res.a_target_override >= DECEL_INITIAL_M_S2
-  assert -res.a_target_override < DECEL_MAX_M_S2
+  # Should be the full decel (ramp finishes in 0.5s, we ran 60 frames = 3s)
+  assert abs(res.a_target_override - (-DECEL_M_S2)) < 1e-6
 
 
-def test_decel_starts_at_initial_not_max():
-  """First decel frame applies the gentle INITIAL 0.5 m/s², not the MAX 1.2 --
-  the ramp means braking is progressive, never a step to full strength."""
+def test_decel_ramp_does_not_jump_to_full():
+  """The 0.5s ramp prevents a step from 0 to -0.5; the first frame after
+  decel starts should be much less than -0.5."""
   c = TurnDecelController()
-  # 39 frames = 1.95s: still inside the debounce window
-  run(c, 39, blinker_on=True, v_ego=20.0, steering_angle_deg=2.0)
-  # 40th frame crosses the 2s mark -> first decel frame
+  # Cross the 2s mark exactly
+  run(c, 40, blinker_on=True, v_ego=20.0, steering_angle_deg=2.0)
+  # First decel frame: ramp = (1 frame / DECEL_RAMP_S) * DECEL_M_S2 = 0.05/0.5 * 0.5 = 0.05
   res = c.update(blinker_on=True, v_ego=20.0, steering_angle_deg=2.0, dt=DT)
   assert res.phase == "deceling"
-  assert abs(-res.a_target_override - DECEL_INITIAL_M_S2) < 1e-9
-  assert -res.a_target_override < DECEL_MAX_M_S2
-
-
-def test_decel_ramps_up_over_time():
-  """Over successive decel frames the magnitude climbs from INITIAL toward MAX
-  (progressive braking), never jumping straight to MAX."""
-  c = TurnDecelController()
-  run(c, 39, blinker_on=True, v_ego=30.0, steering_angle_deg=2.0)  # 1.95s, still waiting
-  first = c.update(blinker_on=True, v_ego=30.0, steering_angle_deg=2.0, dt=DT)  # first decel
-  assert abs(-first.a_target_override - DECEL_INITIAL_M_S2) < 1e-9
-  # 50 more frames = 2.5s of ramp-up: should now be above initial but not past max
-  mid = run(c, 50, blinker_on=True, v_ego=30.0, steering_angle_deg=2.0)
-  assert -mid.a_target_override > DECEL_INITIAL_M_S2
-  assert -mid.a_target_override <= DECEL_MAX_M_S2
+  assert -res.a_target_override < DECEL_M_S2, "ramp clipped to full too early"
+  assert -res.a_target_override > 0.0
 
 
 def test_decel_respects_target_v_ego_floor():
@@ -130,7 +114,7 @@ def test_decel_respects_target_v_ego_floor():
   assert res.block_accel is True  # still no accel at target
 
 
-# ===== 4. pause on steering > 15° =====
+# ===== 4. pause on steering > 9° =====
 def test_steering_above_pause_threshold_pauses_decel():
   c = TurnDecelController()
   # Get into decel phase
@@ -145,19 +129,20 @@ def test_steering_above_pause_threshold_pauses_decel():
 
 
 def test_steering_release_resumes_decel_smoothly():
-  """After pause, decel should resume from the gentle initial (0.5), not jump
-  straight back to a higher value -- the driver shouldn't feel a sudden re-brake."""
+  """After pause, decel should resume from 0 (not jump to full) so the
+  driver doesn't feel a sudden re-brake."""
   c = TurnDecelController()
-  # Get into decel with some ramp-up
+  # Get into full decel
   run(c, 80, blinker_on=True, v_ego=20.0, steering_angle_deg=2.0)
-  assert c._decel_a >= DECEL_INITIAL_M_S2
+  full_decel = c._decel_a
+  assert abs(full_decel - DECEL_M_S2) < 1e-6
   # Pause
   run(c, 20, blinker_on=True, v_ego=20.0, steering_angle_deg=STEERING_PAUSE_DEG + 1)
   assert c._decel_a == 0.0
-  # Resume: first frame should start back at initial (0.5), not the pre-pause value
+  # Resume: first frame should ramp from 0
   res = c.update(blinker_on=True, v_ego=20.0, steering_angle_deg=2.0, dt=DT)
   assert res.phase == "deceling"
-  assert abs(-res.a_target_override - DECEL_INITIAL_M_S2) < 1e-9
+  assert -res.a_target_override < DECEL_M_S2  # not full yet
 
 
 # ===== 5. big-angle block (independent of blinker) =====
@@ -272,13 +257,11 @@ def test_a_target_is_always_negative_when_active():
       assert res.a_target_override < 0.0
 
 
-def test_a_target_magnitude_capped_at_decel_max():
-  """Even after a long ramp, a_target_override must never exceed DECEL_MAX_M_S2,
-  and after enough time it should saturate exactly at the max."""
+def test_a_target_magnitude_capped_at_decel_m_s2():
+  """Even after a long ramp, a_target_override must never exceed DECEL_M_S2."""
   c = TurnDecelController()
   res = run(c, 500, blinker_on=True, v_ego=30.0, steering_angle_deg=2.0)
-  assert -res.a_target_override <= DECEL_MAX_M_S2 + 1e-6
-  assert abs(-res.a_target_override - DECEL_MAX_M_S2) < 1e-6  # saturated at max
+  assert -res.a_target_override <= DECEL_M_S2 + 1e-6
 
 
 # ===== 7. reset semantics =====
@@ -296,10 +279,8 @@ def test_external_reset_clears_all_state():
 # ===== 8. config constants match spec =====
 def test_constants_match_user_spec():
   assert BLINKER_DEBOUNCE_S == 2.0
-  assert DECEL_INITIAL_M_S2 == 0.5
-  assert DECEL_MAX_M_S2 == 1.2
-  assert DECEL_RAMPUP_M_S3 > 0.0
+  assert DECEL_M_S2 == 0.5
   assert TARGET_V_KPH == 15.0
   assert abs(TARGET_V_MS - 15.0 / 3.6) < 1e-9
-  assert STEERING_PAUSE_DEG == 15.0
+  assert STEERING_PAUSE_DEG == 9.0
   assert STEERING_BLOCK_ACCEL_DEG == 60.0

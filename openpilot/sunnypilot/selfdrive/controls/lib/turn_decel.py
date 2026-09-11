@@ -3,10 +3,9 @@
 独立模块：打转向灯后让车在低速 (15 km/h) 段沿弯道行驶，避免高速进入弯道
 撞护栏/路沿。规则：
 
-  1. 检测到任一转向灯开启，累计 dt 达到 2s 后开始减速
-  2. 减速度从初始 0.5 m/s² 慢慢往上升，最大 1.2 m/s²；持续减速到目标
-     速度 15 km/h (4.167 m/s)；到目标后停减速但保持不加速
-  3. 方向盘角度 > 15° 时暂停执行减速（让弯道本身的几何减速接管），
+  1. 检测到任一转向灯开启，累计 dt 达到 2s 后开始 0.5 m/s² 减速
+  2. 持续减速到目标速度 15 km/h (4.167 m/s)；到目标后停减速但保持不加速
+  3. 方向盘角度 > 9° 时暂停执行减速（让弯道本身的几何减速接管），
      但**保证不主动加速**（即使 base plan 想加速）
   4. 方向盘角度 > 60° 且 v_ego > 15 km/h 时**不主动加速**——独立约束，
      **与转向灯无关**（即使关闭了转向灯也要生效：U-turn、入库、
@@ -24,8 +23,7 @@
 - 改成 min(post_a_target, turn_decel_a) + clamp(>= 0 阻止)：
   既不会让 turn_decel 触发不期望的硬减速（让 e2e 自由），也不会让
   turn_decel 已被触发时被其他 source 偷走"不加速"约束
-- 渐进式减速度 ramp：从 0.5 m/s² 起，随时间慢慢升到 1.2 m/s² 封顶，
-  避免一开始就急刹，又能在需要时果断减速到目标
+- ramp 0.5s 平滑：避免阶跃式减速（特别是 e2e 突然切到 15km/h）
 - 始终允许 FCW/lead_brake 触发的更强减速通过：a_target 不会因为我们设了
   floor(0) 而阻止真刹车（刹车是负加速度，floor(0) 不影响）
 
@@ -46,19 +44,17 @@ from dataclasses import dataclass
 # === 配置常量（按用户需求固定） ===
 # 转向灯开启后等多久开始减速（秒）
 BLINKER_DEBOUNCE_S: float = 2.0
-# 初始减速度（m/s²）：减速刚启动即用这个温和值
-DECEL_INITIAL_M_S2: float = 0.5
-# 最大减速度（m/s²）：随时间慢慢从 initial 升到该值封顶
-DECEL_MAX_M_S2: float = 1.2
-# 减速度递增速率（m/s² 每秒，即 jerk）：决定"慢慢往上升"的快慢
-DECEL_RAMPUP_M_S3: float = 0.2
+# 减速度（m/s²）正值；控制器输出 a_target = -DECEL_M_S2
+DECEL_M_S2: float = 0.5
 # 目标速度：减速到此速度后停止减速（km/h）
 TARGET_V_KPH: float = 15.0
 TARGET_V_MS: float = TARGET_V_KPH / 3.6  # ≈ 4.167 m/s
 # 方向盘角度 > 此值时暂停减速（deg）但仍阻止加速
-STEERING_PAUSE_DEG: float = 15.0
+STEERING_PAUSE_DEG: float = 9.0
 # 方向盘角度 > 此值且 v_ego > 目标速度时阻止加速（deg，独立约束）
 STEERING_BLOCK_ACCEL_DEG: float = 60.0
+# 减速 ramp 时长：从 0 加速到目标减速度需要的时间（避免阶跃）
+DECEL_RAMP_S: float = 0.5
 
 
 @dataclass
@@ -81,7 +77,7 @@ class TurnDecelController:
   def __init__(self) -> None:
     self._blinker_on_time: float = 0.0    # 转向灯累计开启时长（dt 累加）
     self._blinker_on_last: bool = False   # 上一帧转向灯状态（用于检测下降沿）
-    self._decel_a: float = 0.0            # 当前 ramp 后的减速度（0..DECEL_MAX_M_S2）
+    self._decel_a: float = 0.0            # 当前 ramp 后的减速度（0..DECEL_M_S2）
 
   def reset(self) -> None:
     """外部强制重置（disengage、模式切换等）。"""
@@ -137,13 +133,13 @@ class TurnDecelController:
       # 等待期不减速，但大角度时仍 block accel
       return TurnDecelResult(None, big_angle_block, False, "waiting")
 
-    # ---- 3. 方向盘 > 15° 暂停减速（弯道几何减速接管）----
+    # ---- 3. 方向盘 > 9° 暂停减速（弯道几何减速接管）----
     if abs(steering_angle_deg) > STEERING_PAUSE_DEG:
       # ramp 立即清零，避免恢复时阶跃
       self._decel_a = 0.0
       # 已通过 debounce 进入主动管理流程，规则 1 要求"保证不加速"。
       # 此分支涵盖 steering > 60° 的情况，所以不再叠加 big_angle_block：
-      #   不论 steering 15~60°（弯道几何接管）还是 > 60°（安全锁），
+      #   不论 steering 9~60°（弯道几何接管）还是 > 60°（安全锁），
       #   都属于"驾驶员打灯想拐"的管理态，统一阻断主动加速。
       return TurnDecelResult(None, True, False, "paused")
 
@@ -154,12 +150,8 @@ class TurnDecelController:
       return TurnDecelResult(None, True, False, "at_target")
 
     # ---- 5. 主动减速 ----
-    # 渐进式 ramp：首次进入给 initial 0.5，之后随时间慢慢升到 max 1.2。
-    # 不会阶跃到 max（避免急刹），又能在需要时果断减速到目标。
-    if self._decel_a < DECEL_INITIAL_M_S2:
-      self._decel_a = DECEL_INITIAL_M_S2
-    else:
-      self._decel_a = min(DECEL_MAX_M_S2, self._decel_a + dt * DECEL_RAMPUP_M_S3)
+    # ramp 平滑：从 0 线性升到 DECEL_M_S2，时长 DECEL_RAMP_S
+    self._decel_a = min(DECEL_M_S2, self._decel_a + dt * DECEL_M_S2 / DECEL_RAMP_S)
     return TurnDecelResult(
       a_target_override=-self._decel_a,
       block_accel=True,
