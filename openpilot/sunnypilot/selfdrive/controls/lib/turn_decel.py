@@ -7,11 +7,9 @@
   2. 持续减速到目标速度 15 km/h (4.167 m/s)；到目标后停减速但保持不加速
   3. 方向盘角度 > 9° 时暂停执行减速（让弯道本身的几何减速接管），
      但**保证不主动加速**（即使 base plan 想加速）
-  4. 方向盘角度 > 60° 且 v_ego > 15 km/h 时**不主动加速**——独立约束，
-     **与转向灯无关**（即使关闭了转向灯也要生效：U-turn、入库、
-     螺旋匝道等极端大角度场景）
-  5. 转向灯关闭：立刻停止减速、解除弯道减速相关的"不加速"约束；
-     但若同时满足大角度条件（规则 4），仍保留 block_accel
+  4. 方向盘角度 > 60° 且 v_ego > 15 km/h 时**不主动加速**（与转向灯无关，
+     仅大角度转向的安全锁）
+  5. 转向灯关闭：立刻停止减速、解除所有"不加速"约束
   6. ACC (Normal) 模式和 Experimental Mode 都生效：在 longitudinal_planner
      里以 post-candidate-min 的方式作用到 output_a_target，
      不进入 candidates min 池，避免被 e2e/cruise 任何一方覆盖
@@ -62,9 +60,7 @@ class TurnDecelResult:
   a_target_override: float | None  # 负值（减速）；None = 控制器不强制
   block_accel: bool               # True 时不允许任何正加速度
   active: bool                    # 控制器是否在主动减速
-  phase: str                      # 'idle' / 'waiting' / 'paused' / 'deceling'
-                                  #   / 'at_target' / 'big_angle_guard'
-                                  # 'big_angle_guard': 转向灯关闭但大角度条件仍成立
+  phase: str                      # 'idle' / 'waiting' / 'paused' / 'deceling' / 'at_target'
 
 
 class TurnDecelController:
@@ -104,52 +100,46 @@ class TurnDecelController:
     Returns:
       TurnDecelResult 含 a_target_override / block_accel / active / phase
     """
-    # ---- 0. 大角度安全锁（独立于转向灯状态，最先评估）----
-    # 方向盘 > 60° 且 v_ego > 15 km/h：不主动加速。
-    # 必须在 blinker-off 分支之前评估——这是规则 4 的"与转向灯无关"。
-    # 适用于：U-turn、入库、螺旋匝道等驾驶员不打转向灯的极端大角度场景。
+    # ---- 1. 跟踪 blinker 开启/下降沿 ----
+    if blinker_on:
+      self._blinker_on_time += dt
+    else:
+      # 转向灯关闭：完全退出
+      if self._blinker_on_last:
+        self.reset()
+      # 慢速保守：关闭时也清 ramp
+      self._decel_a = 0.0
+      return TurnDecelResult(None, False, False, "idle")
+
+    self._blinker_on_last = True
+
+    # ---- 2. 大角度安全锁（独立于转向灯状态） ----
+    # 方向盘 > 60° 且 v_ego > 15 km/h：不主动加速
+    # 适用于：U-turn、入库、螺旋匝道等极端大角度场景
     big_angle_block = (
       abs(steering_angle_deg) > STEERING_BLOCK_ACCEL_DEG
       and v_ego > TARGET_V_MS
     )
 
-    # ---- 1. 跟踪 blinker 开启/下降沿 ----
-    if blinker_on:
-      self._blinker_on_time += dt
-    else:
-      # 转向灯关闭：完全退出减速流程（清 ramp / 清等待计时）。
-      if self._blinker_on_last:
-        self.reset()
-      self._decel_a = 0.0
-      # 但若大角度条件成立，仍要保留 block_accel（独立安全约束）。
-      if big_angle_block:
-        return TurnDecelResult(None, True, False, "big_angle_guard")
-      return TurnDecelResult(None, False, False, "idle")
-
-    self._blinker_on_last = True
-
-    # ---- 2. 还在 2s debounce 等待期 ----
+    # ---- 3. 还在 2s debounce 等待期 ----
     if self._blinker_on_time < BLINKER_DEBOUNCE_S:
       # 等待期不减速，但大角度时仍 block accel
       return TurnDecelResult(None, big_angle_block, False, "waiting")
 
-    # ---- 3. 方向盘 > 9° 暂停减速（弯道几何减速接管）----
+    # ---- 4. 方向盘 > 9° 暂停减速（弯道几何减速接管）----
     if abs(steering_angle_deg) > STEERING_PAUSE_DEG:
       # ramp 立即清零，避免恢复时阶跃
       self._decel_a = 0.0
-      # 已通过 debounce 进入主动管理流程，规则 1 要求"保证不加速"。
-      # 此分支涵盖 steering > 60° 的情况，所以不再叠加 big_angle_block：
-      #   不论 steering 9~60°（弯道几何接管）还是 > 60°（安全锁），
-      #   都属于"驾驶员打灯想拐"的管理态，统一阻断主动加速。
-      return TurnDecelResult(None, True, False, "paused")
+      # 暂停期不减速；大角度时仍 block accel
+      return TurnDecelResult(None, big_angle_block, False, "paused")
 
-    # ---- 4. 已到目标速度 15 km/h：停减速但保持不加速 ----
+    # ---- 5. 已到目标速度 15 km/h：停减速但保持不加速 ----
     if v_ego <= TARGET_V_MS:
       self._decel_a = 0.0
       # 到目标后保持不加速（让弯道自己处理 + 驾驶员能加油门改主意）
       return TurnDecelResult(None, True, False, "at_target")
 
-    # ---- 5. 主动减速 ----
+    # ---- 6. 主动减速 ----
     # ramp 平滑：从 0 线性升到 DECEL_M_S2，时长 DECEL_RAMP_S
     self._decel_a = min(DECEL_M_S2, self._decel_a + dt * DECEL_M_S2 / DECEL_RAMP_S)
     return TurnDecelResult(

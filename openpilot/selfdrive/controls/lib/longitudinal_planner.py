@@ -218,23 +218,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       output_a_target = taper_toward_less_conservative_output(output_a_target, self.output_a_target, j_taper, self.dt)
     self._prev_output_source = self.mpc.source
 
-    # Blinker-triggered slow-down + independent big-angle safety guard
-    # (sunnypilot additions). Applied AFTER the candidate-source min() and
-    # the e2e-seam taper so it cannot be silently swallowed by an e2e
-    # accel override (the user's whole point: it must work in Experimental
-    # Mode too) AND it cannot be weakened by an even larger positive tap.
-    # Two distinct intents covered:
-    #   (a) driver-intent: blinker-triggered slow-down for tight turns
-    #   (b) safety-guard:  >60° angle at >15 km/h blocks accel regardless
-    #       of blinker state (U-turn, parking, spiral ramp without blinker)
-    # Both are *driver-intent* / *active-safety* constraints, not physical-
-    # safety floors -- FCW/lead cut-ins still take precedence because they
-    # reach output_a_target through the candidates min pool above.
+    # Blinker-triggered slow-down (sunnypilot addition). Applied AFTER the
+    # candidate-source min() and the e2e-seam taper so it cannot be silently
+    # swallowed by an e2e accel override (the user's whole point: it must
+    # work in Experimental Mode too) AND it cannot be weakened by an even
+    # larger positive tap. It is a *driver-intent* constraint, not a
+    # physical-safety floor -- FCW/lead cut-ins still take precedence because
+    # they reach output_a_target through the candidates min pool above.
     # `min()` so other sources can still push deceleration deeper if needed
     # (e.g. a lead appearing in the same frame); `block_accel` clamps any
     # positive a_target (accel) to 0 even when the controller is only
-    # watching (paused/at_target/big_angle_guard) -- that's the
-    # "保证不加速" requirement.
+    # watching (paused/at_target) -- that's the "保证不加速" requirement.
     blinker_on = bool(sm['carState'].leftBlinker or sm['carState'].rightBlinker)
     turn_decel_res = self.turn_decel.update(
       blinker_on=blinker_on,
