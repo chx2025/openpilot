@@ -654,22 +654,6 @@ def main(demo=False):
         else:
           chestnut_ready_s = 0.0
 
-    # --- parallel small-model inference ---
-    # While the chestnut (eGPU) big model is active and healthy, also run the
-    # small model every frame with the same inputs. This both (a) publishes the
-    # small model's plan trajectory on modelDataV2SP for consumers that handle
-    # red-light stopping better with it (traffic_stop), and (b) keeps the small
-    # model's recurrent state warm, so the chestnut->small fallback is truly
-    # seamless. Never run it when the small model IS the active model -- the
-    # plan it produced is already in modelV2.
-    small_model_output = None
-    if model_output is not None and not fell_back and model.chestnut and small_model is not None:
-      try:
-        small_model_output = small_model.run(bufs, transforms, inputs)
-      except Exception:
-        cloudlog.exception("parallel small model run failed; publishing without smallModelPlan")
-        small_model_output = None
-
     if model_output is not None:
       model_output_t = time.monotonic()
       if last_model_output_t is not None:
@@ -698,21 +682,6 @@ def main(demo=False):
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction
       mdv2sp_send.modelDataV2SP.laneTurnDirection = DH.lane_turn_direction
-
-      # fill small-model plan (see parallel inference note above)
-      if small_model_output is not None and 'plan' in small_model_output:
-        try:
-          small_plan = small_model_output['plan'][0]   # (IDX_N, PLAN_WIDTH)
-          small_pos = small_plan[:, Plan.POSITION]     # (IDX_N, 3) x/y/z
-          small_vel = small_plan[:, Plan.VELOCITY]     # (IDX_N, 3) vx/vy/vz
-          sp = mdv2sp_send.modelDataV2SP.smallModelPlan
-          sp.valid = True
-          sp.positionX = small_pos[:, 0].tolist()
-          sp.positionY = small_pos[:, 1].tolist()
-          sp.velocityX = small_vel[:, 0].tolist()
-        except Exception:
-          cloudlog.exception("failed to fill smallModelPlan; leaving valid=False")
-
       drivingdata_send.drivingModelData.meta.laneChangeState = DH.lane_change_state
       drivingdata_send.drivingModelData.meta.laneChangeDirection = DH.lane_change_direction
 

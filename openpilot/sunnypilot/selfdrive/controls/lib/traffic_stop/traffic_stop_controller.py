@@ -223,8 +223,7 @@ class TrafficStopController:
 
     return stop_model_x_raw, self._stop_x_rl
 
-  def update(self, model_v2, car_state, radar_state, v_ego: float, a_ego: float, v_cruise: float,
-             small_model_plan=None) -> TrafficStopResult:
+  def update(self, model_v2, car_state, radar_state, v_ego: float, a_ego: float, v_cruise: float) -> TrafficStopResult:
     if not self._enabled:
       self._reset()
       return TrafficStopResult(stop_dist_m=None, v_cruise_limited=None)
@@ -232,23 +231,6 @@ class TrafficStopController:
     model_v_traj = model_v2.velocity.x
     model_y_traj = model_v2.position.y
     model_x_traj = model_v2.position.x
-
-    # Small-model preference: when the chestnut (eGPU) big model is the active model, modeld
-    # also runs the small model every frame in parallel and publishes its plan on
-    # modelDataV2SP.smallModelPlan. The small model's stop-line prediction is markedly better
-    # than the big model's, so when a valid small plan is available we drive the ENTIRE
-    # red-light state machine (stop detection, stop-line filtering, distance latching) from it.
-    # When it is not available (small model is the active model during chestnut fallback,
-    # parallel inference disabled/failed), we use modelV2 -- which is then already the output
-    # of whichever model is actually driving, so behaviour is unchanged from before.
-    if (small_model_plan is not None and small_model_plan.valid
-        and len(small_model_plan.positionX) >= abs(STOP_MODEL_IDX)
-        and len(small_model_plan.positionY) >= 1
-        and len(small_model_plan.velocityX) >= 1):
-      model_x_traj = small_model_plan.positionX
-      model_y_traj = small_model_plan.positionY
-      model_v_traj = small_model_plan.velocityX
-
     if len(model_x_traj) < abs(STOP_MODEL_IDX) or len(model_v_traj) == 0:
       # incomplete model output this frame -- inject nothing, keep prior latched state as-is
       return TrafficStopResult(stop_dist_m=None, v_cruise_limited=None)
