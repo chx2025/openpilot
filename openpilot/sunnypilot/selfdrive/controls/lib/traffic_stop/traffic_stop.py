@@ -15,11 +15,8 @@ limiting / debouncing lives in TrafficStopController (traffic_stop_controller.py
 from numpy import interp
 
 # steering angle above this magnitude suppresses *entering* a new traffic-stop
-# management cycle (assumed to be an intentional turn, not a stop).
-# 5.0° (user requirement): only hand off to ACC-stop when the car is driving
-# essentially dead-straight. Anything with meaningful steering is a turn, not
-# a stop approach.
-TRAFFIC_STOP_ENTRY_STEERING_LIMIT_DEG = 5.0
+# management cycle (assumed to be an intentional turn, not a stop)
+TRAFFIC_STOP_ENTRY_STEERING_LIMIT_DEG = 50.0
 
 # at 0 kph the virtual stop line is placed at 100% of the model-predicted
 # distance; at 100 kph it is pulled in to 70% (stop earlier at speed)
@@ -32,7 +29,7 @@ TRAFFIC_STOP_DISTANCE_FADE_BP_M = (0.0, 50.0)
 
 
 def is_traffic_stop_entry_allowed(steering_angle_deg: float) -> bool:
-  """Dead-straight steering (abs < 5°) -> this is a stop approach, not a turn. Blocks new entries only."""
+  """Large steering angle -> likely an intentional turn, not a stop. Blocks new entries only."""
   return abs(steering_angle_deg) < TRAFFIC_STOP_ENTRY_STEERING_LIMIT_DEG
 
 
