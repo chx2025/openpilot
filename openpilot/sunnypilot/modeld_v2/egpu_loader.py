@@ -20,13 +20,19 @@ def configure_default_device(comma_hardware: bool, environment: MutableMapping[s
   """Prevent tinygrad's default-device scan from probing the USB AMD GPU."""
   if comma_hardware:
     environment.setdefault("DEV", "QCOM")
+    # Cap the AMD SMU PPT unconditionally on comma hardware. tinygrad's USB+AMD
+    # backend (AMDev) reads AM_POWER_LIMIT and calls smu.set_power_limit(); without
+    # it the GPU runs at full PPT and an inference spike trips the USB PD supply
+    # (the "loads fine, dies on first run" symptom). Do NOT gate this on the C3XL
+    # hardware-profile detection -- that detection has proven unreliable on some
+    # units, and setting the env var is harmless when no AMD GPU is attached
+    # (AMDev is never initialized on the QCOM/LLVM path). An explicit environment
+    # override remains available for controlled testing.
+    environment.setdefault("AM_POWER_LIMIT", str(C3XL_AM_POWER_LIMIT_W))
   if c3xl:
     # /home is an ephemeral overlay on C3XL. Keep AMD firmware and compiler
     # caches across reboots so model startup never depends on a live download.
     environment.setdefault("XDG_CACHE_HOME", C3XL_TINYGRAD_CACHE_HOME)
-    # Limit the volatile SMU PPT before clocks are opened up. An explicit
-    # environment override remains available for controlled testing.
-    environment.setdefault("AM_POWER_LIMIT", str(C3XL_AM_POWER_LIMIT_W))
     # Follow the SP/OP Chestnut default. Keep tinygrad's other devices unchanged.
     environment.setdefault("AMD_USB_POLL_US", str(C3XL_AMD_USB_POLL_US))
 
