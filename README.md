@@ -1,3 +1,10 @@
+版權是dragonpilot  
+以下是本分支亂搞項目
+
+調整實驗模式加速意願   讓實驗模式更願意加速
+
+
+
 ![](dragonpilot/selfdrive/assets/dragonpilot.png)
 
 [Read this in English](README_EN.md)
