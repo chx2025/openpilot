@@ -4,6 +4,8 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import math
+
 import pyray as rl
 from dataclasses import dataclass
 
@@ -85,14 +87,23 @@ class LateralControlElement:
 
 
 class RelDistElement(LeadInfoElement):
-  def __init__(self):
+  def __init__(self, zero_pad: bool = False):
     self.unit = "m"
+    # 底部信息条要求固定 3 位（无前车 = 000，60m = 060），保证行宽稳定；
+    # 右侧调试列沿用原来的 "-"（2026-09-17）
+    self.zero_pad = zero_pad
 
   def update(self, sm, is_metric: bool) -> UiElement:
     lead_status, lead_d_rel, _ = self.get_lead_status(sm)
-    value = f"{lead_d_rel:.0f}" if lead_status else "-"
-    color = self.get_lead_color(lead_d_rel) if lead_status else rl.WHITE
-    return UiElement(value, "前车距离", self.unit, color)
+    if not lead_status or not math.isfinite(lead_d_rel):
+      return UiElement("000" if self.zero_pad else "-", "前车距离", self.unit, rl.WHITE)
+
+    if self.zero_pad:
+      # 固定 3 位整数；上限 999m（雷达/模型前车距离远小于此，仅作位宽兜底）
+      value = f"{max(0, min(int(round(lead_d_rel)), 999)):03d}"
+    else:
+      value = f"{lead_d_rel:.0f}"
+    return UiElement(value, "前车距离", self.unit, self.get_lead_color(lead_d_rel))
 
 
 class RelSpeedElement(LeadInfoElement):
@@ -404,15 +415,17 @@ class AltitudeElement(GpsInfoElement):
   def update(self, sm, is_metric: bool) -> UiElement:
     gps_data, valid = self.get_gps_data(sm)
 
-    gps_accuracy = 0.0
-    altitude = 0.0
-
+    altitude = None
     if valid:
-      altitude = gps_data.altitude
-      if sm.valid['gpsLocationExternal']:
-        gps_accuracy = gps_data.horizontalAccuracy
+      if sm.valid['gpsLocationExternal'] and gps_data.horizontalAccuracy == 0.0:
+        # 外部 GPS 水平精度为 0 = 还没真正定位，视为无海拔数据（原逻辑此处显示 "-"）
+        altitude = None
       else:
-        gps_accuracy = 1.0  # Simulate valid for legacy check
+        # gpsLocation（内部 GPS）没有精度语义，沿用原逻辑直接可用
+        altitude = gps_data.altitude
 
-    value = f"{altitude:.1f}" if gps_accuracy != 0.0 else "-"
+    # 固定 4 位整数：155.7m -> 0156m；无海拔数据 -> 0000m（2026-09-17）
+    # 低于海平面用符号位占一个字符（-154m -> -154），位宽同样保持 4
+    meters = 0 if altitude is None or not math.isfinite(altitude) else int(round(altitude))
+    value = f"{max(-999, min(meters, 9999)):04d}"
     return UiElement(value, "海拔", self.unit, rl.WHITE)

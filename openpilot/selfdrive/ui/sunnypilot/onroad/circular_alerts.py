@@ -9,7 +9,7 @@ import pyray as rl
 from openpilot.cereal import log
 from openpilot.selfdrive.ui import UI_BORDER_SIZE
 from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiState
+from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiState, NUMBER_GREEN
 from openpilot.system.ui.lib.application import gui_app, FontWeight, FONT_SCALE
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -127,11 +127,11 @@ class CircularAlertsRenderer:
       top_y = alert_rect.y + alert_rect.height / 3.5
       rl.draw_text_ex(font, alert_alt_text, rl.Vector2(center.x - measure_top.x / 2, top_y), top_text_size, spacing, rl.Color(255, 175, 3, 240))
 
-      # Timer
+      # Timer（数字 -> 统一绿色；上面的 "STOPPED" 文案保持橙色告警色，2026-09-17）
       timer_text_size = 100
       measure_timer = measure_text_cached(font, self._alert_text, timer_text_size, spacing)
       timer_y = (alert_rect.y + alert_rect.height) - (alert_rect.height / 5) - measure_timer.y
-      rl.draw_text_ex(font, self._alert_text, rl.Vector2(center.x - measure_timer.x / 2, timer_y), timer_text_size, spacing, rl.WHITE)
+      rl.draw_text_ex(font, self._alert_text, rl.Vector2(center.x - measure_timer.x / 2, timer_y), timer_text_size, spacing, NUMBER_GREEN)
     else:
       for line in lines:
         measure = measure_text_cached(font, line, text_size, spacing)
