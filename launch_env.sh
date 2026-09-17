@@ -20,3 +20,16 @@ if [ -z "$AGNOS_VERSION" ]; then
 fi
 
 export STAGING_ROOT="/data/safe_staging"
+
+# eGPU(chestnut) 插着时 SConscript 会尝试编译 big_driving_supercombo.onnx，
+# 而仓库未提供该 onnx；下载的模型已自带编译好的 pkl，无需本地重编。
+export SKIP_TINYGRAD_COMPILE=1
+
+
+# 让 tinygrad 的下载/编译缓存落在持久分区，避免每次开机重建
+# （/home 是 overlay 临时层，重启即清空）
+export TINYGRAD_CACHE_DIR=/data/tg_cache/tinygrad
+
+# chestnut eGPU(ASM24) 功率上限：默认走显卡 SMU PPT 上限(182W)，
+# 压到 120W 降低峰值电流，缓解高负载下 USB/PCIe 链路抖动
+export AM_POWER_LIMIT=120

@@ -97,4 +97,4 @@ def load_oob(f):
       pb = pickle.PickleBuffer(bytearray(struct.unpack('<q', h)[0]))
       f.readinto(pb)
       yield pb
-  return DynamicTinygradUnpickler(io.BytesIO(opcodes), buffers=buffers()).load()
+  return pickle.load(io.BytesIO(opcodes), buffers=buffers())  # [local patch] 对齐 JH c3xl-dev

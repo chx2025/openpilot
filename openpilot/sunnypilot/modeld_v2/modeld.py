@@ -9,6 +9,7 @@ See the LICENSE.md file in the root directory for more details.
 from collections.abc import Callable
 import os
 os.environ['GMMU'] = '0'
+os.environ.setdefault('AM_POWER_LIMIT', '120')  # chestnut eGPU PPT 上限 (W)
 import numpy as np
 import threading
 import time
@@ -57,7 +58,7 @@ from openpilot.sunnypilot.models.helpers import get_active_bundle
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
-BIG_MODEL_TIMEOUT = 60
+BIG_MODEL_TIMEOUT = 600  # [local patch] 60s 载入不完 750MB 的 chestnut 大模型
 
 
 def _pkl_exists(path):
