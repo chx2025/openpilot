@@ -16,6 +16,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.sunnypilot.selfdrive.controls.lib.turn_decel import TurnDecelController
 
 #A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 #A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -26,6 +27,15 @@ A_CRUISE_MIN = -1.2
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
+
+# 实验模式(end-to-end)正加速度上限（m/s²）。
+# 非 e2e 时纵向走 A_CRUISE_MAX_VALS 表（低速封顶 1.10 m/s²），而 e2e 时
+# get_cruise_accel() 直接把 max_accel 放成 ACCEL_MAX(≈2.0)，模型链路的
+# e2e / MPC 候选也能给到 ACCEL_MAX —— 换成大模型后纵向更激进，体感偏猛。
+# 这里给 e2e 路径单独加一道正加速度上限：
+#   调小 = 更保守；设为 None = 完全恢复原始行为（不限制）
+# 实车调参：1.4 仍偏猛 -> 1.2（当前值）；还猛继续降到 1.0；肉了往 1.5/1.6 升
+E2E_ACCEL_MAX_M_S2: float | None = 1.2
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -71,6 +81,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.output_a_target = init_a
     self.output_should_stop = False
 
+    # 打灯减速 + 大角度限加速（sunnypilot 追加，见 turn_decel.py）
+    self.turn_decel = TurnDecelController()
+
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
@@ -107,6 +120,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.v_desired_filter.x = v_ego
       self.output_a_target = np.clip(sm['carState'].aEgo, ACCEL_MIN, ACCEL_MAX)
       self.a_cruise = self.output_a_target
+      # 未接管/车速未就绪时清掉打灯减速的累计状态，避免再接管时
+      # 立刻按「转向灯已开很久」的旧状态减速
+      self.turn_decel.reset()
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -154,6 +170,29 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
+
+    # 实验模式(e2e)正加速度上限：e2e 与 MPC 候选都能给到 ACCEL_MAX，
+    # 大模型接管后纵向偏激进，这里对正加速度单独封顶（见文件顶部常量）
+    if is_e2e and E2E_ACCEL_MAX_M_S2 is not None:
+      output_a_target = min(output_a_target, E2E_ACCEL_MAX_M_S2)
+
+    # 打灯减速 + 大角度限加速（sunnypilot 追加）。
+    # 放在 candidates 的 min() 之后、np.clip 之前：
+    #   - min() 保证不会盖过 candidates 里更保守的一方（FCW/前车/MPC 该刹还是刹）
+    #   - 同时不会被 e2e 的正加速度覆盖掉"不许加速"的约束
+    # 两种意图：打转向灯后弯道减速；以及方向角度过大时（与转向灯无关）不许加速
+    blinker_on = bool(sm['carState'].leftBlinker or sm['carState'].rightBlinker)
+    turn_decel_res = self.turn_decel.update(
+      blinker_on=blinker_on,
+      v_ego=v_ego,
+      steering_angle_deg=steer_angle_without_offset,
+      dt=self.dt,
+    )
+    if turn_decel_res.a_target_override is not None:
+      output_a_target = min(output_a_target, turn_decel_res.a_target_override)
+    if turn_decel_res.block_accel and output_a_target > 0.0:
+      output_a_target = 0.0
+
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
