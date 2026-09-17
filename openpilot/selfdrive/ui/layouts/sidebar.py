@@ -31,7 +31,9 @@ class Colors:
   GRAY = rl.Color(84, 84, 84, 255)
 
   # Status colors
-  GOOD = rl.WHITE
+  # GOOD 只作为 MetricData.color 使用，也就是每格左侧那条粗竖线的颜色：
+  # 状态良好 -> 绿色；WARNING/DANGER 等仍保持黄/红（2026-09-17 改）
+  GOOD = rl.Color(0, 230, 60, 255)
   WARNING = rl.Color(218, 202, 37, 255)
   DANGER = rl.Color(201, 34, 49, 255)
 

@@ -32,7 +32,9 @@ class Colors:
   GRAY = rl.Color(84, 84, 84, 255)
 
   # Status colors
-  GOOD = rl.WHITE
+  # GOOD 只作为 MetricData.color 使用，也就是第四格左侧那条粗竖线的颜色：
+  # severity == "good" -> 绿色（其余 warning/danger/progress/disabled 保持原样，2026-09-17 改）
+  GOOD = rl.Color(0, 230, 60, 255)
   WARNING = rl.Color(218, 202, 37, 255)
   DANGER = rl.Color(201, 34, 49, 255)
   PROGRESS = rl.Color(0, 134, 233, 255)
