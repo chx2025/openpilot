@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 import numpy as np
 
 import openpilot.cereal.messaging as messaging
@@ -37,6 +38,40 @@ MIN_ALLOW_THROTTLE_SPEED = 2.5
 # 实车调参：1.4 仍偏猛 -> 1.2（当前值）；还猛继续降到 1.0；肉了往 1.5/1.6 升
 E2E_ACCEL_MAX_M_S2: float | None = 1.2
 
+# ---- 超速滑行回落（仿 dragonpilot 的 ACM / Adaptive Coasting Module）----
+# 现象：设定 60 km/h，驾驶员踩油门把车推到 70，松开油门后旧逻辑会立刻用
+#       A_CRUISE_MIN(-1.2 m/s²) 恒定硬刹回 60，体感像是被点了一脚刹车。
+# 原因：cruise 候选项恒为 np.clip(v_cruise - v_ego, A_CRUISE_MIN, max_accel)，
+#       只要超速超过 4.3 km/h 就直接饱和到 -1.2。
+# 改为：按超速幅度在「自然滑行」与「全力减速」之间线性过渡 —— 小超速让车顺着
+#       阻力滑回设定速度（平路约 -0.3 m/s²，从 70 回到 60 约 9 秒），大超速再
+#       逐步加大刹车力度，兼顾舒适与安全。
+# 安全：只改 cruise 候选项的**下限**，候选集依然取 min()，所以 MPC / e2e / FCW
+#       给出的更保守制动（跟车、前车急刹、视觉风险）完全不受影响。
+#   调参：嫌回落慢 -> 调小 COAST_OVERSPEED_PURE_KPH / FULL_KPH；嫌回落猛 -> 调大；
+#         COAST_OVERSPEED_ENABLE = False 一键回退成原行为（恒 -1.2）。
+COAST_OVERSPEED_ENABLE = True
+COAST_OVERSPEED_PURE_KPH = 10.0   # 超速 <= 10 km/h：纯滑行（accel_coast，平路约 -0.3 m/s²）
+COAST_OVERSPEED_FULL_KPH = 30.0   # 超速 >= 30 km/h：回到全力 A_CRUISE_MIN(-1.2 m/s²)
+
+# ---- 大减速现场记录器（诊断用，2026-09-18 新增）----
+# 目的：一趟车就能回答「这一脚到底为什么刹」。输出加速度低于阈值时，把当时的
+# 各条候选值 / 胜出来源 / 设定速度 / 前车详情一次性打进 swaglog。
+#
+# 关键的两个对照量（这条日志的价值所在）：
+#   vCruiseUI vs vCruiseInt —— UI 上的设定速度 vs SP 内部实际跟踪的目标速度。
+#     两者不一致 = Smart Cruise Control(Vision/Map) 或 Speed Limit Assist 在悄悄
+#     压速，与车主拧的设定速度无关。
+#   lead=1 + vLeadK≈0 + dRel 小 —— 雷达把一个几乎静止的目标当成了前车。
+#
+# 实车核对：grep LongDecel /data/log/swaglog.*
+#   DECEL_PROBE_ENABLE   一键开关
+#   DECEL_PROBE_A_TARGET 输出加速度低于此值记一条 (m/s²)
+#   DECEL_PROBE_INTERVAL 节流间隔 (s)
+DECEL_PROBE_ENABLE = True
+DECEL_PROBE_A_TARGET = -0.8
+DECEL_PROBE_INTERVAL = 3.0
+
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
@@ -46,6 +81,27 @@ def get_max_accel(v_ego):
 
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
+
+def get_cruise_accel_min(v_cruise, v_ego, accel_coast):
+  """cruise 速度跟踪的减速度下限（超速回落力度）。
+
+  未超速时这个下限不起作用（v_cruise - v_ego > 0），只有超速时它才决定回落力度：
+  超速幅度 <= COAST_OVERSPEED_PURE_KPH 用自然滑行 accel_coast（平路约 -0.3 m/s²），
+  线性过渡到 COAST_OVERSPEED_FULL_KPH 时恢复原来的 A_CRUISE_MIN(-1.2 m/s²)。
+  """
+  if not COAST_OVERSPEED_ENABLE:
+    return A_CRUISE_MIN
+
+  overspeed_kph = max(0.0, v_ego - v_cruise) * CV.MS_TO_KPH
+  # accel_coast = sin(pitch) * -5.65 - 0.3，是「零踏板自然加速度」：
+  #   长下坡可能为正（滑行反而越滑越快）-> 夹到 0，保证至少不主动加速；
+  #   陡上坡可能比 -1.2 还负（自然减速更快）-> 夹到 A_CRUISE_MIN，
+  #   保证滑行回落永远不会比原来的硬刹更激进。
+  coast_min = float(np.clip(accel_coast, A_CRUISE_MIN, 0.0))
+  return float(np.interp(overspeed_kph,
+                         [COAST_OVERSPEED_PURE_KPH, COAST_OVERSPEED_FULL_KPH],
+                         [coast_min, A_CRUISE_MIN]))
+
 
 def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
   max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
@@ -60,7 +116,9 @@ def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, 
       coast_limit = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [max_accel, clipped_accel_coast])
       max_accel = min(max_accel, coast_limit)
 
-  target_accel = np.clip(v_cruise - v_ego, A_CRUISE_MIN, max_accel)
+  # 超速回落的下限：小超速滑行、大超速逐渐加大刹车（见 COAST_OVERSPEED_* 常量）
+  accel_min = get_cruise_accel_min(v_cruise, v_ego, accel_coast)
+  target_accel = np.clip(v_cruise - v_ego, accel_min, max_accel)
   j_cruise = np.interp(v_ego, A_CRUISE_MAX_BP, J_CRUISE_VALS)
   target_accel = float(np.clip(target_accel, a_cruise_prev - j_cruise * dt, a_cruise_prev + j_cruise * dt))
 
@@ -83,6 +141,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # 打灯减速 + 大角度限加速（sunnypilot 追加，见 turn_decel.py）
     self.turn_decel = TurnDecelController()
+
+    # 超速滑行回落的状态（仅用于状态跳变时打一条日志，见 update）
+    self._coast_overspeed_active = False
+
+    # 大减速现场记录器的节流时间戳（见 update 与文件头 DECEL_PROBE_*）
+    self._decel_probe_ts = -1e9
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -163,6 +227,15 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
                                      accel_coast, self.allow_throttle)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
 
+    # 超速滑行回落只在状态跳变时打一条日志（20Hz 循环里不能每帧刷），
+    # 实车核对：grep CoastOverspeed /data/log/swaglog.*
+    coast_overspeed_active = bool(COAST_OVERSPEED_ENABLE and v_ego > v_cruise)
+    if coast_overspeed_active != self._coast_overspeed_active:
+      cloudlog.info(f"CoastOverspeed {'engaged' if coast_overspeed_active else 'released'}: "
+                    f"vEgo={v_ego * CV.MS_TO_KPH:.1f} vCruise={v_cruise * CV.MS_TO_KPH:.1f} "
+                    f"overspeed={(v_ego - v_cruise) * CV.MS_TO_KPH:.1f}kph aCruise={self.a_cruise:.2f}")
+      self._coast_overspeed_active = coast_overspeed_active
+
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
                   (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop)]
     if is_e2e:
@@ -196,6 +269,27 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
+
+    # ---- 大减速现场记录器（见文件头 DECEL_PROBE_*）----
+    # 只在输出明显减速时记一条，用来事后判断「这一脚是谁给的」：
+    #   vCruiseUI 与 vCruiseInt 不一致 -> SP 的 SCC / SLA 在悄悄压速
+    #   lead 存在且 vLeadK≈0、dRel 小 -> 雷达把静止物当成了前车
+    if DECEL_PROBE_ENABLE and self.output_a_target < DECEL_PROBE_A_TARGET:
+      now = time.monotonic()
+      if now - self._decel_probe_ts >= DECEL_PROBE_INTERVAL:
+        self._decel_probe_ts = now
+        lead = sm['radarState'].leadOne
+        a_e2e_str = f"{output_a_target_e2e:.2f}" if is_e2e else "n/a"
+        cloudlog.info(
+          f"[LongDecel] aTarget={self.output_a_target:.2f} src={self.mpc.source} spSrc={self.source} "
+          f"| aMpc={output_a_target_mpc:.2f} aCruise={self.a_cruise:.2f} aE2e={a_e2e_str} "
+          f"| vEgo={v_ego * CV.MS_TO_KPH:.0f} vCruiseUI={v_cruise_kph:.0f} "
+          f"vCruiseInt={v_cruise * CV.MS_TO_KPH:.0f} "
+          f"| lead={int(lead.present)} dRel={lead.dRel:.1f} vLeadK={lead.vLeadK:.1f} "
+          f"prob={lead.modelProb:.2f} radar={int(lead.radar)} "
+          f"| allowThr={int(self.allow_throttle)} aCoast={accel_coast:.2f} "
+          f"turnDecel={turn_decel_res.phase} e2e={int(is_e2e)}"
+        )
 
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan')

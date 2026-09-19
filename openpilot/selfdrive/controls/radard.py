@@ -7,6 +7,7 @@ from typing import Any
 import capnp
 from openpilot.cereal import messaging, log, custom
 from opendbc.car.structs import car
+from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
@@ -28,6 +29,40 @@ SPEED, ACCEL = 0, 1     # Kalman filter states enum
 V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 
 RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
+
+# 转弯判定门槛（对齐 herizon1054/openpilot@dpagel）
+# 供 radard_ext 的横向门控使用：方向盘角度或角速度任一超过门槛即视为转弯中。
+TURN_STEER_ANGLE_DEG = 15.0
+TURN_STEER_RATE_DEG = 10.0
+
+# ---- 静止目标过滤（2026-09-18 改版：雷达不处理静止物体）----
+# 背景：雷达对「静止物体」的判定天然不可靠 —— 弯道护栏、路牌、井盖、桥墩、
+# 邻车道停着的车，都会被探成几乎静止的 lead。视觉模型对这些目标置信度极低，
+# 但雷达报上去的速度/加速度会直接喂进 MPC，就变成幽灵刹车。
+#
+# 实车实测（C3XL @192.168.20.115，2026-09-18 上午一趟车）：
+#   [RadarDSP_GhostDrop] lead1 | dRel 5.8 yRel -2.3 vLeadK -0.1 camProb 0.35
+#   [RadarDSP_GhostDrop] lead0 | dRel 2.4 yRel -2.1 vLeadK  0.6 camProb 0.32
+#   → dRel 2.4~8.9m（极近）、vLeadK 0~1.2m/s（几乎静止）、camProb 0.22~0.35（视觉不认可）
+#   同趟车 FCW triggered 3 次（条件 mpc.crash_cnt>2 且 leadOne.modelProb>0.9），
+#   即 MPC 连续 3 帧认定 5s 内要撞 —— 就是体感上的「狠刹一脚」。
+#
+# 旧版判据要求「方向盘>=60° 或 车速>=70km/h」才启用过滤。实测该工况门太窄：
+# 中速（50~65km/h）+ 小转角时不成立，幽灵照旧进 MPC。
+#
+# 现方案（车主 2026-09-18 决定）：**雷达不处理静止物体** —— 目标只要几乎静止，
+# 一律丢弃雷达数据，静止物完全交给视觉 lead（leadsV3）承担。
+#   · 不再需要工况门（GHOST_DROP_STEER_ANGLE_DEG / GHOST_DROP_V_EGO_KPH 已删除）
+#   · 不再需要 camProb 判据（视觉看不到的静止物正是要丢的那批）
+#   · 原厂 potential_low_speed_lead 低速防撞兜底不受影响（v_ego<4m/s 仍采用最近目标）
+#
+# 丢弃后不会凭空少一个 lead：上层会退回纯视觉 lead（get_RadarState_from_vision），
+# 语义是「这次不用雷达测出来的速度和加速度」—— 那才是幽灵刹车的直接来源。
+#
+# 调参：拥堵跟车发抖（误丢慢速真车）-> 调小 GHOST_DROP_STATIC_KPH（如 3.0）
+#       幽灵刹车没消 -> 调大（如 8.0）；彻底关掉把 GHOST_DROP_ENABLE 置 False。
+GHOST_DROP_ENABLE = True
+GHOST_DROP_STATIC_KPH = 5.0   # 目标绝对速度门槛 (km/h)：低于此值视为「静止物」，一律丢弃
 
 
 class KalmanParams:
@@ -62,12 +97,16 @@ class Track:
     self.K_K = kalman_params.K
     self.kf = KF1D([[v_lead], [0.0]], self.K_A, self.K_C, self.K_K)
 
-  def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float):
+  def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: bool = False):
     # relative values, copy
     self.dRel = d_rel   # LONG_DIST
     self.yRel = y_rel   # -LAT_DIST
     self.vRel = v_rel   # REL_SPEED
     self.vLead = v_lead
+    # 该雷达点是否为真实量测（而非运动学外推）。
+    # 本分支 opendbc 已把 RadarPoint.measured 移入 deprecated group 且无驱动填充它，
+    # 实际恒为 False；保留该属性是为了与上游逻辑保持接口一致（见 radard_ext.py）。
+    self.measured = measured
 
     # computed velocity and accelerations
     if self.cnt > 0:
@@ -107,6 +146,24 @@ class Track:
   def __str__(self):
     ret = f"x: {self.dRel:4.1f}  y: {self.yRel:4.1f}  v: {self.vRel:4.1f}  a: {self.aLeadK:4.1f}"
     return ret
+
+
+def is_stationary_track(track: Track) -> bool:
+  """静止目标判定：为真即丢弃该雷达轨迹，退回纯视觉 lead（雷达不处理静止物体）。
+
+  track : 已经过 match_vision_to_track 匹配上的雷达轨迹
+
+  为什么不做工况门、也不看视觉置信度：雷达对静止物（护栏/路牌/井盖/邻车道停车）
+  的测速本身就不可靠，而「视觉置信度低」恰恰是这类目标的典型特征 —— 拿它当判据
+  等于放行。详见文件头说明。
+
+  速度判据用 vLeadK（卡尔曼滤波后的绝对速度）而非单帧 vLead，避免杂波测速抖动
+  把静止目标一帧帧地判成运动目标。Kalman 初值直接取 v_lead，所以新轨迹也不会有
+  冷启动偏差。
+  """
+  if not GHOST_DROP_ENABLE:
+    return False
+  return abs(track.vLeadK) < GHOST_DROP_STATIC_KPH * CV.KPH_TO_MS
 
 
 def laplacian_pdf(x: float, mu: float, b: float):
@@ -156,10 +213,14 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, lead_prob: float, CP: structs.CarParams, CP_SP: structs.CarParamsSP,
-             low_speed_override: bool = True) -> dict[str, Any]:
+             is_turning: bool = False, low_speed_override: bool = True) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
   if len(tracks) > 0 and ready and lead_prob > .5:
     track = match_vision_to_track(v_ego, lead_msg, tracks)
+    # 静止目标一律丢弃（雷达不处理静止物体），后续退回纯视觉 lead。
+    # 详见文件头 GHOST_* 说明与 is_stationary_track。
+    if track is not None and is_stationary_track(track):
+      track = None
   else:
     track = None
 
@@ -220,7 +281,14 @@ class RadarD:
       self.v_ego_hist.append(self.v_ego)
       self.last_v_ego_frame = sm.recv_frame['carState']
 
-    ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel] for pt in rr.points}
+    # dp: 判断是否正在转弯（方向盘角度或角速度超过门槛），供 radard_ext 的信心度累积
+    # 逻辑使用——转弯中保留「必须真实量测」的横向保护（避免旁侧车道目标因外推值
+    # 被误判成切入本车道），直行/巡航时放行（避免正常雷达漏拍拖慢插队目标的反应）。
+    is_turning = abs(sm['carState'].steeringAngleDeg) >= TURN_STEER_ANGLE_DEG or abs(sm['carState'].steeringRateDeg) >= TURN_STEER_RATE_DEG
+
+    # 静止目标过滤不再需要工况门：目标只要几乎静止就一律丢弃雷达数据，
+    # 由视觉 lead 承担（见文件头 GHOST_* 说明与 is_stationary_track）。
+    ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel, pt.deprecated.measured] for pt in rr.points}
 
     # *** remove missing points from meta data ***
     for ids in list(self.tracks.keys()):
@@ -237,7 +305,7 @@ class RadarD:
       # create the track if it doesn't exist or it's a new track
       if ids not in self.tracks:
         self.tracks[ids] = Track(ids, v_lead, self.kalman_params)
-      self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead)
+      self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3])
 
     # *** publish radarState ***
     self.radar_state_valid = sm.all_checks()
@@ -260,9 +328,9 @@ class RadarD:
           self.lead_prob_filters[i].update(lead_prob)
 
       self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, self.lead_prob_filters[0].x,
-                                          self.CP, self.CP_SP, low_speed_override=True)
+                                          self.CP, self.CP_SP, is_turning=is_turning, low_speed_override=True)
       self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.lead_prob_filters[1].x,
-                                          self.CP, self.CP_SP, low_speed_override=False)
+                                          self.CP, self.CP_SP, is_turning=is_turning, low_speed_override=False)
 
   def publish(self, pm: messaging.PubMaster):
     assert self.radar_state is not None
