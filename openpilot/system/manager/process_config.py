@@ -181,6 +181,10 @@ procs += [
 
   # locationd
   NativeProcess("locationd_llk", "openpilot/sunnypilot/selfdrive/locationd", ["./locationd"], only_onroad),
+
+  # C3XL: 看护 /tmp/booted，防止 comma.sh 把「重启 comma」误判成开机而弹出
+  # 「System Reset」确认页（点 Confirm 会 rm -rf /data/*）。详见该模块 docstring。
+  PythonProcess("boot_guard", "openpilot.sunnypilot.system.boot_guard", always_run),
 ]
 
 if os.path.exists("../../sunnypilot/sunnylink/uploader.py"):
