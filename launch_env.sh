@@ -42,3 +42,11 @@ export AM_POWER_LIMIT=120
 if [ -x "${DIR:-/data/openpilot}/system/time_seed.sh" ]; then
   setsid "${DIR:-/data/openpilot}/system/time_seed.sh" >>/data/time_seed.log 2>&1 &
 fi
+
+# ---- C3XL IFE 硬件缩图（修 CTM 大模型掉帧 / USB 5G 带宽不足）----
+# 移植自 onemiless/openpilot@dev-sp-egpu 提交 2a69709f06。
+# road 相机在 IFE 硬件里直接出 1344x760（非裁剪，全视场），像素 -43.8%、
+# NV12 单帧 -56.2%，把两路 road @20Hz 的 USB 占用从 139.6MB/s 降到 61.3MB/s。
+# 需要 /data/hardware_profile == c3xl（源码门控）。
+# 回滚：删掉本行 + rm /data/hardware_profile + 重启。
+export C3XL_IFE_ROAD_SIZE=1344x760
