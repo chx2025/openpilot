@@ -26,6 +26,14 @@
      幽灵照旧进 MPC（同一趟车 FCW triggered 3 次）。
      判据实现在 radard.is_stationary_track，参数在 radard.py 文件头 GHOST_* 常量段。
      这里负责在 get_lead_ext 的两个关键节点（匹配后 / 缓存续命前）把它拦下来。
+  7. ★ 转弯时雷达彻底退出（车主 2026-09-19 实车要求）：
+     「当方向盘角度大于 15 度就取消雷达对静止及运动物体的侦测」。
+     关键点是**必须早于 ⑥**、且**连同 low_speed_override 低速兜底一起断掉** ——
+     ⑥ 那条静止过滤**故意**不覆盖 low_speed_override（v_ego<4m/s 时正前方的
+     静止目标极可能是真车，原厂防撞兜底要留着），所以只加 ⑥ 是拦不住
+     「低速转弯时雷达把静止物当 lead」这条路的。实车证据见
+     radard.py 文件头 TURN_DROP_* 段（[LongDecel] lead=1 vLeadK=-0.0 prob=0.00）。
+     开关：radard.TURN_DROP_RADAR_ENABLE / radard.TURN_DROP_STEER_ANGLE_DEG
 
 生效方式（monkey patch，由 radard.py 的 main() 触发）：
     radard.Track    -> TrackSP      车道边界门限 + 模糊评分 + EMA 置信度
@@ -110,6 +118,23 @@ TURN_FUZZY_Y_MAX = 1.0              # 转弯时 err_y 归零阈值 (m)；直行�
 # （2026-09-18 前的旧版本日志名是 RadarDSP_GhostDrop，grep 时可一并带上）
 GHOST_LOG_INTERVAL = 3.0            # 同一路 lead 最少间隔 (s)
 _GHOST_LOG_TS = {0: -1e9, 1: -1e9}
+
+# ---- 转弯时雷达退出 lead 判定的留证日志（车主 2026-09-19 要求）----
+# 判据与理由见 radard.py 文件头 TURN_DROP_* 常量段。这里只负责留一条证据：
+# 实车核对：grep RadarDSP_TurnDrop /data/log/swaglog.*
+# 节流同样用 GHOST_LOG_INTERVAL —— 转弯可以持续十几秒，20 Hz 不节流会刷爆。
+_TURN_DROP_LOG_TS = {0: -1e9, 1: -1e9}
+
+
+def log_turn_drop(lead_idx: int, v_ego: float, lead_prob: float) -> None:
+  now = time.monotonic()
+  if now - _TURN_DROP_LOG_TS[lead_idx] < GHOST_LOG_INTERVAL:
+    return
+  _TURN_DROP_LOG_TS[lead_idx] = now
+  cloudlog.info(
+    f"[RadarDSP_TurnDrop] lead{lead_idx} | 转弯中雷达退出，退回纯视觉 "
+    f"vEgo {v_ego * CV.MS_TO_KPH:.0f}kph leadProb {lead_prob:.2f}"
+  )
 
 
 def log_stationary_drop(lead_idx: int, track, v_ego: float, cam_prob: float) -> None:
@@ -258,11 +283,15 @@ def get_lead_ext(
   is_turning: bool = False,
   low_speed_override: bool = True,
   cam_prob: float = 1.0,
+  radar_drop: bool = False,
 ) -> dict[str, Any]:
   """
   本分支适配版：
     - 保留 CP / CP_SP（供本分支特有的 get_custom_yrel 使用）
     - 新增 is_turning：由 radard.py 依方向盘角度/角速度判断，传给 process_track_logic
+    - 新增 radar_drop：由 radard.py 依**方向盘角度**判断（>= TURN_DROP_STEER_ANGLE_DEG），
+      为真时雷达彻底退出 lead 判定（静止物 + 运动物都不取），退回纯视觉 lead。
+      这是车主 2026-09-19 的实车要求，判据与理由见 radard.py 文件头 TURN_DROP_* 段。
     - 保留 dp 的 aLeadK 变化率限制（防幽灵刹车）
     - cam_prob：仅用于丢弃日志留证，不参与判据
     - 静止目标过滤：见 radard.is_stationary_track（雷达不处理静止物体）。
@@ -271,6 +300,20 @@ def get_lead_ext(
   """
   lead_idx = 0 if low_speed_override else 1
   max_ema_confidence = 0.0
+
+  # ── 转弯时雷达彻底退出（必须放在最前面）───────────────────────────────
+  # 放最前面是为了把**三条**「绕回雷达」的路一起断掉，否则本帧不取雷达、
+  # 缓存里的旧 track 会在下一帧被补回来，等于没改：
+  #   ① 原厂 low_speed_override 低速兜底（函数末尾，v_ego<4m/s 用最近目标）
+  #   ② SELECT_HOLDOVER_FRAMES 的选帧冻结续命（缓存里 track 还在）
+  #   ③ EMA 置信度累积留下的 valid_tracks
+  # 所以这里直接把缓存清空，再直接返回视觉 lead。
+  if radar_drop and radard.TURN_DROP_RADAR_ENABLE:
+    _LEAD_STATE_CACHE[lead_idx] = {'track': None, 'absent': 0, 'last_aLeadK': None}
+    log_turn_drop(lead_idx, v_ego, lead_prob)
+    if ready and lead_prob > .5:
+      return get_RadarState_from_vision(lead_msg, v_ego, model_v_ego, lead_prob)
+    return {'present': False}
 
   if ready:
     for track in tracks.values():

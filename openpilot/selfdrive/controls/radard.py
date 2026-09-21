@@ -35,6 +35,34 @@ RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
 TURN_STEER_ANGLE_DEG = 15.0
 TURN_STEER_RATE_DEG = 10.0
 
+# ---- 转弯时雷达完全退出 lead 判定（车主 2026-09-19 实车要求）------------
+# 原话：「当方向盘角度大于 15 度就取消雷达对静止及运动物体的侦测」。
+#
+# 为什么这两类目标在转弯时都不可信：
+#   · 静止物（|vLeadK| < GHOST_DROP_STATIC_KPH）：护栏 / 路牌 / 桥墩 /
+#     邻车道停着的车。自车一转，雷达的相对速度与运动学外推会把它们「扫」进
+#     本车道。实测证据（C3XL 2026-09-19 晚，红灯功能已关闭的回家路）：
+#       [LongDecel] aTarget=-1.42 src=1 aMpc=-1.42 vEgo=14
+#                   lead=1 dRel=19.5 vLeadK=-0.0 prob=0.00 radar=1
+#     vLeadK≈0 代表目标几乎静止，而 prob=0.00 正是「走了原厂
+#     low_speed_override 低速兜底」的指纹（那条路径调 get_RadarState() 时不带
+#     视觉概率）。同一趟车这类条目占全部大减速的约 1/5。
+#   · 运动物：旁侧车道目标因外推被误判成切入本车道（radard_ext 的注解里
+#     记过同一个坑，dp 原版靠 Track.measured 挡，本分支该字段已废弃）。
+#
+# 做法：radar_drop 为真时**完全不取雷达轨迹**，包括原厂 low_speed_override
+# 低速兜底，直接退回纯视觉 lead（modelV2.leadsV3）。松开方向即恢复。
+#
+# 与 is_turning 的区别（两个门控不要混用）：
+#   is_turning = |角度| >= 15° **或** |角速度| >= 10°/s -> 只收紧横向模糊容限
+#   radar_drop = |角度| >= TURN_DROP_STEER_ANGLE_DEG    -> 雷达彻底退出
+# 刻意**不用**角速度项：角速度门槛在正常车道保持里也常被触发，若用它来
+# 关雷达，直路上会频繁出现「前车凭空消失一帧」的抖动，跟车反而变差。
+#
+#   TURN_DROP_RADAR_ENABLE = False 一键回退成改动前的行为。
+TURN_DROP_RADAR_ENABLE = True
+TURN_DROP_STEER_ANGLE_DEG = 15.0    # 「方向盘角度大于它就取消雷达侦测」
+
 # ---- 静止目标过滤（2026-09-18 改版：雷达不处理静止物体）----
 # 背景：雷达对「静止物体」的判定天然不可靠 —— 弯道护栏、路牌、井盖、桥墩、
 # 邻车道停着的车，都会被探成几乎静止的 lead。视觉模型对这些目标置信度极低，
@@ -213,7 +241,17 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, lead_prob: float, CP: structs.CarParams, CP_SP: structs.CarParamsSP,
-             is_turning: bool = False, low_speed_override: bool = True) -> dict[str, Any]:
+             is_turning: bool = False, low_speed_override: bool = True,
+             radar_drop: bool = False) -> dict[str, Any]:
+  # 转弯时雷达彻底退出（车主 2026-09-19 要求）：静止物 + 运动物都不再由雷达判定，
+  # 直接退回纯视觉 lead。判据与理由见文件头 TURN_DROP_* 常量段。
+  # ⚠️ 本函数在运行时会被 radard_ext.get_lead_ext 覆盖，真正的执行体是那边；
+  #    这里同步实现是为了「不加载 radard_ext」时行为一致（以及便于单测）。
+  if radar_drop and TURN_DROP_RADAR_ENABLE:
+    if ready and lead_prob > .5:
+      return get_RadarState_from_vision(lead_msg, v_ego, model_v_ego, lead_prob)
+    return {'present': False}
+
   # Determine leads, this is where the essential logic happens
   if len(tracks) > 0 and ready and lead_prob > .5:
     track = match_vision_to_track(v_ego, lead_msg, tracks)
@@ -286,6 +324,10 @@ class RadarD:
     # 被误判成切入本车道），直行/巡航时放行（避免正常雷达漏拍拖慢插队目标的反应）。
     is_turning = abs(sm['carState'].steeringAngleDeg) >= TURN_STEER_ANGLE_DEG or abs(sm['carState'].steeringRateDeg) >= TURN_STEER_RATE_DEG
 
+    # 转弯时雷达彻底退出（车主 2026-09-19 要求）：只看方向盘角度，不掺角速度。
+    # 见文件头 TURN_DROP_* 常量段（含「为什么不用角速度」的推导）。
+    radar_drop = TURN_DROP_RADAR_ENABLE and abs(sm['carState'].steeringAngleDeg) >= TURN_DROP_STEER_ANGLE_DEG
+
     # 静止目标过滤不再需要工况门：目标只要几乎静止就一律丢弃雷达数据，
     # 由视觉 lead 承担（见文件头 GHOST_* 说明与 is_stationary_track）。
     ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel, pt.deprecated.measured] for pt in rr.points}
@@ -328,9 +370,11 @@ class RadarD:
           self.lead_prob_filters[i].update(lead_prob)
 
       self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, self.lead_prob_filters[0].x,
-                                          self.CP, self.CP_SP, is_turning=is_turning, low_speed_override=True)
+                                          self.CP, self.CP_SP, is_turning=is_turning, low_speed_override=True,
+                                          radar_drop=radar_drop)
       self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.lead_prob_filters[1].x,
-                                          self.CP, self.CP_SP, is_turning=is_turning, low_speed_override=False)
+                                          self.CP, self.CP_SP, is_turning=is_turning, low_speed_override=False,
+                                          radar_drop=radar_drop)
 
   def publish(self, pm: messaging.PubMaster):
     assert self.radar_state is not None
