@@ -367,7 +367,7 @@ void long_acados_create_4_set_default_parameters(long_solver_capsule* capsule) {
     double* p = calloc(NP, sizeof(double));
     p[0] = -1.2;
     p[1] = 1.2;
-    p[4] = 1.45;
+    p[4] = 1.25;
     p[5] = 0.75;
 
     for (int i = 0; i <= N; i++) {

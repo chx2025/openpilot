@@ -84,7 +84,7 @@ int main()
     p[1] = 1.2;
     p[2] = 0.0;
     p[3] = 0.0;
-    p[4] = 1.45;
+    p[4] = 1.25;
     p[5] = 0.75;
 
     long_acados_sim_update_params(capsule, p, NP);
