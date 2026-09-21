@@ -9,6 +9,8 @@ from openpilot.system.ui.lib.multilang import tr, tr_noop
 from openpilot.system.ui.widgets import DialogResult
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.common.hardware import HARDWARE
+from openpilot.common.traffic_stop_config import is_enabled as traffic_stop_is_enabled
+from openpilot.common.traffic_stop_config import save_config as traffic_stop_save_config
 
 if gui_app.sunnypilot_ui():
   from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp as toggle_item
@@ -37,6 +39,10 @@ DESCRIPTIONS = {
   "IsMetric": tr_noop("Display speed in km/h instead of mph."),
   "RecordAudio": tr_noop("Record and store microphone audio while driving. The audio will be included in the dashcam video in comma connect."),
   "UseMiciLayout": tr_noop("Use the compact UI layout (Comma 4)."),
+  "TrafficLightStop": tr_noop(
+    "Stop for red lights and stop signs by treating the driving model's predicted stop point as a virtual lead vehicle. " +
+    "Active in both normal ACC and experimental mode. Turn this off if you experience unwanted braking at intersections."
+  ),
 }
 
 
@@ -116,6 +122,21 @@ class TogglesLayout(Widget):
       icon="speed_limit.png"
     )
 
+    # 红灯停车开关（Traffic Light Stop）。
+    # 刻意不走 Params：params_keys.h 的 key 白名单被编译进 libparams_c.so，新增 key
+    # 必须重编译 C 扩展。这里改为绑一个独立 JSON 文件（/data/traffic_stop.json），
+    # 控制侧每秒轮询一次 → 开关热生效、免重启，且整条链路零编译。
+    # 注意：它只进 self._toggles（供 scroller 渲染），**不进 self._toggle_defs**，
+    # 否则 _update_toggles() 里那段 `for param in self._toggle_defs` 的 Params 批量
+    # 刷新会对这个不存在的 key 抛 UnknownKeyName。LongitudinalPersonality 同理。
+    self._traffic_stop_toggle = toggle_item(
+      lambda: tr("Traffic Light Stop"),
+      lambda: tr(DESCRIPTIONS["TrafficLightStop"]),
+      traffic_stop_is_enabled(),
+      callback=self._on_traffic_stop_toggle,
+      icon="road.png",
+    )
+
     self._toggles = {}
     self._locked_toggles = set()
     for param, (title, desc, icon, needs_restart) in self._toggle_defs.items():
@@ -148,6 +169,7 @@ class TogglesLayout(Widget):
       # insert longitudinal personality after NDOG toggle
       if param == "ExperimentalMode":
         self._toggles["LongitudinalPersonality"] = self._long_personality_setting
+        self._toggles["TrafficLightStop"] = self._traffic_stop_toggle
 
     self._update_experimental_mode_icon()
     self._scroller = Scroller(list(self._toggles.values()), line_separator=True, spacing=0)
@@ -223,6 +245,12 @@ class TogglesLayout(Widget):
     if "UseMiciLayout" in self._toggles and "UseMiciLayout" not in self._locked_toggles:
       self._toggles["UseMiciLayout"].action_item.set_enabled(not ui_state.engaged)
 
+    # 红灯停车开关不在 Params 里（走独立 JSON 文件），所以不能靠上面那段
+    # `for param in self._toggle_defs` 批量刷新，单独同步一次即可镜像外部改动
+    # （例如 SSH 里直接改 /data/traffic_stop.json）。
+    # 用属性而非 self._toggles[...] 查表：万一本方法在构造完成前被回调也不会 KeyError。
+    self._traffic_stop_toggle.action_item.set_state(traffic_stop_is_enabled())
+
   def _render(self, rect):
     self._scroller.render(rect)
 
@@ -261,3 +289,14 @@ class TogglesLayout(Widget):
 
   def _set_longitudinal_personality(self, button_index: int):
     self._params.put("LongitudinalPersonality", button_index, block=True)
+
+  def _on_traffic_stop_toggle(self, state: bool):
+    """红灯停车开关的回调。
+
+    刻意不走 Params：新增 key 要改 params_keys.h 并重编译 libparams_c.so。
+    这里写独立配置文件 /data/traffic_stop.json，控制侧每秒轮询一次 → 1 s 内热生效、
+    不用重启 sunnypilot。写失败（例如 /data 只读）时把 UI 开关回滚，
+    避免界面显示的状态和实际生效的状态不一致。
+    """
+    if not traffic_stop_save_config(state):
+      self._traffic_stop_toggle.action_item.set_state(not state)

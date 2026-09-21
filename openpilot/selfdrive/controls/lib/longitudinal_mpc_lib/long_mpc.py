@@ -23,7 +23,14 @@ EXPORT_DIR = os.path.join(LONG_MPC_DIR, "c_generated_code")
 JSON_FILE = os.path.join(LONG_MPC_DIR, "acados_ocp_long.json")
 
 LongitudinalPlanSource = log.LongitudinalPlan.LongitudinalPlanSource
-MPC_SOURCES = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
+# 障碍物「来源」标记，顺序必须与下面 x_obstacles 的列顺序严格一致。
+# 第 3 项是红灯/停止标志的虚拟停止线：本分支 log.capnp 的 LongitudinalPlanSource
+# 没有独立的 trafficStop 枚举（新增要重编译整个 cereal），故借 cruise 标记 ——
+# 语义上也成立，它本质就是一条「必须停下的巡航目标」。
+MPC_SOURCES = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1, LongitudinalPlanSource.cruise)
+
+# 没有主动停等时，把虚拟停止线放到 1000 m 外 —— 远到永远不会在 np.min() 里胜出
+TRAFFIC_STOP_OBSTACLE_DISABLED_M = 1000.0
 
 X_DIM = 3
 U_DIM = 1
@@ -83,6 +90,20 @@ def get_stopped_equivalence_factor(v_lead):
 
 def get_safe_obstacle_distance(v_ego, t_follow):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
+
+def build_traffic_stop_obstacle(stop_dist_m, n=N):
+  """把「一条虚拟停止线」变成一个常距离障碍物数组，交给 MPC 当作「停在那儿的车」处理
+  （v_lead = 0，所以 get_stopped_equivalence_factor 那项贡献为 0）。
+
+  纯函数、无 acados 依赖，可单独测试。
+  stop_dist_m=None（当前没有主动停等）→ 返回禁用哨兵数组，绝不会成为生效障碍物。
+
+  注意：障碍物列表的语义是「必须停在这个位置之前」，而 MPC 的硬约束里还会再减去
+  LEAD_DANGER_FACTOR * desired_dist_comfort（见纵向 planner 的
+  MPC_STOP_MARGIN_COMP_M 补偿）。
+  """
+  value = stop_dist_m if stop_dist_m is not None else TRAFFIC_STOP_OBSTACLE_DISABLED_M
+  return np.full(n + 1, value)
 
 def gen_long_model():
   model = AcadosModel()
@@ -307,7 +328,10 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  def update(self, radarstate, personality=log.LongitudinalPersonality.standard):
+  # traffic_stop_obstacle_m 默认 None ⇒ 虚拟停止线被放到 1000 m 外，行为与改动前完全一致。
+  # 这是唯一的向后兼容接口，老调用点（不传该参数）不受影响。
+  def update(self, radarstate, personality=log.LongitudinalPersonality.standard,
+             traffic_stop_obstacle_m=None):
     t_follow = get_T_FOLLOW(personality)
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
@@ -319,7 +343,10 @@ class LongitudinalMpc:
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
-    x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle])
+    # 第 3 列：红灯/停止标志的虚拟停止线。与 lead0/lead1 同构，直接参与 np.min()。
+    # 只加列、不改 OCP 定义，所以 acados 的 c_generated_code 不需要重新生成。
+    traffic_stop_obstacle = build_traffic_stop_obstacle(traffic_stop_obstacle_m)
+    x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, traffic_stop_obstacle])
     self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
 
     self.yref[:,:] = 0.0

@@ -14,6 +14,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAle
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver
+from openpilot.sunnypilot.selfdrive.controls.lib.traffic_stop import TrafficStopController
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 
@@ -32,6 +33,10 @@ class LongitudinalPlannerSP:
     self.generation = int(model_bundle.generation) if (model_bundle := get_active_bundle()) else None
     self.source = LongitudinalPlanSource.cruise
     self.e2e_alerts_helper = E2EAlertsHelper()
+
+    # 红灯 / 停止标志「虚拟停止线」。开关走独立配置文件（见 traffic_stop.py 文件头），
+    # 关闭时 stop_dist_m 恒为 None、output_v_target 恒为 V_CRUISE_MAX，不参与任何选择。
+    self.traffic_stop = TrafficStopController()
 
     self.output_v_target = 0.
     self.output_a_target = 0.
@@ -54,6 +59,9 @@ class LongitudinalPlannerSP:
     # Smart Cruise Control
     self.scc.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise)
 
+    # 红灯 / 停止标志虚拟停止线：每帧刷新一次，内部自带开关与 1Hz 配置轮询
+    self.traffic_stop.update(sm['modelV2'], CS, sm['radarState'], v_ego, a_ego, v_cruise)
+
     # Speed Limit Resolver
     self.resolver.update(v_ego, sm)
 
@@ -71,6 +79,18 @@ class LongitudinalPlannerSP:
 
     self.source = min(targets, key=lambda k: targets[k][0])
     self.output_v_target, self.output_a_target = targets[self.source]
+
+    # 红灯停等保底：只可能让目标更保守（v 更小 / a 更负），绝不会放松任何已有约束。
+    # 放在这里（而不是并进上面的 targets 字典）有两个原因：
+    #   1. 本分支的 LongitudinalPlanSource 枚举被 cruise/sccVision/sccMap/speedLimitAssist
+    #      占满，没有空位可以标记 trafficStop，硬塞会掩盖真实来源；
+    #   2. 这样写对 targets 的 min() 选择完全无副作用，diff 更容易审。
+    # 压住 v_cruise 的连带效果：外层 get_cruise_accel() 会据此也给出减速，
+    # 于是 a_cruise 候选同样是保守的 —— 这正是我们想要的冗余。
+    if self.traffic_stop.is_active and self.traffic_stop.output_v_target < self.output_v_target:
+      self.output_v_target = self.traffic_stop.output_v_target
+      self.output_a_target = min(self.output_a_target, self.traffic_stop.output_a_target)
+
     return self.output_v_target, self.output_a_target
 
   def update(self, sm: messaging.SubMaster) -> None:

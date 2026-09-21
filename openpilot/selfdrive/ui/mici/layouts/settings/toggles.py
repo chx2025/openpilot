@@ -9,6 +9,8 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.selfdrive.ui.layouts.settings.common import restart_needed_callback
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.common.hardware import HARDWARE
+from openpilot.common.traffic_stop_config import is_enabled as traffic_stop_is_enabled
+from openpilot.common.traffic_stop_config import save_config as traffic_stop_save_config
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 
@@ -45,6 +47,13 @@ class TogglesLayoutMici(NavScroller):
     self._personality_toggle = BigMultiParamToggle("driving personality", "LongitudinalPersonality", ["aggressive", "standard", "relaxed"])
     self._experimental_btn = BigToggle("experimental mode", initial_state=ui_state.params.get_bool("ExperimentalMode"),
                                        toggle_callback=self._on_experimental_mode)
+    # 红灯停车开关（Traffic Light Stop）。
+    # 不走 Params：params_keys.h 的 key 白名单编译在 libparams_c.so 里，新增 key 需重编译。
+    # 改为绑独立 JSON 文件 /data/traffic_stop.json，控制侧每秒轮询 → 1 s 内热生效。
+    # 同理它也**不能**进下面的 self._refresh_toggles —— 那个列表是按 Params key 读的。
+    self._traffic_stop_btn = BigToggle("traffic light stop",
+                                       initial_state=traffic_stop_is_enabled(),
+                                       toggle_callback=self._on_traffic_stop)
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
     ldw_toggle = BigParamControl("lane departure warnings", "IsLdwEnabled")
     always_on_dm_toggle = BigParamControl("always-on driver monitor", "AlwaysOnDM")
@@ -59,6 +68,7 @@ class TogglesLayoutMici(NavScroller):
     scroller_items = [
       self._personality_toggle,
       self._experimental_btn,
+      self._traffic_stop_btn,
       is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
@@ -129,6 +139,19 @@ class TogglesLayoutMici(NavScroller):
     # Refresh toggles from params to mirror external changes
     for key, item in self._refresh_toggles:
       item.set_checked(ui_state.params.get_bool(key))
+
+    # 红灯停车开关走独立 JSON 文件，不在 _refresh_toggles 里，单独同步一次
+    self._traffic_stop_btn.set_checked(traffic_stop_is_enabled())
+
+  def _on_traffic_stop(self, state: bool):
+    """红灯停车开关的回调。
+
+    写独立配置文件 /data/traffic_stop.json（控制侧 1 s 内轮询热生效），
+    不走 Params 因而免重编译 C 扩展。写失败时回滚 UI 状态，
+    避免界面显示与实际生效状态不一致。
+    """
+    if not traffic_stop_save_config(state):
+      self._traffic_stop_btn.set_checked(not state)
 
   def _on_experimental_mode(self, state: bool):
     if state and not ui_state.params.get_bool("ExperimentalModeConfirmed"):
