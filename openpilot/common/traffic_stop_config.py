@@ -30,8 +30,20 @@ Params 的 key 白名单（取值范围会做校验）被编译进 libparams_c.s
 
 读取语义
 --------
-  - 文件不存在 / 解析失败 / 字段缺失  -> 各自回到默认值
-  - 默认 enabled=True，即按需求「默认开启」
+  - 查找顺序：CONFIG_PATH（运行时，UI 写这里）-> DEFAULT_CONFIG_PATH（仓库内出厂模板）
+  - 两处都读不到 / 解析失败 / 字段缺失  -> 各自回到代码默认值
+  - 代码默认 enabled=True
+
+为什么要有「出厂模板」
+----------------------
+CONFIG_PATH 位于 /data，而 /data 会被重装 / 整机重置清空 —— 用户在这里改过的
+开关与标定值会**静默消失**，行为回落到代码默认值。2026-09-24 设备重装后正是
+如此：文件没了，`enabled` 翻回代码默认的 True，而用户实际要的是关着的。
+
+所以仓库内随代码带一份 `traffic_stop.default.json` 当出厂默认：
+  - 运行时文件缺失 -> 按模板取值（重装后行为与用户预期一致）
+  - 用户一旦在 UI 里改过，改动写进 CONFIG_PATH，此后以该文件为准（模板不再参与）
+  - 模板本身不含 tuning 段时，tuning 全部回落到 StopTuning() 的代码默认值
 
 本模块**只依赖标准库**（不 import numpy / openpilot 内部模块），
 这样 UI 进程 import 它不会有任何副作用或依赖链风险。
@@ -43,7 +55,14 @@ from typing import NamedTuple
 
 CONFIG_PATH = os.environ.get("TRAFFIC_STOP_CONFIG", "/data/traffic_stop.json")
 
-DEFAULT_ENABLED = True              # 按需求：默认开启
+# 仓库内出厂模板（与 CONFIG_PATH 是两个不同的东西）：
+# 运行时文件被重装擦掉时按它取值，避免静默回落到代码默认而改变功能状态。
+# `__file__` 用 globals() 取 —— 验证脚本用 exec 执行本模块时会绕过模块机制，
+# 那时没有 `__file__`（空串 = 不启用模板回落），真实运行时一定有。
+_HERE = os.path.dirname(os.path.abspath(globals().get("__file__"))) if globals().get("__file__") else ""
+DEFAULT_CONFIG_PATH = os.path.join(_HERE, "traffic_stop.default.json") if _HERE else ""
+
+DEFAULT_ENABLED = True              # 代码层兜底：模板与运行时文件都读不到时才用它
 DEFAULT_DISTANCE_ADJUST_M = 0.0
 DISTANCE_ADJUST_LIMIT_M = 5.0       # 与 traffic_stop.py 的停车点微调上限保持一致
 
@@ -224,13 +243,27 @@ _TUNING_RANGE = {
 
 
 def _read_raw() -> dict:
-  """读原始 JSON 字典。文件不存在/损坏/不是对象 -> 空字典。**永不抛异常**。"""
-  try:
-    with open(CONFIG_PATH) as f:
-      data = json.load(f)
-    return data if isinstance(data, dict) else {}
-  except Exception:
-    return {}
+  """读原始 JSON 字典。**永不抛异常**。
+
+  查找顺序：运行时配置 CONFIG_PATH -> 仓库内出厂模板 DEFAULT_CONFIG_PATH。
+  两处都读不到 / 解析失败 / 不是对象 -> 空字典（调用方各自回落到代码默认值）。
+
+  用 TRAFFIC_STOP_CONFIG 显式覆盖过路径时**只看那一个文件**：验证脚本靠这个
+  环境变量做隔离，隔离状态下掺进模板会让"文件不存在"的预期值失真。
+  """
+  if "TRAFFIC_STOP_CONFIG" in os.environ or not DEFAULT_CONFIG_PATH:
+    candidates = (CONFIG_PATH,)
+  else:
+    candidates = (CONFIG_PATH, DEFAULT_CONFIG_PATH)
+  for path in candidates:
+    try:
+      with open(path) as f:
+        data = json.load(f)
+      if isinstance(data, dict):
+        return data
+    except Exception:
+      continue
+  return {}
 
 
 def load_tuning() -> StopTuning:
