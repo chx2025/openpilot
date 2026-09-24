@@ -47,9 +47,14 @@ fi
 # 移植自 onemiless/openpilot@dev-sp-egpu 提交 2a69709f06。
 # road 相机在 IFE 硬件里直接出 1344x760（非裁剪，全视场），像素 -43.8%、
 # NV12 单帧 -56.2%，把两路 road @20Hz 的 USB 占用从 139.6MB/s 降到 61.3MB/s。
-# 需要 /data/hardware_profile == c3xl（源码门控）。
-# 回滚：删掉本行 + rm /data/hardware_profile + 重启。
-export C3XL_IFE_ROAD_SIZE=1344x760
+# camerad 侧门控 = getenv(C3XL_IFE_ROAD_SIZE)="1344x760" AND /data/hardware_profile=="c3xl"，
+# 而 modeld 侧只认 env。只导出 env、不建 hardware_profile => camerad 照旧出 1928x1208、
+# modeld 却按 1344x760 校验 => RuntimeError 崩溃（2026-09-24：大模型完全起不来）。
+# 故把 env 与 opt-in 文件绑死：没有该文件就不导出，让两侧同时休眠，杜绝"半启用"。
+# 启用：echo c3xl > /data/hardware_profile 后重启。回滚：rm /data/hardware_profile。
+if [ -f /data/hardware_profile ] && [ "$(cat /data/hardware_profile 2>/dev/null)" = "c3xl" ]; then
+  export C3XL_IFE_ROAD_SIZE=1344x760
+fi
 
 # ---- chestnut(eGPU) USB 节点权限守护（冷启动 EACCES 竞态）----
 # devtmpfs 以 0600 root:root 建 /dev/bus/usb/<bus>/<dev>，udev 要读完描述符才按
