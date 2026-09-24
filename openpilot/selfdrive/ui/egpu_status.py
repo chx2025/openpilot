@@ -37,7 +37,11 @@ SMALL_MODEL_TEXT = "小模型"
 # 进度只是个估算，宁可早一点到 99% 等就绪，也不要"实际已经加载完、进度条
 # 才爬到 91% 就跳走"——后者看起来像卡住了，前者才和真实加载同步。
 # 就绪与否仍由 ChestnutLoading / ChestnutActive 决定，不会提前显示"运行中"。
-CHESTNUT_LOAD_NOMINAL_S = 17.0
+#
+# 三次校准（2026-09-25）：17.0 -> 21.0（+4s）。
+# 实车观察：提前 5s 收敛后进度跑得比真实加载快 —— 实测约 21s 的加载会在
+# 17s 就顶到 99% 再干等 4s。改回贴近实测均值（20.9s）后进度与真实加载同步。
+CHESTNUT_LOAD_NOMINAL_S = 21.0
 
 
 @dataclass(frozen=True)
