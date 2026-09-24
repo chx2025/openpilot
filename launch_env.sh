@@ -50,3 +50,14 @@ fi
 # 需要 /data/hardware_profile == c3xl（源码门控）。
 # 回滚：删掉本行 + rm /data/hardware_profile + 重启。
 export C3XL_IFE_ROAD_SIZE=1344x760
+
+# ---- chestnut(eGPU) USB 节点权限守护（冷启动 EACCES 竞态）----
+# devtmpfs 以 0600 root:root 建 /dev/bus/usb/<bus>/<dev>，udev 要读完描述符才按
+# 50-udev-default.rules:72 放宽成 0664；eGPU 底座与车机同时上电时 ASM2464 描述符
+# 响应慢，这个窗口能拖到几十秒，而 modeld 以 comma 身份在 T+34s 就 libusb_open
+# -> EACCES -> load_big() 只试一次即放弃 -> 静默回退小模型。
+# 这里开机即后台轮询、抢在 udev 前把节点 chmod 666；脚本自带自提权。
+# 必须放仓库内（与 time_seed.sh 同理）：写 /data/continue.sh 会被重装覆盖。
+if [ -x "${DIR:-/data/openpilot}/system/egpu_usb_perm.sh" ]; then
+  setsid "${DIR:-/data/openpilot}/system/egpu_usb_perm.sh" >/dev/null 2>&1 &
+fi
