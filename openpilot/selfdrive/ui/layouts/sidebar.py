@@ -31,7 +31,9 @@ class Colors:
   GRAY = rl.Color(84, 84, 84, 255)
 
   # Status colors
-  GOOD = rl.WHITE
+  # GOOD 只作为 MetricData.color 使用，也就是每格左侧那条粗竖线的颜色：
+  # 状态良好 -> 绿色；WARNING/DANGER 等仍保持黄/红（2026-09-17 改）
+  GOOD = rl.Color(0, 230, 60, 255)
   WARNING = rl.Color(218, 202, 37, 255)
   DANGER = rl.Color(201, 34, 49, 255)
 
@@ -115,7 +117,7 @@ class Sidebar(Widget, SidebarSP):
     self._update_temperature_status(device_state)
     self._update_connection_status(device_state)
     self._update_panda_status()
-    SidebarSP._update_sunnylink_status(self)
+    SidebarSP._update_egpu_status(self)
 
   def _update_network_status(self, device_state):
     self._net_type = NETWORK_TYPES.get(device_state.networkType.raw, tr_noop("Unknown"))
@@ -210,7 +212,7 @@ class Sidebar(Widget, SidebarSP):
 
   def _draw_metrics(self, rect: rl.Rectangle):
     if gui_app.sunnypilot_ui():
-      metrics, start_y, spacing = SidebarSP._draw_metrics_w_sunnylink(self, rect, self._temp_status, self._panda_status, self._connect_status)
+      metrics, start_y, spacing = SidebarSP._draw_metrics_sp(self, rect, self._temp_status, self._panda_status, self._connect_status)
       for idx, metric in enumerate(metrics):
         self._draw_metric(rect, metric, start_y + idx * spacing)
 

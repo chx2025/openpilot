@@ -8,7 +8,7 @@ import pyray as rl
 
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
-from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiRenderer, DeveloperUiState, get_bottom_dev_ui_offset
+from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiRenderer, DeveloperUiState, get_bottom_dev_ui_offset, NUMBER_GREEN
 from openpilot.selfdrive.ui.sunnypilot.onroad.road_name import RoadNameRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.rocket_fuel import RocketFuel
 from openpilot.selfdrive.ui.sunnypilot.onroad.speed_limit import SpeedLimitRenderer
@@ -91,9 +91,10 @@ class HudRendererSP(HudRenderer):
     max_color = COLORS.GREY
     set_speed_color = COLORS.DARK_GREY
     if self.is_cruise_set:
-      set_speed_color = COLORS.WHITE
+      # 设定速度是数字 -> 统一绿色（2026-09-17）
+      set_speed_color = NUMBER_GREEN
       if long_plan_sp.speedLimit.assist.active:
-        set_speed_color = SLA_ACTIVE_COLOR if long_override else rl.Color(0, 0xff, 0, 0xff)
+        set_speed_color = NUMBER_GREEN
         max_color = SLA_ACTIVE_COLOR if long_override else rl.Color(0x80, 0xd8, 0xa6, 0xff)
       else:
         if ui_state.status == UIStatus.ENGAGED:
@@ -107,6 +108,9 @@ class HudRendererSP(HudRenderer):
     max_str_y = 15 if self.show_icbm_status else 27
 
     max_text = str(round(self.speed_cluster)) if self.show_icbm_status else tr("MAX")
+    if self.show_icbm_status:
+      # 这一格显示的是数字（车速）而不是 "MAX" 文案 -> 同样用绿色（2026-09-17）
+      max_color = NUMBER_GREEN
     max_text_width = measure_text_cached(self._font_semi_bold, max_text, max_str_size).x
     rl.draw_text_ex(
       self._font_semi_bold,

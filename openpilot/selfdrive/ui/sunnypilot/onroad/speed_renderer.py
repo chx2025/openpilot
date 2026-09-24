@@ -12,6 +12,7 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.selfdrive.ui.onroad.hud_renderer import FONT_SIZES, COLORS
+from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import NUMBER_GREEN
 
 
 class SpeedRenderer:
@@ -38,7 +39,8 @@ class SpeedRenderer:
     speed_text = str(round(self.speed))
     speed_text_size = measure_text_cached(self._font_bold, speed_text, FONT_SIZES.current_speed)
     speed_pos = rl.Vector2(rect.x + rect.width / 2 - speed_text_size.x / 2, 180 - speed_text_size.y / 2)
-    rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, COLORS.WHITE)
+    # 数字用统一绿色，单位（km/h / mph）保持半透明白（2026-09-17）
+    rl.draw_text_ex(self._font_bold, speed_text, speed_pos, FONT_SIZES.current_speed, 0, NUMBER_GREEN)
 
     unit_text = tr("km/h") if ui_state.is_metric else tr("mph")
     unit_text_size = measure_text_cached(self._font_medium, unit_text, FONT_SIZES.speed_unit)

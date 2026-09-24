@@ -11,13 +11,24 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement, RelDistElement, RelSpeedElement, SteeringAngleElement,
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
-  AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
+  AEgoElement, LeadSpeedElement, LeadSpeedPadElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
   StorageElement, MemoryUsageElement, CpuTempMaxElement
 )
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
+
+
+# 调试信息字号（2026-09-17 第一次每个 +2，第二次再每个 +2）
+BOTTOM_FONT_SIZE = 42   # 底部信息条（原 38）
+RIGHT_LABEL_SIZE = 32   # 右侧调试列-标签（原 28）
+RIGHT_VALUE_SIZE = 64   # 右侧调试列-数值（原 60）
+RIGHT_UNIT_SIZE = 32    # 右侧调试列-单位（原 28）
+
+# 全 UI「数字」统一用的绿色（与侧边栏状态竖线同色，2026-09-17）
+# 只作用于数字/数值本身，标签与单位保持白色；要调色只改这一处
+NUMBER_GREEN = rl.Color(0, 230, 60, 255)
 
 
 def get_bottom_dev_ui_offset():
@@ -41,6 +52,10 @@ class DeveloperUiRenderer(Widget):
     self.dev_ui_mode = DeveloperUiState.OFF
 
     self.rel_dist_elem = RelDistElement()
+    self.rel_dist_elem_pad = RelDistElement(zero_pad=True)  # 底部信息条专用：固定 3 位
+    # 2026-09-22：信息条第一格由「前车距离」改为「前车速度」（固定 3 位，无前车/无速度 = 000）
+    # rel_dist_elem_pad 保留实例以便随时回退（改回下面 _draw_bottom_dev_ui 里那一行即可）
+    self.lead_speed_pad_elem = LeadSpeedPadElement()
     self.rel_speed_elem = RelSpeedElement()
     self.steering_angle_elem = SteeringAngleElement()
     self.desired_lat_accel_elem = DesiredLateralAccelElement()
@@ -108,9 +123,9 @@ class DeveloperUiRenderer(Widget):
     x += 0
     y += 230
     container_width = 184
-    label_size = 28
-    value_size = 60
-    unit_size = 28
+    label_size = RIGHT_LABEL_SIZE
+    value_size = RIGHT_VALUE_SIZE
+    unit_size = RIGHT_UNIT_SIZE
     label_width = measure_text_cached(self._font_bold, element.label, label_size, 0).x
     centered_label_x = x + (container_width - label_width) / 2
     rl.draw_text_ex(self._font_bold, element.label, rl.Vector2(centered_label_x, y), label_size, 0, rl.WHITE)
@@ -118,7 +133,7 @@ class DeveloperUiRenderer(Widget):
     y += 45
     value_width = measure_text_cached(self._font_bold, element.value, value_size, 0).x
     centered_value_x = x + (container_width - value_width) / 2
-    rl.draw_text_ex(self._font_bold, element.value, rl.Vector2(centered_value_x, y), value_size, 0, element.color)
+    rl.draw_text_ex(self._font_bold, element.value, rl.Vector2(centered_value_x, y), value_size, 0, NUMBER_GREEN)
 
     if element.unit:
       units_height = measure_text_cached(self._font_bold, element.unit, unit_size, 0).x
@@ -141,10 +156,14 @@ class DeveloperUiRenderer(Widget):
     elements = [
       #self.a_ego_elem.update(sm, ui_state.is_metric),
       #self.lead_speed_elem.update(sm, ui_state.is_metric),
-      self.rel_dist_elem.update(sm, ui_state.is_metric),
+      # 前车速度用 zero_pad 版本：无前车/无速度输出 000，有前车固定 3 位（2026-09-22 用户要求）
+      # 想回退成「前车距离 000m」：把下面这行换成 self.rel_dist_elem_pad.update(sm, ui_state.is_metric)
+      self.lead_speed_pad_elem.update(sm, ui_state.is_metric),
       self.memory_elem.update(sm, ui_state.is_metric),
       self.storage_elem.update(sm, ui_state.is_metric),
       self.cpu_temp_max_elem.update(sm, ui_state.is_metric),
+      # 海拔常驻占位：无 GPS / 未定位时输出 0000m，行宽稳定（2026-09-17）
+      self.altitude_elem.update(sm, ui_state.is_metric),
     ]
 
     # Add torque-specific elements if using torque control
@@ -162,14 +181,9 @@ class DeveloperUiRenderer(Widget):
     #   if sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']:
     #     elements.append(self.bearing_elem.update(sm, ui_state.is_metric))
 
-    # Add altitude if GPS available
-    if sm.valid['gpsLocationExternal'] or sm.valid['gpsLocation']:
-      elements.append(self.altitude_elem.update(sm, ui_state.is_metric))
+    # 海拔已在上面固定加入 elements（不再依赖 GPS 是否在线，2026-09-17）
 
-    if not elements:
-      return
-
-    font_size = 38
+    font_size = BOTTOM_FONT_SIZE
     element_widths = []
     for element in elements:
       element.measure(self._font_bold, font_size)
@@ -185,15 +199,14 @@ class DeveloperUiRenderer(Widget):
 
     for i, element in enumerate(elements):
       element_center_x = int(current_x + element_widths[i] / 2)
-      self._draw_bottom_dev_ui_element(element_center_x, center_y, element)
+      self._draw_bottom_dev_ui_element(element_center_x, center_y, element, font_size)
       current_x += element_widths[i] + gap_width
 
-  def _draw_bottom_dev_ui_element(self, center_x: int, y: int, element: UiElement) -> None:
-    font_size = 38
+  def _draw_bottom_dev_ui_element(self, center_x: int, y: int, element: UiElement, font_size: int = BOTTOM_FONT_SIZE) -> None:
     start_x = center_x - element.total_width / 2
 
     rl.draw_text_ex(self._font_bold, element.label_text, rl.Vector2(start_x, y - font_size // 2), font_size, 0, rl.WHITE)
-    rl.draw_text_ex(self._font_bold, element.val_text, rl.Vector2(start_x + element.label_width, y - font_size // 2), font_size, 0, element.color)
+    rl.draw_text_ex(self._font_bold, element.val_text, rl.Vector2(start_x + element.label_width, y - font_size // 2), font_size, 0, NUMBER_GREEN)
 
     if element.unit:
       rl.draw_text_ex(self._font_bold, element.unit_text, rl.Vector2(start_x + element.label_width + element.val_width, y - font_size // 2),
