@@ -60,6 +60,45 @@ STEERING_PAUSE_DEG: float = 15.0
 # 方向盘角度 > 此值且 v_ego > 目标速度时阻止加速（deg，独立约束）
 STEERING_BLOCK_ACCEL_DEG: float = 60.0
 
+# ==== 驾驶员加速意图让位（2026-09-21 新增）================================
+# 【现象】用户 2026-09-21 实车反馈，第二条给了可复现条件：
+#   「转弯时再踩油门，等方向盘回正时就有可能出现加速无力」
+#   「问题在于方向盘摆直了他也不加速」
+#
+# 【证据】`[E2eTrace]` 探针（设备 /data/ife/archive/probe_archive.jsonl）。
+#   2026-09-21 13:05 北京连续 6 秒：
+#     05:05:52 aE2e=+1.108 aTgt=0.000 src=4 turn=paused | gas=1 vEgo=19 vCruiseUI=55
+#     05:05:53 aE2e=+1.224 aTgt=0.000 src=4 turn=paused | gas=1 vEgo=22 vCruiseUI=55
+#   当时三条候选 aMpc=2.330 / aCruise=2.000 / aE2e=+1.224 **全为正**，
+#   min() 数学上**不可能**得到 0 —— 唯一来源就是本模块的 block_accel。
+#   全量 1034 帧统计（aE2e - aTgt 均值 / 「模型要 >+0.2 却被压成 0」帧数）：
+#     idle（对照） 981 帧  +0.058 / 1
+#     paused        24 帧  +0.740 / 14
+#     big_angle_guard 19 帧 +0.640 / 9
+#     waiting        9 帧   0.000 / 0
+#   压制**全部**集中在非 idle 相位，对照组干净。
+#
+# 【机理】gas 按下时执行层被驾驶员油门盖住，本模块的压制看不出效果；一旦松油门
+#   （典型时刻正是方向盘回正），压制立刻"接住"输出 -> 体感加速无力。
+#   而 at_target（转向灯仍亮 + v_ego <= 15 km/h）会**持续** block，
+#   表现为"方向盘摆直了也不加速"。
+#
+# 【判据】gas 踩下 —— 或 gas 释放后 TURN_DECEL_GAS_RELEASE_HOLD_S 秒内 ——
+#   本模块**完全让位**（既不 block 也不减速）。
+#
+# 【为什么是安全的】踩油门是驾驶员对纵向的明确接管意图，此时
+#   (a) 执行层本来就被油门覆盖，压制没有任何实际执行效果；
+#   (b) 本模块本来就只 block **正**加速、从不参与制动。
+#   所以让位不会放松任何减速/制动能力，只是把"想加速"的意愿还给驾驶员。
+#   让位期间 **清零 blinker_on_time 且不累计**（见 update 内注释）：
+#   否则宽限窗口一结束就立刻进入 deceling（主动减速到 15 km/h），
+#   等于把上面那个 bug 推迟 2 秒再犯一遍。
+#
+# 【调参】嫌恢复慢 -> 调小 TURN_DECEL_GAS_RELEASE_HOLD_S；要立刻恢复 -> 设 0.0；
+#   TURN_DECEL_DRIVER_OVERRIDE_ENABLE = False 一键回退成原行为。
+TURN_DECEL_DRIVER_OVERRIDE_ENABLE: bool = True
+TURN_DECEL_GAS_RELEASE_HOLD_S: float = 2.0
+
 
 @dataclass
 class TurnDecelResult:
@@ -68,7 +107,9 @@ class TurnDecelResult:
   active: bool                    # 控制器是否在主动减速
   phase: str                      # 'idle' / 'waiting' / 'paused' / 'deceling'
                                   #   / 'at_target' / 'big_angle_guard'
+                                  #   / 'driver_override'
                                   # 'big_angle_guard': 转向灯关闭但大角度条件仍成立
+                                  # 'driver_override': 驾驶员在踩油门 / 刚松开（见文件头）
 
 
 class TurnDecelController:
@@ -82,12 +123,14 @@ class TurnDecelController:
     self._blinker_on_time: float = 0.0    # 转向灯累计开启时长（dt 累加）
     self._blinker_on_last: bool = False   # 上一帧转向灯状态（用于检测下降沿）
     self._decel_a: float = 0.0            # 当前 ramp 后的减速度（0..DECEL_MAX_M_S2）
+    self._gas_hold_left: float = 0.0      # [2026-09-21] 驾驶员让位窗口剩余时长（s）
 
   def reset(self) -> None:
     """外部强制重置（disengage、模式切换等）。"""
     self._blinker_on_time = 0.0
     self._blinker_on_last = False
     self._decel_a = 0.0
+    self._gas_hold_left = 0.0
 
   def update(
     self,
@@ -96,6 +139,7 @@ class TurnDecelController:
     v_ego: float,
     steering_angle_deg: float,
     dt: float,
+    gas_pressed: bool = False,
   ) -> TurnDecelResult:
     """每帧调用一次。
 
@@ -104,11 +148,31 @@ class TurnDecelController:
       v_ego: 当前车速（m/s）
       steering_angle_deg: 方向盘绝对角度（deg）
       dt: 帧间隔（s），通常 0.05 (DT_MDL)
+      gas_pressed: 驾驶员踩油门（carState.gasPressed）。见文件头「驾驶员加速意图让位」。
+        默认 False 以保持旧调用方（含测试）行为不变。
 
     Returns:
       TurnDecelResult 含 a_target_override / block_accel / active / phase
     """
-    # ---- 0. 大角度安全锁（独立于转向灯状态，最先评估）----
+    # ---- 0a. 驾驶员加速意图让位（最早评估：让位优先级高于一切本模块约束）----
+    # 见文件头「驾驶员加速意图让位」。放在 big_angle_lock 之前，所以
+    # big_angle_guard（>60° 安全锁）在驾驶员踩油门时同样让位 —— 理由见文件头：
+    # 此时执行层已被油门覆盖，压制无执行效果，只会在松开瞬间变成"踩空"。
+    if TURN_DECEL_DRIVER_OVERRIDE_ENABLE:
+      if gas_pressed:
+        self._gas_hold_left = TURN_DECEL_GAS_RELEASE_HOLD_S
+      else:
+        self._gas_hold_left = max(0.0, self._gas_hold_left - dt)
+      if gas_pressed or self._gas_hold_left > 0.0:
+        # 让位期间**清零并停止累计** blinker_on_time：
+        # 否则宽限窗口结束的下一帧就会直接满足 debounce 进入 deceling（主动减速
+        # 到 15 km/h），把上面那个 bug 推迟 2 秒再犯。清零 = 让位结束后重新计时。
+        self._blinker_on_time = 0.0
+        self._blinker_on_last = bool(blinker_on)
+        self._decel_a = 0.0
+        return TurnDecelResult(None, False, False, "driver_override")
+
+    # ---- 0b. 大角度安全锁（独立于转向灯状态，最先评估）----
     # 方向盘 > 60° 且 v_ego > 15 km/h：不主动加速。
     # 必须在 blinker-off 分支之前评估——这是规则 4 的"与转向灯无关"。
     # 适用于：U-turn、入库、螺旋匝道等驾驶员不打转向灯的极端大角度场景。

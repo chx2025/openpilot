@@ -19,6 +19,8 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 from openpilot.sunnypilot.selfdrive.controls.lib.turn_decel import TurnDecelController
 from openpilot.sunnypilot.selfdrive.controls.lib.coast_resume import CoastResumeController
+from openpilot.sunnypilot.selfdrive.controls.lib.long_accel_limiter import LongAccelLimiter
+from openpilot.sunnypilot.selfdrive.controls.lib import e2e_accel_gate
 
 #A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 #A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -42,6 +44,26 @@ ALLOW_THROTTLE_HYST_FRAMES = 5
 # 实车调参：1.4 仍偏猛 -> 1.2 -> **1.6**（用户 2026-09-19 反馈「有点肉」，往回收一点）
 # 还肉继续升到 1.8；猛了回 1.2
 E2E_ACCEL_MAX_M_S2: float | None = 1.6
+
+# ---- 实验模式(e2e)专属加速度插值表（2026-09-21 新增）----
+# 【用户反馈】2026-09-21：「加速度插值表帮我做成实验模式也可用，可以实验模式单独
+#   一张表，而不是 2.0 —— 2 太快了，感觉要起飞了」。
+# 【改前现状】上面那两张表（A_CRUISE_MAX_VALS 按车速、_A_TOTAL_MAX_V 转向预算）只作用于
+#   **非 e2e**：get_cruise_accel() 在 e2e 时把 max_accel 直接放成 ACCEL_MAX(≈2.0)，
+#   并整块跳过转向预算 ⇒ 实验模式下巡航候选的加速度既不看车速、也不看转向角，
+#   只剩输出端 E2E_ACCEL_MAX_M_S2 一道固定封顶。
+# 【改法】e2e 也走插值表，但用**下面两张独立表**，便于单独标定：
+#   想调实验模式的加速曲线，只动 A_CRUISE_MAX_VALS_E2E，不影响巡航模式（反之亦然）。
+#   初始值 = 与巡航表一致（用户 2026-09-21 选定「先跟巡航表一致，之后单独改」）。
+#   · E2E_ACCEL_TABLE_ENABLE = False  -> 一键回到原行为（e2e 的 max_accel = ACCEL_MAX）
+#   · A_CRUISE_MAX_VALS_E2E = None    -> 只回退「按车速」这一张（仍保留转向预算）
+#   · _A_TOTAL_MAX_V_E2E = None       -> 只回退「转向预算」这一张
+#   与巡航表共用断点（A_CRUISE_MAX_BP / _A_TOTAL_MAX_BP），只有加速度值是独立的。
+#   安全性：这两张表只压**候选集里 cruise 候选的上限**，候选仍与 MPC / e2e /
+#   traffic_stop / turn_decel 一起取 min()，所以任何更保守的制动都不受影响。
+E2E_ACCEL_TABLE_ENABLE: bool = True
+A_CRUISE_MAX_VALS_E2E: list[float] | None = [1.10, 0.9, 0.80, 0.65, 0.50, 0.40, 0.35, 0.35, 0.35, 0.33, 0.31, 0.29]
+_A_TOTAL_MAX_V_E2E: list[float] | None = [1.7, 3.2]
 
 # ---- 超速滑行回落（仿 dragonpilot 的 ACM / Adaptive Coasting Module）----
 # 现象：设定 60 km/h，驾驶员踩油门把车推到 70，松开油门后旧逻辑会立刻用
@@ -83,6 +105,25 @@ COAST_OVERSPEED_LOG_HYST_KPH = 0.5
 # 实车核对：grep CruiseStale /data/log/swaglog.*（burst 时长应从 ~3s 掉到 <1s）
 # 设 None = 完全恢复原行为（上下都用 J_CRUISE_VALS）。
 CRUISE_RECOVER_J_MS3: float | None = 2.0
+
+# ---- e2e 纵向全量留痕（诊断用，2026-09-21 新增）----
+# 背景（实车取证）：
+#   实验模式下 CTM = Cinque Terre（2026 Deep RL 模型，ChestnutActive=1）的 modelV2.action
+#   头在「空路 + 低于设定速度」时给 ≈ -0.8 m/s²：
+#     2026-09-21 12:18:20~12:19:17 连续 57 s，lead=0 prob=0.00，vEgo=20~23，vCruiseInt=45，
+#     而 aMpc=+2.07 / aCruise=+2.00 —— 三条候选里只有 e2e 是负的。
+#   停车（车库、模型自己 leadProb≈1.0、vEgo=0）时它给 ≈ -0.15（502 帧标准差 0.015）。
+# 机理：candidates 取 min() ⇒ **e2e 只要给负值，就必然压掉 cruise/MPC 的加速意图**，
+#   车不会自己加速 ⇒ 体感「加速无力」（用户 2026-09-21 反馈，尤其踩过油门之后）。
+# 这条日志按 1 Hz 留痕「已接管且在动」的每一帧，用一整圈数据回答：
+#   1) aE2e 平时到底是什么分布？有没有正值？（即：模型会不会主动要求加速）
+#   2) 踩/松油门前后 aE2e 怎么变？（验证「踩过油门后长期无力」）
+#   3) radar 说没前车时，模型自己（modelV2.leadsV3）看到前车的概率是多少？
+# 后处理：grep -ah "E2eTrace" /data/log/swaglog.* > /tmp/t.txt 然后跑 port/long_gate/analyze_e2e_trace.py
+# 关掉：E2E_TRACE_ENABLE = False
+E2E_TRACE_ENABLE = True
+E2E_TRACE_INTERVAL = 1.0     # 留痕间隔（秒）【默认 1.0；抓抖动级细节可临时改 0.1，10Hz 约 21MB/h】
+E2E_TRACE_MIN_SPEED = 1.0    # m/s；低于此值不打（停车/等红灯不刷屏）
 
 # ---- 「巡航候选残留负值」探针（诊断用，2026-09-20 新增）----
 # 判据：**该加速却给了负号** —— (v_cruise - v_ego) > CRUISE_STALE_MIN_GAP_MS（离设定
@@ -187,17 +228,32 @@ def get_cruise_accel_min(v_cruise, v_ego, accel_coast):
 
 
 def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
-  max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
+  # 正加速度上限：e2e 与非 e2e 各走自己那张插值表（见 E2E_ACCEL_* 常量）。
+  # 转向预算两路都要做（e2e 用 _A_TOTAL_MAX_V_E2E，可单独置 None 关掉）。
+  if e2e and E2E_ACCEL_TABLE_ENABLE:
+    max_accel = (float(np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS_E2E))
+                 if A_CRUISE_MAX_VALS_E2E is not None else ACCEL_MAX)
+    a_total_max = (float(np.interp(v_ego, _A_TOTAL_MAX_BP, _A_TOTAL_MAX_V_E2E))
+                   if _A_TOTAL_MAX_V_E2E is not None else None)
+  elif e2e:
+    # 回退：完全恢复 2026-09-21 之前的行为（e2e 直接给 ACCEL_MAX、不做转向预算）
+    max_accel = ACCEL_MAX
+    a_total_max = None
+  else:
+    max_accel = get_max_accel(v_ego)
+    a_total_max = float(np.interp(v_ego, _A_TOTAL_MAX_BP, _A_TOTAL_MAX_V))
 
-  if not e2e:
-    a_total_max = np.interp(v_ego, _A_TOTAL_MAX_BP, _A_TOTAL_MAX_V)
+  if a_total_max is not None:
     a_y = v_ego ** 2 * angle_steers * CV.DEG_TO_RAD / (CP.steerRatio * CP.wheelbase)
     a_x_allowed = math.sqrt(max(a_total_max ** 2 - a_y ** 2, 0.))
     max_accel = min(max_accel, a_x_allowed)
-    if not allow_throttle:
-      clipped_accel_coast = max(accel_coast, ACCEL_MIN)
-      coast_limit = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [max_accel, clipped_accel_coast])
-      max_accel = min(max_accel, coast_limit)
+
+  # allow_throttle 是巡航/跟车语义（模型判断前车会不会动），只作用于非 e2e —— e2e
+  # 模式下纵向由模型链路负责，套用巡航的 coast_limit 会额外压掉加速意图。
+  if not e2e and not allow_throttle:
+    clipped_accel_coast = max(accel_coast, ACCEL_MIN)
+    coast_limit = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [max_accel, clipped_accel_coast])
+    max_accel = min(max_accel, coast_limit)
 
   # 超速回落的下限：小超速滑行、大超速逐渐加大刹车（见 COAST_OVERSPEED_* 常量）
   accel_min = get_cruise_accel_min(v_cruise, v_ego, accel_coast)
@@ -237,6 +293,22 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.coast_resume = CoastResumeController()
     self._coast_resume_active = False
 
+    # 输出端 comfort jerk 限制（见 sunnypilot/.../lib/long_accel_limiter.py 文件头）。
+    #   min(candidates) 只挑最小值、不保证连续性；turn_decel 的覆盖与
+    #   coast_resume 的抬升也都是阶跃；而下游 LongControl 是纯 PID+前馈、
+    #   **无任何 jerk 限制**（已核对设备源码）⇒ 上游任何跳变都会原样传下去。
+    #   本模块是"最后一道手"：非对称限速，只削放松方向的阶跃，绝不延迟制动。
+    self.long_accel_limiter = LongAccelLimiter()
+
+    # e2e 候选「欠速让位」门控的本帧结果（见下方 candidates 与 e2e_accel_gate.py）
+    # [2026-09-21 第 3 次修订] 门控改为**有状态**（滞回 + 最短保持）以消除抖动。
+    #   旧写法 `e2e_accel_gate.should_yield(...)` 是纯逐帧硬阈值判定 ⇒ 候选集里
+    #   e2e 一帧进一帧出，aTgt 在 +1.6 与 −0.6 之间阶跃（归档实测最大 3.016 m/s²），
+    #   用户体感「突然加速又突然停顿又开始加速，像有东西在打架」。
+    #   详见 e2e_accel_gate.py 文件头「第 3 次修订」。
+    self.e2e_gate = e2e_accel_gate.E2eAccelGate()
+    self.e2e_yield = False
+
     # 超速滑行回落的状态（仅用于状态跳变时打一条日志，见 update）
     self._coast_overspeed_active = False
 
@@ -244,6 +316,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self._decel_probe_ts = -1e9
     # 「巡航候选残留负值」探针的节流时间戳（见文件头 CRUISE_STALE_PROBE_*）
     self._cruise_stale_ts = -1e9
+    self._e2e_trace_ts = -1e9   # [E2eTrace 2026-09-21]
     # 供 [LongDecel] 记录当前帧是否处于 reset_state（见文件头 CRUISE_RECOVER_J_MS3）
     self._dbg_reset_state = False
 
@@ -374,7 +447,27 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       ts_a = self.traffic_stop.output_a_target
       candidates.append((ts_a, LongitudinalPlanSource.cruise, should_stop(v_ego, ts_a)))
     if is_e2e:
-      candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
+      # [2026-09-21] 「欠速让位」门控（见 sunnypilot/.../lib/e2e_accel_gate.py 文件头）：
+      # 空路 + 明显欠速 + 模型自己没在减速/没看到前车时，**不让 e2e 参与 min()**。
+      # 实车取证：CTM 的 action 头输入里没有设定速度，空路上它给 ≈0（「我不想加速」），
+      # 被 min() 当成上限后 cruise 的 +2.00 只剩 +0.10，车 31 s 爬不出 14 km/h 的缺口
+      # ——用户体感「踩过油门后加速无力，5 秒以上才恢复」。安全论证见该模块文件头。
+      # [2026-09-21 第 3 次修订] 走**有状态**门控（滞回 + 最短保持），不再直接调纯函数。
+      #   t 用 wall clock：门控内部只关心**时间差**，与日志时间戳体系无关，
+      #   这样即使设备时钟跳变（本机时钟一直不准）也不会影响滞回窗口。
+      self.e2e_yield = self.e2e_gate.update(
+        t=time.monotonic(),
+        enabled=e2e_accel_gate.E2E_ACCEL_GATE_ENABLE,
+        gap_ms=v_cruise - v_ego,
+        a_e2e=output_a_target_e2e,
+        e2e_should_stop=output_should_stop_e2e,
+        lead_present=sm['radarState'].leadOne.present,
+        d_rel=sm['radarState'].leadOne.dRel,
+        model_lead_prob=float(sm['modelV2'].leadsV3[0].prob) if len(sm['modelV2'].leadsV3) else -1.0,
+        plan_a0=float(sm['modelV2'].acceleration.x[0]),
+      )
+      if not self.e2e_yield:
+        candidates.append((output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e))
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
@@ -395,6 +488,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       v_ego=v_ego,
       steering_angle_deg=steer_angle_without_offset,
       dt=self.dt,
+      # [2026-09-21] 驾驶员踩油门 -> 本模块完全让位（含松油门后 2 s 宽限）。
+      # 依据：实车探针 05:05:52 三条候选 aMpc=2.33/aCruise=2.00/aE2e=+1.11 全为正，
+      # 最终 aTgt 却是 0.000（gas=1）—— min() 不可能产生 0，唯一来源就是这里的
+      # block_accel。机理与安全论证见 turn_decel.py 文件头「驾驶员加速意图让位」。
+      gas_pressed=sm['carState'].gasPressed,
     )
     if turn_decel_res.a_target_override is not None:
       output_a_target = min(output_a_target, turn_decel_res.a_target_override)
@@ -425,6 +523,18 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if coast_res.a_floor is not None:
       output_a_target = max(output_a_target, coast_res.a_floor)
 
+    # 输出端 comfort jerk 限制：**最后一道手**，放在所有 min()/覆盖/抬升之后、
+    # np.clip 之前。这样无论上游哪一路（e2e 门控、turn_decel、coast_resume、
+    # 雷达/FCW 切换）给出不连续跳变，传到执行器的都是连续的。
+    # 非对称：只限"放松"方向，加强制动基本不受限（8 m/s³，实测最深制动
+    # 请求只滞后 100 ms），紧急制动直接放行
+    # —— 见 long_accel_limiter.py 文件头「判据」一节的安全论证。
+    # 留痕用：限制器之前的请求值。aPre - aTgt 就是这一帧被柔和掉的幅度，
+    # 没有它就无法把「限制器起作用」与 coast_resume 的抬升区分开（验证会留盲区）。
+    a_pre_limiter = output_a_target
+    output_a_target = self.long_accel_limiter.update(
+      output_a_target, t=time.monotonic(), dt=self.dt)
+
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     # 状态跳变各打一条（20 Hz 里不能每帧刷）。
@@ -442,6 +552,49 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self._coast_resume_active = coast_res.active
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
+
+    # ---- e2e 纵向全量留痕（见文件头 E2E_TRACE_*）----  [E2eTrace 2026-09-21]
+    if E2E_TRACE_ENABLE and is_e2e and sm['selfdriveState'].enabled and v_ego > E2E_TRACE_MIN_SPEED:
+      now3 = time.monotonic()
+      if now3 - self._e2e_trace_ts >= E2E_TRACE_INTERVAL:
+        self._e2e_trace_ts = now3
+        _mv = sm['modelV2']
+        _leads = _mv.leadsV3
+        _mprob = float(_leads[0].prob) if len(_leads) else -1.0
+        _rl = sm['radarState'].leadOne
+        cloudlog.info(
+          f"[E2eTrace] aE2e={output_a_target_e2e:.3f} e2eStop={int(output_should_stop_e2e)} "
+          f"| aTgt={self.output_a_target:.3f} aPre={a_pre_limiter:.3f} "
+          f"lim={int(abs(self.output_a_target - a_pre_limiter) > 1e-9)} "
+          f"src={self.mpc.source} aMpc={output_a_target_mpc:.3f} "
+          f"aCruise={self.a_cruise:.3f} | vEgo={v_ego * CV.MS_TO_KPH:.0f} "
+          f"vCruiseInt={v_cruise * CV.MS_TO_KPH:.0f} vCruiseUI={v_cruise_kph:.0f} "
+          f"gap={(v_cruise - v_ego) * CV.MS_TO_KPH:.1f} | rLead={int(_rl.present)} "
+          f"dRel={_rl.dRel:.1f} mLeadProb={_mprob:.2f} | planA0={float(_mv.acceleration.x[0]):.3f} "
+          f"planV0={float(_mv.velocity.x[0]):.2f} big={int(_mv.big)} drop={float(_mv.frameDropPerc):.1f} "
+          f"| gas={int(sm['carState'].gasPressed)} brake={int(sm['carState'].brakePressed)} "
+          f"aEgo={sm['carState'].aEgo:.3f} thr={int(self.allow_throttle)} "
+          f"stop={int(self.output_should_stop)} ts={int(self.traffic_stop.is_active)} "
+          f"turn={turn_decel_res.phase} coastRes={1 if self._coast_resume_active else 0} "
+          # [2026-09-21] 加 4 个字段，用来把「方向盘回正后仍不加速」钉到具体相位：
+          #   steer    —— 扣除 angleOffset 后的方向盘角度（deg）。用户反馈的
+          #               「方向盘摆直了他也不加速」需要它来确认回正到底回到几度。
+          #   blink    —— 转向灯状态。paused / at_target / deceling 都要求它为 1，
+          #               所以 blinker 是否自动回位直接决定体感（这解释了「有时候」）。
+          #   turnBlk  —— 本帧是否被 turn_decel 禁止加速（与 aTgt==0 对照即可定位）。
+          #   turnOv   —— 本帧的减速覆盖值（无覆盖时为 0.00）。
+          f"| steer={steer_angle_without_offset:.1f} blink={int(blinker_on)} "
+          f"turnBlk={int(turn_decel_res.block_accel)} "
+          f"turnOv={(turn_decel_res.a_target_override if turn_decel_res.a_target_override is not None else 0.0):.2f} "
+          # [2026-09-21] e2eGate=1 表示本帧 e2e 候选被「欠速让位」门控排除（见 e2e_accel_gate.py）。
+          # 验收：开闸帧的 src 应当不再是 4，aTgt 应回到 min(aMpc, aCruise)。
+          # gateR= 给出本帧判定来源，是**验证第 3 次修订（防抖）是否生效**的关键字段：
+          #   enter / keep / hold / release / blocked / cooldown /
+          #   hardStop / hardLead / hardProb / hardBrake / hardPlanBrake / overspeed / off
+          # 抖动被消除后，应看到**连续多帧 keep**，而不是 enter/release 交替出现。
+          f"e2eGate={int(self.e2e_yield)} gateR={self.e2e_gate.reason} "
+          f"srcSP={self.source} exec={float(_mv.modelExecutionTime) * 1000:.1f}ms"
+        )
 
     # ---- 大减速现场记录器（见文件头 DECEL_PROBE_*）----
     # 只在输出明显减速时记一条，用来事后判断「这一脚是谁给的」：
