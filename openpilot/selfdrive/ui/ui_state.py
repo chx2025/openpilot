@@ -271,18 +271,35 @@ class UIState(UIStateSP):
       return
 
     model_seen = self.sm.recv_frame["modelV2"] > self.started_frame
+    # [egpu-late-online-heal]
+    # (1) chestnut_present 只在 onroad 转换那一刻锁存一次，此后整趟行程不再刷新。
+    # eGPU「上电较晚」（车机先上路、显卡后枚举）时锁进去的就是 False，于是
+    # chestnut_state 恒为 DISCONNECTED，左下角首页图标一直显示「GPU x」，
+    # 而第四格用实时 deviceState 判据、早已显示绿色 —— 两处自相矛盾。
+    # 这里放开 False -> True 的上行自愈；下行仍保持锁存，运行期掉线交给下面
+    # 的 modelV2.big 判据表达成 FAILED，免得 USB 瞬时重枚举把图标抖成「未连接」。
+    if detected and not self.chestnut_present:
+      self.chestnut_present = True
+
+    # [egpu-late-online-heal]
+    # (2) 判据顺序必须是「真在跑」最优先。原实现把加载中/成功都排在
+    # (model_seen and not modelV2.big) -> FAILED 之后，且把「曾经 FAILED」当永久
+    # 锁存，于是 eGPU 晚上电时先被判 FAILED，此后即使大模型真跑起来也永远停在
+    # 橙色 FAILED；LOADING 分支也被彻底遮蔽（加载进度看不见）。
+    # 模型真在跑是链路通畅的最强证据，必须压过加载/失败判据；modeld 掉线自愈
+    # 重试成功后图标能否回到绿色，也依赖这一点。
+    model_running = bool(model_seen and self.sm.alive["modelV2"] and self.sm["modelV2"].big)
+
     if not self.chestnut_present:
       self.chestnut_state = ChestnutState.DISCONNECTED
     elif not self.chestnut_compiled:
       self.chestnut_state = ChestnutState.UNCOMPILED
-    elif self.chestnut_state == ChestnutState.FAILED or not detected or (model_seen and (not self.sm.alive["modelV2"] or not self.sm["modelV2"].big)):
-      self.chestnut_state = ChestnutState.FAILED
+    elif model_running:
+      self.chestnut_state = ChestnutState.ACTIVE
     elif self.chestnut_loading or not model_seen:
       self.chestnut_state = ChestnutState.LOADING
-    elif self.chestnut_active is False:
-      self.chestnut_state = ChestnutState.FAILED
     else:
-      self.chestnut_state = ChestnutState.ACTIVE
+      self.chestnut_state = ChestnutState.FAILED
 
   def update_params(self) -> None:
     # For slower operations
