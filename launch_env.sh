@@ -47,6 +47,15 @@ if [ -f /data/hardware_profile ] && [ "$(cat /data/hardware_profile 2>/dev/null)
   export C3XL_IFE_ROAD_SIZE=1344x760
 fi
 
+# ---- 开机自动校时（版本化，见 system/time_seed.sh 头部注释）----
+# 放在仓库内而不是 /data/continue.sh：后者由
+# openpilot/selfdrive/ui/installer/continue_openpilot.sh 生成，重装/OTA 会覆盖，
+# 钩子会静默消失。脚本内部会等网络（实测约 55s 才就绪）并自带 flock 单实例保护，
+# 所以必须 setsid + 后台执行，绝不能阻塞 openpilot 启动。
+if [ -x "${DIR:-/data/openpilot}/system/time_seed.sh" ]; then
+  setsid "${DIR:-/data/openpilot}/system/time_seed.sh" >>/data/time_seed.log 2>&1 &
+fi
+
 # ---- chestnut(eGPU) USB 节点权限守护（冷启动 EACCES 竞态）----
 # devtmpfs 以 0600 root:root 建 /dev/bus/usb/<bus>/<dev>，udev 要读完描述符才按
 # 50-udev-default.rules:72 放宽成 0664；eGPU 底座与车机同时上电时 ASM2464 描述符
