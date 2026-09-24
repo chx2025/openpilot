@@ -253,6 +253,35 @@ class LeadSpeedElement(LeadInfoElement):
     return UiElement(value, "参考车速", self.unit, color)
 
 
+class LeadSpeedPadElement(LeadInfoElement):
+  """底部信息条专用：前车绝对速度，固定 3 位整数（无前车 / 无速度 = 000）。
+
+  2026-09-22 用户要求：把信息条第一格的「前车距离 000m」换成「前车速度 000km/h」。
+  位宽策略与 RelDistElement 的 zero_pad 版一致 —— 无前车、数值非有限、速度 <= 0
+  一律输出 000，这样整条信息条的行宽恒定，数值位数变化时右侧各项不会左右跳动。
+  前车速度 = 自车速度 + 相对速度（雷达/模型给出的绝对前车速度）。
+  超过 999 km/h 按 999 截断，纯位宽兜底（物理上不可能出现）。
+  """
+
+  def __init__(self):
+    self.unit = "km/h"
+
+  def update(self, sm, is_metric: bool) -> UiElement:
+    lead_status, _, lead_v_rel = self.get_lead_status(sm)
+    v_ego = sm['carState'].vEgo
+
+    self.unit = "km/h" if is_metric else "mph"
+
+    conversion = CV.MS_TO_KPH if is_metric else CV.MS_TO_MPH
+    raw_speed = (lead_v_rel + v_ego) * conversion
+
+    if not lead_status or not math.isfinite(raw_speed) or raw_speed <= 0:
+      return UiElement("000", "前车速度", self.unit, rl.WHITE)
+
+    value = f"{max(0, min(int(round(raw_speed)), 999)):03d}"
+    return UiElement(value, "前车速度", self.unit, self.get_lead_color(0, lead_v_rel, use_v_rel=True))
+
+
 class FrictionCoefficientElement:
   def __init__(self):
     self.unit = ""

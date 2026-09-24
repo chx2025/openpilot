@@ -11,7 +11,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui.elements import (
   UiElement, RelDistElement, RelSpeedElement, SteeringAngleElement,
   DesiredLateralAccelElement, ActualLateralAccelElement, DesiredSteeringAngleElement,
-  AEgoElement, LeadSpeedElement, FrictionCoefficientElement, LatAccelFactorElement,
+  AEgoElement, LeadSpeedElement, LeadSpeedPadElement, FrictionCoefficientElement, LatAccelFactorElement,
   SteeringTorqueEpsElement, BearingDegElement, AltitudeElement, DesiredSteeringPIDElement,
   StorageElement, MemoryUsageElement, CpuTempMaxElement
 )
@@ -53,6 +53,9 @@ class DeveloperUiRenderer(Widget):
 
     self.rel_dist_elem = RelDistElement()
     self.rel_dist_elem_pad = RelDistElement(zero_pad=True)  # 底部信息条专用：固定 3 位
+    # 2026-09-22：信息条第一格由「前车距离」改为「前车速度」（固定 3 位，无前车/无速度 = 000）
+    # rel_dist_elem_pad 保留实例以便随时回退（改回下面 _draw_bottom_dev_ui 里那一行即可）
+    self.lead_speed_pad_elem = LeadSpeedPadElement()
     self.rel_speed_elem = RelSpeedElement()
     self.steering_angle_elem = SteeringAngleElement()
     self.desired_lat_accel_elem = DesiredLateralAccelElement()
@@ -153,8 +156,9 @@ class DeveloperUiRenderer(Widget):
     elements = [
       #self.a_ego_elem.update(sm, ui_state.is_metric),
       #self.lead_speed_elem.update(sm, ui_state.is_metric),
-      # 前车距离用 zero_pad 版本：无前车输出 000，有前车固定 3 位（2026-09-17）
-      self.rel_dist_elem_pad.update(sm, ui_state.is_metric),
+      # 前车速度用 zero_pad 版本：无前车/无速度输出 000，有前车固定 3 位（2026-09-22 用户要求）
+      # 想回退成「前车距离 000m」：把下面这行换成 self.rel_dist_elem_pad.update(sm, ui_state.is_metric)
+      self.lead_speed_pad_elem.update(sm, ui_state.is_metric),
       self.memory_elem.update(sm, ui_state.is_metric),
       self.storage_elem.update(sm, ui_state.is_metric),
       self.cpu_temp_max_elem.update(sm, ui_state.is_metric),

@@ -4,7 +4,7 @@
 
   不在线   ->  显示「小模型」三个字   「小模型」
   加载中   ->  显示进度百分比         「45%」
-  运行中   ->  显示功率 + GPU 占用率  「120W 54%」
+  运行中   ->  显示功率 + GPU 即时温度 「120W 58°C」（2026-09-22 用户要求，原为占用率）
 
 判断优先级（2026-09-17 修订）：
   不在线 > 运行中 > 加载中 > 加载失败 > 未编译 > 链路诊断(USB/PCIe)
@@ -53,6 +53,7 @@ def build_egpu_sidebar_status(*, present: bool, compiled: bool, link_state: str 
                               loading_progress: int = 0,
                               model_failed: bool = False,
                               power_w: float = 0.0, gpu_usage_percent: int = 0,
+                              gpu_temp_c: float = 0.0,
                               telemetry_valid: bool = False) -> EgpuSidebarStatus:
   """把一个采样时刻的 eGPU 状态压成侧边栏那一格要显示的文案。
 
@@ -76,12 +77,16 @@ def build_egpu_sidebar_status(*, present: bool, compiled: bool, link_state: str 
     return EgpuSidebarStatus(SMALL_MODEL_TEXT, "disabled",
                              "未检测到 eGPU，当前运行小模型")
 
-  # --- 运行中：显示功率 + GPU 占用率 ---
+  # --- 运行中：显示功率 + GPU 即时温度（2026-09-22 用户要求，原为功率 + GPU 占用率）---
+  # 温度取自 ChestnutState.tempC（cereal/log.capnp:718，单位 °C）。
+  # tempC <= 0 视为"没读到"（chestnut 侧 _read_ina 失败时字段会保持 capnp 默认 0），
+  # 此时显示 "--" 而不要显示 "0°C" —— 后者会被误读成"凉快"，掩盖遥测失效。
   if active is True:
     if telemetry_valid:
-      return EgpuSidebarStatus(f"{power_w:.0f}W {gpu_usage_percent}%", "good",
+      temp_text = f"{gpu_temp_c:.0f}°C" if gpu_temp_c > 0.0 else "--"
+      return EgpuSidebarStatus(f"{power_w:.0f}W {temp_text}", "good",
                                f"eGPU 大模型运行中 · 功耗 {power_w:.0f} W · "
-                               f"GPU 占用 {gpu_usage_percent}% · USB {usb_speed_mbps} Mbps")
+                               f"GPU 温度 {temp_text} · GPU 占用 {gpu_usage_percent}% · USB {usb_speed_mbps} Mbps")
     return EgpuSidebarStatus("RUNNING", "good",
                              f"eGPU 大模型运行中（遥测暂不可用）· USB {usb_speed_mbps} Mbps")
 

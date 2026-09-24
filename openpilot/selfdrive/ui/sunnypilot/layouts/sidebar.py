@@ -108,6 +108,10 @@ class SidebarSP:
       model_failed=ui_state.big_model_failed,
       power_w=float(telemetry.powerDrawW) if telemetry_valid else 0.0,
       gpu_usage_percent=int(telemetry.gpuUsagePercent) if telemetry_valid else 0,
+      # 2026-09-22：第四格由「功率 + GPU 占用率」改为「功率 + GPU 即时温度」
+      # tempC 来自 ChestnutState（cereal/log.capnp:718）。遥测不可用时给 0.0，
+      # 由 build_egpu_sidebar_status 决定显示 "--"（不显示 0°C，避免误读成凉快）。
+      gpu_temp_c=float(telemetry.tempC) if telemetry_valid else 0.0,
       telemetry_valid=telemetry_valid,
     )
 
