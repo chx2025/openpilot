@@ -70,7 +70,7 @@ compile_modeld_script = [
 model_w, model_h = MEDMODEL_INPUT_SIZE
 frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
 
-if not os.getenv('SKIP_TINYGRAD_COMPILE'):
+if not os.getenv('SKIP_TINYGRAD_COMPILE') and os.path.exists(File('models/driving_supercombo.onnx').abspath):  # [local patch 2026-09-21] 没有 ONNX 就不重编模型
   for chestnut in [False, True] if CHESTNUT else [False]:
     target_pkl_path = File(modeld_pkl_path(chestnut)).abspath
     file_prefix, cmd_flags = ('big_', chestnut_tg_flags) if chestnut else ('', tg_flags)
@@ -109,34 +109,39 @@ if not os.getenv('SKIP_TINYGRAD_COMPILE'):
     if chestnut:
       lenv.SideEffect(chestnut_lock, node)
 
-# get model metadata
-fn = File(f"models/dmonitoring_model").abspath
-script_files = [File(Dir("#openpilot/selfdrive/modeld").File("get_model_metadata.py").abspath)]
-cmd = f'{tg_flags} {mac_brew_string} python3 {Dir("#openpilot/selfdrive/modeld").abspath}/get_model_metadata.py {fn}.onnx'
-lenv.Command(fn + "_metadata.pkl", [fn + ".onnx"] + tinygrad_files + script_files + [tg_devices_node], cmd)
+# [local patch 2026-09-21] 本仓库**不跟踪 ONNX 源文件**（models/ 只跟踪编译好的 pkl），
+# 而下面这段无条件执行 os.path.getsize(models/dmonitoring_model.onnx)，会让 scons
+# 在解析阶段就 FileNotFoundError —— 结果是这台设备上任何目标都编不出来。
+# 没有 ONNX 时跳过模型重编，直接使用仓库里已有的 pkl。要重生成模型请先把 ONNX 放回 models/。
+if os.path.exists(File("models/dmonitoring_model.onnx").abspath):
+  # get model metadata
+  fn = File(f"models/dmonitoring_model").abspath
+  script_files = [File(Dir("#openpilot/selfdrive/modeld").File("get_model_metadata.py").abspath)]
+  cmd = f'{tg_flags} {mac_brew_string} python3 {Dir("#openpilot/selfdrive/modeld").abspath}/get_model_metadata.py {fn}.onnx'
+  lenv.Command(fn + "_metadata.pkl", [fn + ".onnx"] + tinygrad_files + script_files + [tg_devices_node], cmd)
 
-dm_w, dm_h = DM_INPUT_SIZE
-compile_dm_warp_script = [File(f"{modeld_dir}/compile_dm_warp.py")]
-for cam_w, cam_h in camera_configs:
-  dm_pkl_path = File(f"models/dm_warp_{cam_w}x{cam_h}_tinygrad.pkl").abspath
-  cmd = (f'{tg_flags} {mac_brew_string} python3 {modeld_dir}/compile_dm_warp.py '
-         f'--camera-resolution {cam_w}x{cam_h} --warp-to {dm_w}x{dm_h} '
-         f'--output {dm_pkl_path}')
-  lenv.Command(dm_pkl_path, tinygrad_files + compile_dm_warp_script + compile_modeld_script + [tg_devices_node], cmd)
+  dm_w, dm_h = DM_INPUT_SIZE
+  compile_dm_warp_script = [File(f"{modeld_dir}/compile_dm_warp.py")]
+  for cam_w, cam_h in camera_configs:
+    dm_pkl_path = File(f"models/dm_warp_{cam_w}x{cam_h}_tinygrad.pkl").abspath
+    cmd = (f'{tg_flags} {mac_brew_string} python3 {modeld_dir}/compile_dm_warp.py '
+           f'--camera-resolution {cam_w}x{cam_h} --warp-to {dm_w}x{dm_h} '
+           f'--output {dm_pkl_path}')
+    lenv.Command(dm_pkl_path, tinygrad_files + compile_dm_warp_script + compile_modeld_script + [tg_devices_node], cmd)
 
-def tg_compile(flags, model_name):
-  pythonpath_string = 'PYTHONPATH="${PYTHONPATH}:' + env.Dir("#tinygrad_repo").abspath + '"'
-  fn = File(f"models/{model_name}").abspath
-  pkl = fn + "_tinygrad.pkl"
-  onnx_path = fn + ".onnx"
-  chunk_targets = get_chunk_targets(pkl, estimate_pickle_max_size(os.path.getsize(onnx_path)))
-  def do_chunk(target, source, env):
-    chunk_file(pkl, chunk_targets)
-  return lenv.Command(
-    chunk_targets,
-    [onnx_path] + tinygrad_files + [Value(chunk_targets), chunker_file, tg_devices_node],
-    [f'{pythonpath_string} {flags} python3 {Dir("#tinygrad_repo").abspath}/examples/openpilot/compile3.py {fn}.onnx {pkl}',
-     Action(do_chunk, "  [CHUNK] $TARGET")],
-  )
+  def tg_compile(flags, model_name):
+    pythonpath_string = 'PYTHONPATH="${PYTHONPATH}:' + env.Dir("#tinygrad_repo").abspath + '"'
+    fn = File(f"models/{model_name}").abspath
+    pkl = fn + "_tinygrad.pkl"
+    onnx_path = fn + ".onnx"
+    chunk_targets = get_chunk_targets(pkl, estimate_pickle_max_size(os.path.getsize(onnx_path)))
+    def do_chunk(target, source, env):
+      chunk_file(pkl, chunk_targets)
+    return lenv.Command(
+      chunk_targets,
+      [onnx_path] + tinygrad_files + [Value(chunk_targets), chunker_file, tg_devices_node],
+      [f'{pythonpath_string} {flags} python3 {Dir("#tinygrad_repo").abspath}/examples/openpilot/compile3.py {fn}.onnx {pkl}',
+       Action(do_chunk, "  [CHUNK] $TARGET")],
+    )
 
-tg_compile(tg_flags, 'dmonitoring_model')
+  tg_compile(tg_flags, 'dmonitoring_model')

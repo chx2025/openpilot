@@ -14,6 +14,7 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.common.hardware import HARDWARE, PC
 from openpilot.common.hardware.usb import TYPEC_CC_ORIENTATION_PATH, get_usb_state, is_chestnut_usb_id, read_int
 from openpilot.selfdrive.modeld.helpers import chestnut_compiled
+from openpilot.selfdrive.ui.egpu_status import CHESTNUT_LOAD_NOMINAL_S
 
 from openpilot.selfdrive.ui.sunnypilot.ui_state import UIStateSP, DeviceSP
 
@@ -74,6 +75,7 @@ class UIState(UIStateSP):
         "vehicleParameters",
         "testJoystick",
         "rawAudioData",
+        "chestnutState",
       ] + self.sm_services_ext
     )
 
@@ -96,6 +98,8 @@ class UIState(UIStateSP):
     self.chestnut_compiled: bool = chestnut_compiled()
     self.chestnut_active: bool | None = None
     self.chestnut_loading: bool = False
+    self.chestnut_loading_progress: int = 0
+    self._chestnut_loading_started_ts: float | None = None
     self.usb_connected: bool = False
     self.usb_connected_ts: float | None = None
     self.usb_disconnected_ts: float | None = None
@@ -130,6 +134,47 @@ class UIState(UIStateSP):
   @property
   def engaged(self) -> bool:
     return self.started and (self.sm["selfdriveState"].enabled or self.sm["selfdriveStateSP"].mads.enabled)
+
+  @property
+  def big_model_failed(self) -> bool:
+    """大模型链路正常但加载/运行失败（侧边栏显示 MODEL ERR）。"""
+    return self.chestnut_state == ChestnutState.FAILED
+
+  def _read_chestnut_loading_progress(self) -> int:
+    """大模型加载进度（0~100）。
+
+    优先读真实进度参数；当前分支的 modeld 不写该参数（见 `modeld_v2/modeld.py`，
+    它只 put_bool("ChestnutLoading", ...)），于是退化成「按已加载时长单调估算、
+    99% 封顶」——真正的就绪信号仍是 ChestnutLoading 变 False / ChestnutActive 变 True。
+
+    基准时长 CHESTNUT_LOAD_NOMINAL_S 来自实车日志实测（见 egpu_status.py 注释）。
+    """
+    # 先短路：不在加载中就没必要去碰那两个不存在的参数键
+    if not self.chestnut_loading:
+      self._chestnut_loading_started_ts = None
+      return 0
+
+    # 当前分支没有这两个键（params_keys.h 里查无此名），get() 会抛异常；
+    # 留着是为了将来 modeld 真写了进度参数时能直接接上。
+    for key in ("ChestnutLoadingProgress", "UsbGpuLoadingProgress"):
+      try:
+        raw = self.params.get(key, return_default=True)
+      except Exception:
+        raw = None
+      try:
+        value = int(raw) if raw is not None else 0
+      except (TypeError, ValueError):
+        value = 0
+      if value > 0:
+        return max(0, min(100, value))
+
+    now = time.monotonic()
+    if self._chestnut_loading_started_ts is None:
+      self._chestnut_loading_started_ts = now
+      return 0
+
+    elapsed = max(0.0, now - self._chestnut_loading_started_ts)
+    return max(0, min(99, int(elapsed / CHESTNUT_LOAD_NOMINAL_S * 100)))
 
   def is_onroad(self) -> bool:
     return self.started
@@ -226,18 +271,35 @@ class UIState(UIStateSP):
       return
 
     model_seen = self.sm.recv_frame["modelV2"] > self.started_frame
+    # [egpu-late-online-heal]
+    # (1) chestnut_present 只在 onroad 转换那一刻锁存一次，此后整趟行程不再刷新。
+    # eGPU「上电较晚」（车机先上路、显卡后枚举）时锁进去的就是 False，于是
+    # chestnut_state 恒为 DISCONNECTED，左下角首页图标一直显示「GPU x」，
+    # 而第四格用实时 deviceState 判据、早已显示绿色 —— 两处自相矛盾。
+    # 这里放开 False -> True 的上行自愈；下行仍保持锁存，运行期掉线交给下面
+    # 的 modelV2.big 判据表达成 FAILED，免得 USB 瞬时重枚举把图标抖成「未连接」。
+    if detected and not self.chestnut_present:
+      self.chestnut_present = True
+
+    # [egpu-late-online-heal]
+    # (2) 判据顺序必须是「真在跑」最优先。原实现把加载中/成功都排在
+    # (model_seen and not modelV2.big) -> FAILED 之后，且把「曾经 FAILED」当永久
+    # 锁存，于是 eGPU 晚上电时先被判 FAILED，此后即使大模型真跑起来也永远停在
+    # 橙色 FAILED；LOADING 分支也被彻底遮蔽（加载进度看不见）。
+    # 模型真在跑是链路通畅的最强证据，必须压过加载/失败判据；modeld 掉线自愈
+    # 重试成功后图标能否回到绿色，也依赖这一点。
+    model_running = bool(model_seen and self.sm.alive["modelV2"] and self.sm["modelV2"].big)
+
     if not self.chestnut_present:
       self.chestnut_state = ChestnutState.DISCONNECTED
     elif not self.chestnut_compiled:
       self.chestnut_state = ChestnutState.UNCOMPILED
-    elif self.chestnut_state == ChestnutState.FAILED or not detected or (model_seen and (not self.sm.alive["modelV2"] or not self.sm["modelV2"].big)):
-      self.chestnut_state = ChestnutState.FAILED
+    elif model_running:
+      self.chestnut_state = ChestnutState.ACTIVE
     elif self.chestnut_loading or not model_seen:
       self.chestnut_state = ChestnutState.LOADING
-    elif self.chestnut_active is False:
-      self.chestnut_state = ChestnutState.FAILED
     else:
-      self.chestnut_state = ChestnutState.ACTIVE
+      self.chestnut_state = ChestnutState.FAILED
 
   def update_params(self) -> None:
     # For slower operations
@@ -257,8 +319,9 @@ class UIState(UIStateSP):
     self.experimental_mode_confirmed = self.params.get_bool("ExperimentalModeConfirmed")
     if not self.chestnut_compiled:
       self.chestnut_compiled = chestnut_compiled()
-    self.chestnut_active = self.params.get("ChestnutActive")
+    self.chestnut_active = self.params.get_bool("ChestnutActive")
     self.chestnut_loading = self.params.get_bool("ChestnutLoading")
+    self.chestnut_loading_progress = self._read_chestnut_loading_progress()
     now = time.monotonic()
     if read_int(TYPEC_CC_ORIENTATION_PATH) != 0:
       self.usb_disconnected_ts = None

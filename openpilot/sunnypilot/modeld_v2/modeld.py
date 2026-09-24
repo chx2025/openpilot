@@ -9,6 +9,7 @@ See the LICENSE.md file in the root directory for more details.
 from collections.abc import Callable
 import os
 os.environ['GMMU'] = '0'
+os.environ.setdefault('AM_POWER_LIMIT', '120')  # chestnut eGPU PPT 上限 (W)
 import numpy as np
 import threading
 import time
@@ -57,7 +58,7 @@ from openpilot.sunnypilot.models.helpers import get_active_bundle
 from openpilot.sunnypilot.selfdrive.controls.lib.relc import RoadEdgeLaneChangeController
 
 PROCESS_NAME = "openpilot.selfdrive.modeld.modeld_tinygrad"
-BIG_MODEL_TIMEOUT = 60
+BIG_MODEL_TIMEOUT = 600  # [local patch] 60s 载入不完 750MB 的 chestnut 大模型
 
 
 def _pkl_exists(path):
@@ -316,6 +317,39 @@ class ModelState(ModelStateBase):
     return log.ModelDataV2.Action(desiredCurvature=float(desired_curvature), desiredAcceleration=float(desired_accel), shouldStop=bool(stop))
 
 
+def chestnut_usb_node_ready(timeout: float = 90.0, poll: float = 0.5) -> bool:
+  """[egpu-bootfix] 冷启动竞态守卫。
+
+  devtmpfs 以 0600 root:root 创建 /dev/bus/usb/<bus>/<dev>，udev 要等 builtin
+  usb_id 读完描述符后才按 50-udev-default.rules:72 放宽成 0664。eGPU 与车机
+  同时上电时 ASM2464 描述符响应慢，这个窗口可达数十秒；modeld 以 comma 身份
+  在 T+34s 就 libusb_open -> EACCES -> "libusb_open: Access denied" -> load_big
+  只试一次即放弃 -> 静默回退小模型。这里等到节点真能打开（或超时）再加载。
+  判据用 os.open(O_RDWR)：与 libusb_open 走的是同一个 syscall，最贴近真实条件。
+  """
+  import glob, os as _os, time as _time
+  t0 = _time.monotonic()
+  while True:
+    for sd in glob.glob('/sys/bus/usb/devices/*'):
+      try:
+        with open(sd + '/idVendor') as f:
+          if f.read().strip() != '3801':
+            continue
+        bus = int(open(sd + '/busnum').read())
+        dev = int(open(sd + '/devnum').read())
+      except Exception:
+        continue
+      try:
+        _os.close(_os.open(f'/dev/bus/usb/{bus:03d}/{dev:03d}', _os.O_RDWR))
+        return True
+      except OSError:
+        pass
+    if _time.monotonic() - t0 > timeout:
+      cloudlog.warning(f"chestnut usb node not accessible after {timeout:.0f}s")
+      return False
+    _time.sleep(poll)
+
+
 def main(demo=False):
   cloudlog.warning("modeld init")
 
@@ -355,6 +389,11 @@ def main(demo=False):
   if use_extra_client:
     cloudlog.warning(f"connected extra cam with buffer size: {vipc_client_extra.buffer_len} ({vipc_client_extra.width} x {vipc_client_extra.height})")
 
+  if os.getenv('C3XL_IFE_ROAD_SIZE') == '1344x760':
+    if ((vipc_client_main.width, vipc_client_main.height) != (1344, 760) or
+        (use_extra_client and (vipc_client_extra.width, vipc_client_extra.height) != (1344, 760))):
+      raise RuntimeError('IFE road resize requested but actual camera dimensions do not match')
+
   cloudlog.warning("loading model")
   st = time.monotonic()
 
@@ -364,6 +403,8 @@ def main(demo=False):
     def load_big():
       nonlocal big_model
       try:
+        # [egpu-bootfix] 开机早期 usb 节点可能还是 0600(root:root) -> libusb_open EACCES
+        chestnut_usb_node_ready()
         m = ModelState(cam_w=vipc_client_main.width, cam_h=vipc_client_main.height, chestnut=True)
         m.warmup()
         big_model = m

@@ -4,6 +4,7 @@ import ctypes
 from functools import cached_property
 import os
 os.environ['GMMU'] = '0' # for chestnut fast loading, noop for qcom
+os.environ.setdefault('AM_POWER_LIMIT', '120')  # chestnut eGPU PPT 上限 (W)
 from tinygrad.device import Device
 import usb1
 import struct
