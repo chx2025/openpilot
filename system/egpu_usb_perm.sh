@@ -32,6 +32,23 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "$(date -u +%FT%TZ 2>/dev/null) [warn] uid=$(id -u) 非 root 且 sudo 不可用 -> chmod 会失败" >> "$LOG"
 fi
 
+# ---- 单实例保护（2026-09-24 补）----
+# launch_env.sh 不只在开机时被 source：仓库里 openpilot/system/updated/updated.py:199
+# 每次检查 AGNOS 版本都会 `bash -c "source launch_env.sh && echo $AGNOS_VERSION"`，
+# 而 updated 在版本不符时会一直重试（失败 5 分钟一轮）。于是下面这个 setsid 钩子
+# 被反复拉起：实测 uptime 820 / 1003 / 1095 / 1175s 各起一个，一趟长途能累积几百个
+# 进程，每个都在 0.5s 轮询 sysfs。加锁只保留一个。
+# /tmp 是 tmpfs，重启自然清空；持有者已死则自动接管。
+PIDFILE=/tmp/egpu_usb_perm.pid
+if [ -f "$PIDFILE" ]; then
+  holder=$(cat "$PIDFILE" 2>/dev/null)
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    exit 0
+  fi
+fi
+echo $$ > "$PIDFILE" 2>/dev/null || true
+trap 'rm -f "$PIDFILE"' EXIT INT TERM
+
 echo "$(date -u +%FT%TZ 2>/dev/null) [start] pid=$$ uid=$(id -u) uptime=$(cut -d' ' -f1 /proc/uptime)s" >> "$LOG"
 
 seen=" "
