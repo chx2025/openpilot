@@ -16,6 +16,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.sunnypilot.selfdrive.controls.lib.turn_decel import TurnDecelController
 
 A_CRUISE_MAX_BP = [0., 2.77, 5.55, 8.33, 11.11, 13.89, 16.6, 19.4, 22.22, 25, 27.78, 33.33]
 A_CRUISE_MAX_VALS = [1.10, 0.9, 0.80, 0.65, 0.50, 0.40, 0.35, 0.35, 0.35, 0.33, 0.31, 0.29]
@@ -69,6 +70,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.output_a_target = init_a
     self.output_should_stop = False
 
+    # 打灯减速 + 大角度限加速（sunnypilot 追加，见 turn_decel.py）
+    self.turn_decel = TurnDecelController()
+
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
@@ -105,6 +109,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.v_desired_filter.x = v_ego
       self.output_a_target = np.clip(sm['carState'].aEgo, ACCEL_MIN, ACCEL_MAX)
       self.a_cruise = self.output_a_target
+      # 未接管/车速未就绪时清掉打灯减速的累计状态，避免再接管时
+      # 立刻按「转向灯已开很久」的旧状态减速
+      self.turn_decel.reset()
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -152,6 +159,29 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
+
+    # 打灯减速 + 大角度限加速（sunnypilot 追加）。
+    # 放在 candidates 的 min() 之后、np.clip 之前：
+    #   - min() 保证不会盖过 candidates 里更保守的一方（FCW/前车/MPC 该刹还是刹）
+    #   - 同时不会被 e2e 的正加速度覆盖掉"不许加速"的约束
+    # 两种意图：打转向灯后弯道减速；以及方向角度过大时（与转向灯无关）不许加速
+    blinker_on = bool(sm['carState'].leftBlinker or sm['carState'].rightBlinker)
+    turn_decel_res = self.turn_decel.update(
+      blinker_on=blinker_on,
+      v_ego=v_ego,
+      steering_angle_deg=steer_angle_without_offset,
+      dt=self.dt,
+      # [2026-09-21] 驾驶员踩油门 -> 本模块完全让位（含松油门后 2 s 宽限）。
+      # 依据：实车探针 05:05:52 三条候选 aMpc=2.33/aCruise=2.00/aE2e=+1.11 全为正，
+      # 最终 aTgt 却是 0.000（gas=1）—— min() 不可能产生 0，唯一来源就是这里的
+      # block_accel。机理与安全论证见 turn_decel.py 文件头「驾驶员加速意图让位」。
+      gas_pressed=sm['carState'].gasPressed,
+    )
+    if turn_decel_res.a_target_override is not None:
+      output_a_target = min(output_a_target, turn_decel_res.a_target_override)
+    if turn_decel_res.block_accel and output_a_target > 0.0:
+      output_a_target = 0.0
+
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
