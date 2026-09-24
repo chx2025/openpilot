@@ -8,6 +8,7 @@ import pyray as rl
 
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
+from openpilot.selfdrive.ui.sunnypilot.onroad.clock_display import ClockDisplayRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.developer_ui import DeveloperUiRenderer, DeveloperUiState, get_bottom_dev_ui_offset, NUMBER_GREEN
 from openpilot.selfdrive.ui.sunnypilot.onroad.road_name import RoadNameRenderer
 from openpilot.selfdrive.ui.sunnypilot.onroad.rocket_fuel import RocketFuel
@@ -30,6 +31,7 @@ class HudRendererSP(HudRenderer):
   def __init__(self):
     super().__init__()
     self.developer_ui = DeveloperUiRenderer()
+    self.clock_display = ClockDisplayRenderer()
     self.road_name_renderer = RoadNameRenderer()
     self.rocket_fuel = RocketFuel()
     self.speed_limit_renderer = SpeedLimitRenderer()
@@ -56,6 +58,7 @@ class HudRendererSP(HudRenderer):
     self.speed_cluster = ui_state.sm['carState'].cruiseState.speedCluster * self.speed_conv
 
     super()._update_state()
+    self.clock_display.update()
     self.road_name_renderer.update()
     self.speed_limit_renderer.update()
     self.smart_cruise_control_renderer.update()
@@ -145,6 +148,7 @@ class HudRendererSP(HudRenderer):
       self._torque_bar.render(torque_rect)
 
     self.developer_ui.render(rect)
+    self.clock_display.render(rect)   # 顶部居中：北京时间（2026-09-24）
     self.road_name_renderer.render(rect)
     self.speed_limit_renderer.render(rect)
     self.smart_cruise_control_renderer.render(rect)

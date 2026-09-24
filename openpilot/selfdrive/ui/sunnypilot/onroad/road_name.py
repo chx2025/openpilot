@@ -7,6 +7,7 @@ See the LICENSE.md file in the root directory for more details.
 import pyray as rl
 
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.selfdrive.ui.sunnypilot.onroad.clock_display import clock_reserved_height
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
@@ -40,7 +41,9 @@ class RoadNameRenderer(Widget):
     padding = 40
     rect_width = max(200, min(text_size.x + padding, rect.width - 40))
 
-    road_rect = rl.Rectangle(rect.x + rect.width / 2 - rect_width / 2, rect.y - 4, rect_width, 60)
+    # 顶部时钟条（clock_display.py）已占用 rect.y 起的那一条，这里顺延避让
+    road_rect = rl.Rectangle(rect.x + rect.width / 2 - rect_width / 2,
+                             rect.y - 4 + clock_reserved_height(), rect_width, 60)
 
     rl.draw_rectangle_rounded(road_rect, 0.2, 10, rl.Color(0, 0, 0, 120))
 
