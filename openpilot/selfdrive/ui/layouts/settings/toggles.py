@@ -23,6 +23,12 @@ DESCRIPTIONS = {
     "Your attention is required at all times to use this feature."
   ),
   "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage sunnypilot."),
+  "GasPedalOverride": tr_noop(
+    "While the accelerator pedal is pressed, deceleration asked for by the model or the system is reduced so the car " +
+    "gently closes on the lead car. Releasing the pedal coasts back down to the set speed, or hands control back after " +
+    "0.5 s if you are below it. Override is disabled while a lead car is closer than 2 m, or closer than 4 m and you are " +
+    "more than 10 km/h faster than it."
+  ),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, sunnypilot will follow lead cars closer and be more aggressive with the gas and brake. " +
     "In relaxed mode sunnypilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
@@ -46,6 +52,12 @@ class TogglesLayout(Widget):
     self._params = Params()
     self._is_release = False  # self._params.get_bool("IsReleaseBranch")
 
+    # GasPedalOverride（踩油门纵向让位）按需求**默认开启**，但 Params.get_bool()
+    # 对不存在的键返回 False（C++ Params::get 不走 default_value 回退），会让
+    # toggle 首次显示成关。所以在首次运行时显式落一次声明里的默认值 "1"。
+    if self._params.get("GasPedalOverride") is None:
+      self._params.put_bool("GasPedalOverride", True, block=True)
+
     # param, title, desc, icon, needs_restart
     self._toggle_defs = {
       "OpenpilotEnabledToggle": (
@@ -58,6 +70,15 @@ class TogglesLayout(Widget):
         lambda: tr("Experimental Mode"),
         "",
         "experimental_white.png",
+        False,
+      ),
+      # 踩油门时暂停/减小模型与系统的减速（see gas_override.py）。
+      # 默认开启：参数在 params_keys.h 里声明为 "1"，而 Params.get_bool 对
+      # 不存在的键返回 False，所以首次运行前显式落一次默认值（见 __init__）。
+      "GasPedalOverride": (
+        lambda: tr("Gas Pedal Override"),
+        DESCRIPTIONS["GasPedalOverride"],
+        "disengage_on_accelerator.png",
         False,
       ),
       # "DisengageOnAccelerator": (

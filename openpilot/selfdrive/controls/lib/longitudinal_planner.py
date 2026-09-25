@@ -14,9 +14,11 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDX
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, should_stop
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
+from openpilot.common.params import Params
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 from openpilot.sunnypilot.selfdrive.controls.lib.turn_decel import TurnDecelController
+from openpilot.sunnypilot.selfdrive.controls.lib.gas_override import GasOverrideController
 
 A_CRUISE_MAX_BP = [0., 2.77, 5.55, 8.33, 11.11, 13.89, 16.6, 19.4, 22.22, 25, 27.78, 33.33]
 A_CRUISE_MAX_VALS = [1.10, 0.9, 0.80, 0.65, 0.50, 0.40, 0.35, 0.35, 0.35, 0.33, 0.31, 0.29]
@@ -73,6 +75,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # 打灯减速 + 大角度限加速（sunnypilot 追加，见 turn_decel.py）
     self.turn_decel = TurnDecelController()
 
+    # 驾驶员踩油门让位（需求三条 + 开关见 gas_override.py 文件头）。
+    # 运行期开关是参数 GasPedalOverride（设置页 "Gas Pedal Override"，默认开），
+    # 由控制器自己按 1 Hz 轮询，所以这里只把 Params 句柄注入进去。
+    self.gas_override = GasOverrideController(Params())
+
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
@@ -112,6 +119,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       # 未接管/车速未就绪时清掉打灯减速的累计状态，避免再接管时
       # 立刻按「转向灯已开很久」的旧状态减速
       self.turn_decel.reset()
+      # 同理清掉踩油门让位的相位机（否则再接管时可能带着旧的 coast/hold 相位）
+      self.gas_override.reset()
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -181,6 +190,39 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       output_a_target = min(output_a_target, turn_decel_res.a_target_override)
     if turn_decel_res.block_accel and output_a_target > 0.0:
       output_a_target = 0.0
+
+    # 驾驶员踩油门让位（需求三条见 gas_override.py 文件头）。
+    # 位置：candidates min() 和 turn_decel 之后、np.clip 之前。
+    #   - 它只**抬升下限**（max），所以不可能抢走 turn_decel / FCW / 前车 /
+    #     MPC 任何一方"更保守"的结论；反过来 turn_decel 压的是上限、本模块抬的
+    #     是下限，两条约束互不覆盖。
+    #   - 未接管（reset_state）时不参与，避免把"没接管"搅进相位机，也避免
+    #     在没接管时武装松油门窗口。
+    if not reset_state:
+      lead = sm['radarState'].leadOne
+      gas_res = self.gas_override.update(
+        gas_pressed=bool(sm['carState'].gasPressed),
+        v_ego=v_ego,
+        # 用**原逻辑实际执行**的目标速度（SP 的 SCC/SLA 若在压低速度，这里就是
+        # 压低后的值）：这样"滑行到设定速度"收回时，原逻辑刚好也在那里停止制动，
+        # 交接处没有阶跃。
+        v_cruise=v_cruise,
+        accel_coast=accel_coast,
+        a_target_in=output_a_target,
+        dt=self.dt,
+        lead_present=bool(lead.present),
+        d_rel=float(lead.dRel),
+        v_lead=float(lead.vLead),
+        fcw=bool(self.fcw),
+        force_decel=bool(sm['controlsState'].forceDecel),
+      )
+      output_a_target = gas_res.a_target_out
+      # 需求 3「不要有空档期」：低速时 LongControl 会因为 should_stop 把状态机
+      # 切到 stopping（不再跟随 a_target）。让位期间一并清掉该意图。
+      if gas_res.suppress_should_stop:
+        self.output_should_stop = False
+      if gas_res.log is not None:
+        cloudlog.info(gas_res.log)
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 

@@ -42,10 +42,16 @@ class TogglesLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
 
+    # GasPedalOverride（踩油门纵向让位）按需求默认开启，但 Params.get_bool() 对
+    # 不存在的键返回 False，会让 toggle 首次显示成关。首次运行显式落一次默认值。
+    if ui_state.params.get("GasPedalOverride") is None:
+      ui_state.params.put_bool("GasPedalOverride", True, block=True)
+
     self._personality_toggle = BigMultiParamToggle("driving personality", "LongitudinalPersonality", ["aggressive", "standard", "relaxed"])
     self._experimental_btn = BigToggle("experimental mode", initial_state=ui_state.params.get_bool("ExperimentalMode"),
                                        toggle_callback=self._on_experimental_mode)
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
+    gas_override_toggle = BigParamControl("gas pedal override", "GasPedalOverride")
     ldw_toggle = BigParamControl("lane departure warnings", "IsLdwEnabled")
     always_on_dm_toggle = BigParamControl("always-on driver monitor", "AlwaysOnDM")
     record_front = BigParamControl("record & upload cabin camera", "RecordFront", toggle_callback=restart_needed_callback)
@@ -60,6 +66,7 @@ class TogglesLayoutMici(NavScroller):
       self._personality_toggle,
       self._experimental_btn,
       is_metric_toggle,
+      gas_override_toggle,
       ldw_toggle,
       always_on_dm_toggle,
       record_front,
@@ -76,6 +83,7 @@ class TogglesLayoutMici(NavScroller):
     self._refresh_toggles = (
       ("ExperimentalMode", self._experimental_btn),
       ("IsMetric", is_metric_toggle),
+      ("GasPedalOverride", gas_override_toggle),
       ("IsLdwEnabled", ldw_toggle),
       ("AlwaysOnDM", always_on_dm_toggle),
       ("RecordFront", record_front),
