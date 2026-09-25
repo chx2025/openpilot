@@ -32,6 +32,21 @@ MIN_ALLOW_THROTTLE_SPEED = 2.5
 _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
 
+# 实验模式（e2e）下的正加速上限。
+#
+# 原逻辑用 opendbc 的 ACCEL_MAX（= 2.0，那是**车辆物理上限**，用于最终
+# np.clip 与 MPC 约束，不能动）：`max_accel = ACCEL_MAX if e2e else 查表`。
+# 也就是说实验模式下 a_cruise 的加速上限直接顶到 2.0（≈0.20 g），
+# 比非实验模式的查表值（低速 1.10 → 高速 0.29）猛得多，畅通路段模型
+# 会把 desiredAcceleration 拉满，体感偏冲。
+#
+# 这里单独把 e2e 分支收窄到 1.6（≈0.16 g）。
+# ★生效机制：a_cruise 永远在 candidates 里且 min() 取小 ⇒ 只要压住
+#   a_cruise 的上限，最终 output_a_target 就不可能超过它，
+#   无论 MPC 轨迹或 e2e 候选给多大都会被 min 掉。
+#   （所以不需要去改 long_mpc.py 的求解约束，也就避开了动求解器的风险。）
+E2E_MAX_ACCEL = 1.6
+
 def get_max_accel(v_ego):
   return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
 
@@ -39,7 +54,9 @@ def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
 
 def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
-  max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
+  # 实验模式走 E2E_MAX_ACCEL(1.6)，非实验模式走速度查表（低速 1.10 → 高速 0.29）。
+  # 见上方 E2E_MAX_ACCEL 的说明：这里压住 a_cruise 的上限，就压住了整条链路的正加速上限。
+  max_accel = E2E_MAX_ACCEL if e2e else get_max_accel(v_ego)
 
   if not e2e:
     a_total_max = np.interp(v_ego, _A_TOTAL_MAX_BP, _A_TOTAL_MAX_V)
