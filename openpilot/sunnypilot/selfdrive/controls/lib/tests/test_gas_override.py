@@ -21,13 +21,20 @@ from openpilot.sunnypilot.selfdrive.controls.lib.gas_override import (
   GAS_OVERRIDE_ENABLE, GAS_OVERRIDE_PARAM_KEY, GAS_PRESSED_A_FLOOR,
   GAS_RELEASE_COAST_A_CEIL, GAS_RELEASE_COAST_EXIT_MARGIN_MS,
   GAS_RELEASE_COAST_MAX_DECEL, GAS_RELEASE_COAST_MAX_S,
-  GAS_RELEASE_RESUME_DELAY_S, GAS_SAFE_CLOSING_KPH, GAS_SAFE_D_REL_CLOSE_M,
-  GAS_SAFE_D_REL_MIN_M, GasOverrideController,
+  GAS_RELEASE_RESUME_DELAY_S, GAS_SAFE_A_TARGET_HARD,
+  GAS_SAFE_A_TARGET_RELEASE, GAS_SAFE_CLOSING_KPH, GAS_SAFE_D_REL_CLOSE_M,
+  GAS_SAFE_D_REL_MIN_M, GAS_SAFE_TTC_ENTER_S, GAS_SAFE_TTC_RELEASE_S,
+  GasOverrideController,
 )
 
 
 DT = 0.05       # DT_MDL, plannerd runs at 20 Hz
 KPH = 1.0 / 3.6  # km/h -> m/s
+
+# "the system is asking for a mild brake" -- deliberately ABOVE the safety
+# exception e entry threshold (-2.0), so the distance / coast / toggle cases
+# below test their own thing instead of being pre-empted by e.
+A_MILD_BRAKE = -1.5
 
 
 def step(c: GasOverrideController, **kw) -> gas_override.GasOverrideResult:
@@ -53,25 +60,35 @@ def test_constants_match_user_spec():
   assert GAS_RELEASE_RESUME_DELAY_S == 0.5
   assert GAS_RELEASE_COAST_A_CEIL == 0.0
   assert GAS_OVERRIDE_ENABLE is True
+  # safety exceptions e/f added after the 2026-09-25 real-world event
+  assert GAS_SAFE_A_TARGET_HARD == -2.0
+  assert GAS_SAFE_TTC_ENTER_S == 4.0
+  # hysteresis: the release thresholds must be strictly above the entry ones
+  assert GAS_SAFE_A_TARGET_RELEASE > GAS_SAFE_A_TARGET_HARD
+  assert GAS_SAFE_TTC_RELEASE_S > GAS_SAFE_TTC_ENTER_S
 
 
 # ===== 1. baseline: nothing pressed -> transparent =====
 def test_inactive_when_gas_not_pressed():
   c = GasOverrideController()
-  res = step(c, gas_pressed=False, a_target_in=-2.4)
+  res = step(c, gas_pressed=False, a_target_in=A_MILD_BRAKE)
   assert res.phase == "inactive"
   assert res.active is False
   assert res.a_floor is None
-  assert res.a_target_out == -2.4          # byte-identical passthrough
+  assert res.a_target_out == A_MILD_BRAKE   # byte-identical passthrough
   assert res.reason == ""
   assert res.suppress_should_stop is False
 
 
 # ===== 2. requirement 1: gas pressed raises the deceleration floor =====
 def test_gas_pressed_reduces_braking():
-  """The whole point: a hard -2.4 m/s^2 model brake becomes -0.3."""
+  """The core behaviour: a mild model brake (-1.5) becomes -0.3.
+
+  Note the mild value: since 2026-09-25 a *hard* request (<= -2.0) is no longer
+  overridden -- see the safety exception e tests below.
+  """
   c = GasOverrideController()
-  res = step(c, gas_pressed=True, a_target_in=-2.4)
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE)
   assert res.phase == "pressed"
   assert res.active is True
   assert res.a_floor == GAS_PRESSED_A_FLOOR
@@ -103,7 +120,7 @@ def test_gas_pressed_suppresses_stop_intent():
 # ===== 3. requirement 1 exceptions =====
 def test_no_lead_means_no_exception():
   c = GasOverrideController()
-  res = step(c, gas_pressed=True, a_target_in=-2.0, lead_present=False)
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE, lead_present=False)
   assert res.active is True
 
 
@@ -119,7 +136,7 @@ def test_lead_closer_than_2m_blocks_override():
 def test_lead_exactly_at_2m_still_overrides():
   """Spec says 'less than' 2 m, so exactly 2.0 m must still override."""
   c = GasOverrideController()
-  res = step(c, gas_pressed=True, a_target_in=-2.0, lead_present=True, d_rel=2.0, v_lead=20.0)
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE, lead_present=True, d_rel=2.0, v_lead=20.0)
   assert res.active is True
 
 
@@ -133,37 +150,53 @@ def test_lead_close_and_fast_blocks_override():
 
 
 def test_lead_close_but_not_fast_keeps_override():
+  """Close, but barely closing: neither distance exception applies, and the
+  closing rate (1 km/h) keeps the TTC far away, so f stays quiet too."""
   c = GasOverrideController()
-  res = step(c, gas_pressed=True, a_target_in=-2.0, lead_present=True,
-             d_rel=3.5, v_lead=20.0 - 5.0 * KPH)
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE, lead_present=True,
+             d_rel=3.5, v_lead=20.0 - 1.0 * KPH)
   assert res.active is True
 
 
 def test_lead_far_and_fast_keeps_override():
+  """Far away and closing at 15 km/h -> TTC 7.2 s, nobody has to intervene."""
   c = GasOverrideController()
-  res = step(c, gas_pressed=True, a_target_in=-2.0, lead_present=True,
-             d_rel=30.0, v_lead=20.0 - 40.0 * KPH)
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE, lead_present=True,
+             d_rel=30.0, v_lead=20.0 - 15.0 * KPH)
   assert res.active is True
 
 
-def test_closing_below_10kph_keeps_override():
-  """Spec says 'faster by more than 10 km/h', so 9.95 km/h must not trip it."""
+def test_closing_below_10kph_keeps_override(monkeypatch):
+  """Spec says 'faster by more than 10 km/h', so 9.95 km/h must not trip it.
+
+  f (TTC) is switched off on purpose: 3.5 m at a 9.95 km/h closing rate is a
+  1.3 s TTC, which *should* stop the yield -- that case is covered by the ttc
+  tests below. Here we only pin down the 10 km/h distance-exception boundary.
+  """
+  monkeypatch.setattr(gas_override, "GAS_SAFE_TTC_ENTER_S", None)
   c = GasOverrideController()
-  res = step(c, gas_pressed=True, a_target_in=-2.0, lead_present=True,
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE, lead_present=True,
              d_rel=3.5, v_lead=20.0 - 9.95 * KPH)
   assert res.active is True
 
 
-def test_closing_above_10kph_blocks_override():
+def test_closing_above_10kph_blocks_override(monkeypatch):
+  monkeypatch.setattr(gas_override, "GAS_SAFE_TTC_ENTER_S", None)
   c = GasOverrideController()
-  res = step(c, gas_pressed=True, a_target_in=-2.0, lead_present=True,
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE, lead_present=True,
              d_rel=3.5, v_lead=20.0 - 10.05 * KPH)
   assert res.active is False
 
 
-def test_lead_distance_boundary_at_4m_keeps_override():
+def test_lead_distance_boundary_at_4m_keeps_override(monkeypatch):
+  """Spec says 'less than' 4 m, so exactly 4.0 m must still override.
+
+  f is switched off here for the same reason as above: 4 m at a 36 km/h closing
+  rate is a 0.4 s TTC -- f *should* stop the yield, and test_ttc_* proves it.
+  """
+  monkeypatch.setattr(gas_override, "GAS_SAFE_TTC_ENTER_S", None)
   c = GasOverrideController()
-  res = step(c, gas_pressed=True, a_target_in=-2.0, lead_present=True,
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE, lead_present=True,
              d_rel=GAS_SAFE_D_REL_CLOSE_M, v_lead=10.0)
   assert res.active is True
 
@@ -186,15 +219,128 @@ def test_force_decel_guard_blocks_override():
 def test_fcw_guard_can_be_disabled(monkeypatch):
   monkeypatch.setattr(gas_override, "GAS_OVERRIDE_FCW_GUARD", False)
   c = GasOverrideController()
-  assert step(c, gas_pressed=True, a_target_in=-3.0, fcw=True).active is True
+  assert step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE, fcw=True).active is True
 
 
 def test_low_or_unset_v_cruise_does_not_override():
   c = GasOverrideController()
   for vc in (0.0, 0.5, 1.0):
-    res = step(c, gas_pressed=True, v_cruise=vc, a_target_in=-2.0)
+    res = step(c, gas_pressed=True, v_cruise=vc, a_target_in=A_MILD_BRAKE)
     assert res.active is False
-    assert res.a_target_out == -2.0
+    assert res.a_target_out == A_MILD_BRAKE
+    assert res.reason == "no_v_cruise"
+
+
+# ===== 3b. safety exceptions e/f (added 2026-09-25, after a real event) =====
+# Real event (device comma-e80e0b52, 09-25 09:39 local, evidence in gas_patch/evidence/):
+#   lead 46.2 -> 22.3 km/h in 2 s, dRel 34.7 -> 28.7 m, a_target -2.75 m/s^2.
+#   The distance-only exceptions (dRel < 4 m / < 2 m) stayed silent, the yield held
+#   the floor at -0.3, ego *accelerated* 43.9 -> 49.0, and the car ended up parked
+#   4.2 m behind the lead. e re-uses the system's own request (most sensitive);
+#   f is the TTC backstop for the same situation expressed geometrically.
+def test_hard_brake_request_blocks_override():
+  """e: replay of the real event -- -2.75 must cancel the yield."""
+  c = GasOverrideController()
+  res = step(c, gas_pressed=True, v_ego=49.0 * KPH, v_cruise=58.0 * KPH,
+             a_target_in=-2.75, lead_present=True, d_rel=28.7, v_lead=22.3 * KPH)
+  assert res.phase == "inactive"
+  assert res.active is False
+  assert res.a_target_out == -2.75         # the braking request survives untouched
+  assert res.reason.startswith("aTgt")
+
+
+def test_hard_brake_threshold_is_inclusive():
+  c = GasOverrideController()
+  assert step(c, gas_pressed=True, a_target_in=GAS_SAFE_A_TARGET_HARD).active is False
+
+
+def test_mild_brake_just_above_threshold_still_overrides():
+  c = GasOverrideController()
+  assert step(c, gas_pressed=True,
+              a_target_in=GAS_SAFE_A_TARGET_HARD + 0.01).active is True
+
+
+def test_hard_brake_latch_holds_inside_the_band():
+  """Hysteresis: coming back up into the band must NOT resume yielding yet."""
+  c = GasOverrideController()
+  assert step(c, gas_pressed=True, a_target_in=-2.5).active is False
+  assert step(c, gas_pressed=True, a_target_in=-1.5).active is False           # band
+  assert step(c, gas_pressed=True, a_target_in=GAS_SAFE_A_TARGET_RELEASE).active is True
+
+
+def test_output_does_not_flap_around_the_threshold():
+  """Without hysteresis the output would be [-2.1, -0.3, -2.1, -0.3, -2.1]."""
+  c = GasOverrideController()
+  ins = [-2.1, -1.9, -2.1, -1.9, -2.1]
+  outs = [step(c, gas_pressed=True, a_target_in=a).a_target_out for a in ins]
+  assert outs == ins, f"output flapped: {outs}"
+
+
+def test_hard_brake_exception_also_blocks_the_hold_window():
+  """Requirement 3's 0.5 s window must not keep yielding while the system brakes hard.
+
+  This is frame 2 of the real event: gas released, a_target -3.26, lead at 20.7 km/h.
+  """
+  c = GasOverrideController()
+  step(c, gas_pressed=True, v_ego=48.8 * KPH, v_cruise=58.0 * KPH)
+  res = step(c, gas_pressed=False, v_ego=48.8 * KPH, v_cruise=58.0 * KPH,
+             a_target_in=-3.26, lead_present=True, d_rel=27.1, v_lead=20.7 * KPH)
+  assert res.phase == "inactive"
+  assert res.a_target_out == -3.26
+  assert c._hold_left == 0.0
+
+
+def test_hard_brake_exception_can_be_disabled(monkeypatch):
+  monkeypatch.setattr(gas_override, "GAS_SAFE_A_TARGET_HARD", None)
+  c = GasOverrideController()
+  assert step(c, gas_pressed=True, a_target_in=-3.0).active is True
+
+
+def test_ttc_blocks_override_when_closing_fast():
+  """f: 28.7 m sounds far, but at 7.4 m/s closing that is only 3.9 s."""
+  c = GasOverrideController()
+  res = step(c, gas_pressed=True, v_ego=49.0 * KPH, v_cruise=58.0 * KPH,
+             a_target_in=A_MILD_BRAKE, lead_present=True,
+             d_rel=28.7, v_lead=(49.0 - 26.7) * KPH)
+  assert res.active is False
+  assert res.reason.startswith("ttc")
+
+
+def test_ttc_ignores_a_lead_that_is_pulling_away():
+  c = GasOverrideController()
+  res = step(c, gas_pressed=True, v_ego=10.0, v_cruise=16.0,
+             a_target_in=A_MILD_BRAKE, lead_present=True, d_rel=5.0, v_lead=20.0)
+  assert res.active is True
+
+
+def test_ttc_latch_holds_inside_the_band():
+  c = GasOverrideController()
+  # TTC 2.5 s -> latched
+  assert step(c, gas_pressed=True, v_ego=10.0, v_cruise=16.0, a_target_in=A_MILD_BRAKE,
+              lead_present=True, d_rel=20.0, v_lead=10.0 - 8.0).active is False
+  # TTC 5.0 s -> inside the (4, 6) band, stays latched
+  assert step(c, gas_pressed=True, v_ego=10.0, v_cruise=16.0, a_target_in=A_MILD_BRAKE,
+              lead_present=True, d_rel=25.0, v_lead=10.0 - 5.0).active is False
+  # TTC 14 s -> released, yielding resumes
+  assert step(c, gas_pressed=True, v_ego=10.0, v_cruise=16.0, a_target_in=A_MILD_BRAKE,
+              lead_present=True, d_rel=70.0, v_lead=10.0 - 5.0).active is True
+
+
+def test_safety_latches_are_cleared_by_reset():
+  c = GasOverrideController()
+  step(c, gas_pressed=True, a_target_in=-2.5)
+  assert c._hard_decel_latch is True
+  c.reset()
+  assert c._hard_decel_latch is False
+  assert c._ttc_latch is False
+
+
+def test_hard_brake_exception_does_not_spam_the_log():
+  """Steady-state hard braking (normal cruise following) must not log at 1 Hz."""
+  c = GasOverrideController()
+  assert step(c, gas_pressed=False, a_target_in=-2.5).log is not None    # transition
+  for _ in range(60):
+    assert step(c, gas_pressed=False, a_target_in=-2.5).log is None, "aTgt is spamming"
 
 
 def test_master_switch_off_is_transparent(monkeypatch):
@@ -334,7 +480,7 @@ def test_repress_during_coast_returns_to_pressed():
   c = GasOverrideController()
   step(c, gas_pressed=True, v_ego=30.0, v_cruise=25.0)
   assert step(c, gas_pressed=False, v_ego=30.0, v_cruise=25.0).phase == "coast"
-  res = step(c, gas_pressed=True, v_ego=30.0, v_cruise=25.0, a_target_in=-2.0)
+  res = step(c, gas_pressed=True, v_ego=30.0, v_cruise=25.0, a_target_in=A_MILD_BRAKE)
   assert res.phase == "pressed"
   assert res.a_floor == GAS_PRESSED_A_FLOOR
 
@@ -399,7 +545,7 @@ def test_param_off_makes_the_module_fully_transparent():
 
 def test_param_on_keeps_normal_behaviour():
   c = GasOverrideController(FakeParams(True))
-  res = step(c, gas_pressed=True, a_target_in=-2.6)
+  res = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE)
   assert res.enabled is True
   assert res.a_target_out == GAS_PRESSED_A_FLOOR
 
@@ -473,14 +619,15 @@ def test_disabled_state_does_not_log_forever():
     assert res.log is None, "disabled state is spamming the log"
 
 
-# ===== 8. logging throttle =====def test_log_on_transition_only_within_throttle():
+# ===== 8. logging throttle =====
+def test_log_on_transition_only_within_throttle():
   c = GasOverrideController()
-  first = step(c, gas_pressed=True, a_target_in=-2.0)
+  first = step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE)
   assert first.log is not None
   assert "[GasOverride]" in first.log
   assert "pressed" in first.log
   # same phase, inside the 1 Hz throttle window -> silent
-  assert step(c, gas_pressed=True, a_target_in=-2.0).log is None
+  assert step(c, gas_pressed=True, a_target_in=A_MILD_BRAKE).log is None
   # leaving the phase is always logged (so the tail of an event is visible)
   out = step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0)
   assert out.phase == "hold"

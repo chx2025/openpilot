@@ -131,6 +131,27 @@ GAS_SAFE_D_REL_MIN_M: float = 2.0
 GAS_OVERRIDE_FCW_GUARD: bool = True
 # 安全例外 d：forceDecel（驾驶员监控强制减速）时不让位
 GAS_OVERRIDE_FORCE_DECEL_GUARD: bool = True
+
+# ==== 安全例外 e/f（2026-09-25 实车后新增）====================================
+# 背景：上面的 a/b 两个例外只看**绝对车距**，对"前车急刹"这种场景太晚。
+# 实车（09-25 09:39，证据 gas_patch/evidence/）：前车 1 秒掉 10 km/h，
+# dRel 还有 28.7 m（远大于 4 m 例外），但系统**已经**把 a_target 算到 −2.75；
+# 让位期间本车反而 43.9→49.0 加速，两车距离 34.7→23.0，
+# 最终停在**距前车 4.2 m**（恰好卡在 4 m 例外门外）。
+#
+# e) 「系统本帧正在要求硬减速」⇒ 放弃让位。
+#    直接复用**系统自己**的判断（MPC / 前车跟车 / 模型），比任何几何阈值都灵敏。
+GAS_SAFE_A_TARGET_HARD: float | None = -2.0     # 进入：a_target <= 该值 ⇒ 不让位
+GAS_SAFE_A_TARGET_RELEASE: float = -1.0         # 退出：回升到 >= 该值才恢复让位
+# f) TTC 兜底：「距离还够、但闭合速度大」—— 前车急刹的另一种等价写法。
+GAS_SAFE_TTC_ENTER_S: float | None = 4.0        # 进入：TTC <= 该值 ⇒ 不让位
+GAS_SAFE_TTC_RELEASE_S: float = 6.0             # 退出（滞回）
+GAS_SAFE_TTC_MIN_CLOSING_MS: float = 1.0        # 闭合速度下限，低于此不算"在接近"
+# ⚠️ e/f **必须带滞回**：a_target / TTC 都是连续量，若无滞回，数值在阈值附近
+# 摆动时输出会在 `a_target`（不干预）与 `max(a_target, −0.3)`（让位）之间**逐帧跳变**
+# ⇒ 车一顿一顿。进入/退出用两个不同阈值把带拉开。
+# 把 e/f 的"进入"阈值置 None 可单独关掉那一条（测试与调试用）。
+
 # vCruise <= 该值（m/s）视为"没有设定巡航速度"，不干预（3.6 km/h）
 GAS_OVERRIDE_MIN_V_CRUISE_MS: float = 1.0
 
@@ -160,8 +181,11 @@ GAS_OVERRIDE_CLEAR_STOP_INTENT: bool = True
 # swaglog 最低只落盘 INFO(20)，所以一律用 cloudlog.info；节流见下。
 # 状态跳变**必定**落盘，其余活动期按 GAS_OVERRIDE_LOG_HZ 节流。
 GAS_OVERRIDE_LOG_HZ: float = 1.0
-# 这些 reason 属于"常态不干预"，只在相位跳变时报一行，不按 LOG_HZ 反复刷
-_QUIET_REASONS: frozenset[str] = frozenset({"disabled", "no_v_cruise"})
+# 这些 reason 属于"常态不干预"，只在相位跳变时报一行，不按 LOG_HZ 反复刷。
+# 用**前缀**匹配：reason 里带数值（"aTgt-2.75" / "ttc3.9s"），无法用集合精确匹配。
+# e/f 也算进来：巡航跟车时 a_target 可能长期低于 −2.0，否则会 1 Hz 刷屏；
+# 而真正需要诊断的时刻（踩油门 → 因 aTgt 放弃让位 = 相位跳变）**一定会落盘**。
+_QUIET_REASON_PREFIXES: tuple[str, ...] = ("disabled", "no_v_cruise", "aTgt", "ttc")
 
 
 @dataclass
@@ -179,9 +203,11 @@ class GasOverrideResult:
 class GasOverrideController:
   """每帧由 longitudinal_planner 调一次 update()。
 
-  内部只维护四样东西：上次 gas 状态、hold 剩余时长、coast 已持续时长、
-  以及从 Params 轮询到的运行期开关。没有 ramp / 没有滞回闩锁：地板是
-  **纯静态映射**，相位只由 (gas, v_ego, v_cruise) 决定，行为可预测、可复现。
+  内部维护：上次 gas 状态、hold 剩余时长、coast 已持续时长、Params 轮询到的
+  运行期开关，以及安全例外 e/f 的两个滞回闩锁。地板本身是**纯静态映射**，
+  相位只由 (gas, v_ego, v_cruise) 决定，行为可预测、可复现；
+  唯一的额外状态是 e/f 的闩锁 —— 它们在 a_target / TTC 进入危险区时置位，
+  数值回升过释放阈值后才复位（没有它，输出会在让位/不让位之间逐帧跳变）。
 
   `params` 用依赖注入而不是本模块 import，好处：
     - 模块保持零依赖，单测可以在没有 cereal/capnp 的机器上直接跑
@@ -199,6 +225,9 @@ class GasOverrideController:
     self._param_t: float = GAS_OVERRIDE_PARAMS_PERIOD_S  # 让首帧就同步一次参数
     self._param_enabled: bool = True   # 从 Params 读到的运行期开关
     self._param_note: str | None = None  # 开关跳变时待落盘的一行（见 _poll_param）
+    # 安全例外 e/f 的滞回闩锁（为什么必须滞回，见 GAS_SAFE_A_TARGET_HARD 处说明）
+    self._hard_decel_latch: bool = False  # e：系统正在要求硬减速
+    self._ttc_latch: bool = False         # f：TTC 已经过小
 
   @property
   def enabled(self) -> bool:
@@ -211,6 +240,8 @@ class GasOverrideController:
     self._gas_last = False
     self._hold_left = 0.0
     self._coast_elapsed = 0.0
+    self._hard_decel_latch = False
+    self._ttc_latch = False
 
   def _poll_param(self, dt: float) -> None:
     """按 GAS_OVERRIDE_PARAMS_PERIOD_S 轮询运行期开关。
@@ -281,7 +312,8 @@ class GasOverrideController:
     # ---- 0b. 安全例外（需求 1 的两个例外 + FCW/forceDecel 守卫）----
     # 放在 v_cruise 守卫之前：forceDecel 会把 v_cruise 置 0，先查安全例外
     # 才能把 reason 记成 "forceDecel" 而不是含糊的 "no_v_cruise"。
-    safe_reason = self._check_safety(v_ego, lead_present, d_rel, v_lead, fcw, force_decel)
+    safe_reason = self._check_safety(v_ego, lead_present, d_rel, v_lead, fcw, force_decel,
+                                     a_target_in)
     if safe_reason:
       return self._to_inactive(ctx, safe_reason)
 
@@ -326,10 +358,15 @@ class GasOverrideController:
     return self._to_inactive(ctx, "")
 
   # ------------------------------------------------------------------------
-  @staticmethod
-  def _check_safety(v_ego: float, lead_present: bool, d_rel: float,
-                    v_lead: float, fcw: bool, force_decel: bool) -> str:
-    """返回非空字符串 = 安全例外成立（不让位），字符串是原因（用于日志）。"""
+  def _check_safety(self, v_ego: float, lead_present: bool, d_rel: float,
+                    v_lead: float, fcw: bool, force_decel: bool,
+                    a_target_in: float) -> str:
+    """返回非空字符串 = 安全例外成立（不让位），字符串是原因（用于日志）。
+
+    判据按"响应速度"排序：forceDecel / FCW 是系统级急停信号，最优先；
+    其次是需求里的两个距离例外（a/b，reason 文案保持稳定，别乱改）；
+    最后是 e/f —— 它们是**带滞回**的，闩锁状态存在实例上。
+    """
     if GAS_OVERRIDE_FORCE_DECEL_GUARD and force_decel:
       return "forceDecel"
     if GAS_OVERRIDE_FCW_GUARD and fcw:
@@ -340,6 +377,30 @@ class GasOverrideController:
       closing_kph = (v_ego - v_lead) * 3.6
       if d_rel < GAS_SAFE_D_REL_CLOSE_M and closing_kph > GAS_SAFE_CLOSING_KPH:
         return f"lead<{GAS_SAFE_D_REL_CLOSE_M:g}m+fast({d_rel:.2f}m,{closing_kph:.1f}kph)"
+
+    # ---- e：系统本帧在要求"硬减速" ⇒ 放弃让位（带滞回）----
+    if GAS_SAFE_A_TARGET_HARD is not None:
+      if a_target_in >= GAS_SAFE_A_TARGET_RELEASE:
+        self._hard_decel_latch = False
+      elif a_target_in <= GAS_SAFE_A_TARGET_HARD:
+        self._hard_decel_latch = True
+      if self._hard_decel_latch:
+        return f"aTgt{a_target_in:.2f}"
+
+    # ---- f：TTC 兜底（带滞回）----
+    if GAS_SAFE_TTC_ENTER_S is not None:
+      ttc = None
+      if lead_present and d_rel > 0.0:
+        closing = v_ego - v_lead
+        if closing >= GAS_SAFE_TTC_MIN_CLOSING_MS:
+          ttc = d_rel / closing
+      if ttc is None or ttc >= GAS_SAFE_TTC_RELEASE_S:
+        self._ttc_latch = False
+      elif ttc <= GAS_SAFE_TTC_ENTER_S:
+        self._ttc_latch = True
+      if self._ttc_latch and ttc is not None:
+        return f"ttc{ttc:.1f}s"
+
     return ""
 
   def _to_inactive(self, ctx: tuple, reason: str) -> GasOverrideResult:
@@ -379,7 +440,7 @@ class GasOverrideController:
     # 常态 inactive 且无原因时不打印，避免 20 Hz 刷爆 swaglog；
     # "安静"原因（关掉功能 / 没设巡航）只在跳变时报一行，不按秒刷。
     now = time.monotonic()
-    interesting = active or (reason != "" and reason not in _QUIET_REASONS)
+    interesting = active or (reason != "" and not reason.startswith(_QUIET_REASON_PREFIXES))
     due = now >= self._log_next_t
     worth_logging = (interesting or reason != "" or self._logged_phase not in ("inactive", ""))
     log_line: str | None = self._param_note
