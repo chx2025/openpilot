@@ -57,6 +57,8 @@
   * FCW 置位（GAS_OVERRIDE_FCW_GUARD）—— 碰撞即将发生，不参与让位
   * forceDecel（驾驶员监控强制减速，GAS_OVERRIDE_FORCE_DECEL_GUARD）
   * vCruise 未就绪 / <= GAS_OVERRIDE_MIN_V_CRUISE_MS（视为"没设巡航"）
+  * e（系统本帧正在要求硬减速）/ f（TTC 过小）—— 但两者在
+    「本车静止 + 前车静止」场景闸门内**豁免**（见下方 e/f 段与 crawl_gate.py）
 
 设计取舍（为什么这样做）
 ──────────────────────────────────────────────────────────────────────────
@@ -122,6 +124,19 @@ GAS_OVERRIDE_PARAMS_PERIOD_S: float = 1.0
 #   -0.3 = 「减小」减速动作（默认，保留最小收敛能力）
 #    0.0 = 「暂停」一切减速动作（完全交给驾驶员油门）
 GAS_PRESSED_A_FLOOR: float = -0.3
+# ★ 2026-09-26 四版：「本车静止 + 前车静止」蠕动闸门（crawl_gate.py）打开时的地板。
+#   沿用 -0.3 有个致命问题：闸门场景下上游只给 -0.16（不是 -2.75），而
+#   -0.16 已经**高于** -0.3 ⇒ 地板压根没生效 ⇒ 车在 0.4 m/s 这种蠕动速度下
+#   被 -0.16 按住。实车证据（20:57，swaglog.0000001040/1041）：踩油门 4 次，
+#   车速只到 0.8 / 1.4 / 1.7 km/h 就回 0，位移约 0.4 m，用户反馈「还是不蠕动」。
+#   0.0 = 闸门窗口内**完全暂停减速**，把蠕动交给驾驶员油门。仍然
+#   **只抬地板、绝不产生正加速**（0.0 不是加速指令，是「不干预」）。
+#   为什么只在这个闸门里用 0.0：闸门要求本车已静止(vEgo<=0.3) + 前车静止
+#   (vLead<=1.0) + dRel>2 m，动能几乎为零；而 09-25 安全缺口那种「行驶中
+#   踩油门 + dRel 28.7 m + TTC 3.9 s」场景闸门**根本不会开** ⇒ 
+#   GAS_PRESSED_A_FLOOR 的 -0.3 在那些场景原样保留，安全性一字未动。
+#   回退：本值改回 -0.3，或把 CRAWL_GATE_ENABLED 置 False（两模块一起退）。
+GAS_CRAWL_A_FLOOR: float = 0.0
 # 安全例外 a（需求 1.a）：前车车距 < 4 m **且** 本车比前车快 > 10 km/h
 GAS_SAFE_D_REL_CLOSE_M: float = 4.0
 GAS_SAFE_CLOSING_KPH: float = 10.0
@@ -152,31 +167,35 @@ GAS_SAFE_TTC_MIN_CLOSING_MS: float = 1.0        # 闭合速度下限，低于此
 # ⇒ 车一顿一顿。进入/退出用两个不同阈值把带拉开。
 # 把 e/f 的"进入"阈值置 None 可单独关掉那一条（测试与调试用）。
 
-# ==== e/f 的低速豁免（2026-09-26 实车后新增）================================
-# 背景：**停车起步**场景（本车静止 + 前方 4 m 静止障碍 + 巡航已设 30）——
+# ==== e/f 的场景豁免（2026-09-26；二版上移到 crawl_gate.py）==================
+# 背景：**停车起步**场景（本车静止 + 前方静止前车 + 巡航已设）——
 # 让位在踩油门当下被 e/f 反复闩锁，车"只动一下"、松油门"直接被按死"。
 # 证据 + 复现：gas_patch/evidence/静止起步踩油门被刹_*.md、verify_park_start3.py。
 #
-#   e 豁免：`a_target ≤ −2.0` 在低速**没有物理意义** —— 系统在停车场里对 4 m 外的
+#   e 豁免：`a_target ≤ −2.0` 在这个场景里**没有物理意义** —— 系统对几米外的
 #     静止障碍也会给 −2.0 的"保持停止"意图，那不是"危险"信号。
-#   f 豁免：**静止前车 + 本车低速**时 `TTC = dRel / vEgo` 过于保守 ——
+#   f 豁免：本车静止/极低速 + 前车静止时 `TTC = dRel / vEgo` 过于保守 ——
 #     驾驶员正用油门做厘米级蠕行控制，而 4 m 障碍在 3.6 km/h 就算"危险"
 #     （`v_ego ≥ dRel/4`），车一动就撞线，且释放要 TTC > 6 s ⇒ 几乎要重新停住
 #     才解除 ⇒ 让位反复失效 ⇒ 一冲一停。
 #
-# ⚠️ f 豁免必须**两个条件同时成立**（静止前车 AND 本车低速），这是本次修复里
-#    最容易写错、后果最严重的一处：只写"前车静止"会把
+# ★ 2026-09-26 二版：豁免条件从本文件的局部常量**上移**到 crawl_gate.py ——
+#   「本车静止 AND 前车静止」，进入即 latch，覆盖整个"起步→蠕动→再停住"过程。
+#   比原来的「本车低速 < 3 m/s AND 前车静止」更严：原条件在**行进中减速接近**
+#   静止前车时也成立，正是 09-26 15:39 "刹车不连贯"的来源。
+#   调用方（longitudinal_planner）每帧把 `crawl_gate` 传进来，本模块不再自己判定。
+#
+# ⚠️ 为什么必须"本车静止"而不是"本车低速"：只写"前车静止"会把
 #    **「高速冲向静止前车」**（54 km/h / 30 m ⇒ TTC = 2 s，货真价实的碰撞风险）
-#    一并豁免掉。回归 verify_ef_exempt.py 段 2 专门守这条边界。
+#    一并豁免掉。闸门回归见 verify_crawl_gate.py 段 2。
 #
 # ⚠️ 豁免**有严格边界**，不是放松保护：
 #   * 09-25 实车那一次（前车 33.9 km/h 在动、本车 43.9 km/h、dRel 28.7 m）
 #     **不受任何影响**（回归：34/160 帧完全一致）。
 #   * 两条 a/b **绝对距离例外（< 2 m / < 4 m+快 10 km/h）一个字没动**，
-#     低速下始终无条件生效，是真正的兜底。
-#   * 回到高速立即恢复全部保护：e 在低速段主动清闩锁，不留"旧状态"。
-GAS_SAFE_LOW_SPEED_MS: float = 3.0       # v_ego < 此值 ⇒ 不认 e（≈10.8 km/h）
-GAS_SAFE_STATIC_LEAD_MS: float = 1.0     # v_lead <= 此值 ⇒ 前车视为静止（≈3.6 km/h）
+#     任何速度下始终无条件生效，是真正的兜底。
+#   * 闸门一关（踩刹车 / 前车起步 / 速度超 3 m/s / 贴到 2 m）立即恢复全部保护，
+#     且 e 在闸门关闭时主动清闩锁，不留"旧状态"。
 
 # vCruise <= 该值（m/s）视为"没有设定巡航速度"，不干预（3.6 km/h）
 GAS_OVERRIDE_MIN_V_CRUISE_MS: float = 1.0
@@ -307,6 +326,7 @@ class GasOverrideController:
     v_lead: float = 0.0,
     fcw: bool = False,
     force_decel: bool = False,
+    crawl_gate: bool = False,
   ) -> GasOverrideResult:
     """每帧调用一次（plannerd 20 Hz，dt = DT_MDL = 0.05）。
 
@@ -323,6 +343,9 @@ class GasOverrideController:
       lead_present / d_rel / v_lead: radarState.leadOne 的 present / dRel / vLead
       fcw: 本车 FCW 是否置位
       force_decel: controlsState.forceDecel
+      crawl_gate: **「本车静止 + 前车静止」场景闸门**（crawl_gate.py）是否打开。
+        只有它为 True 时 e/f 的"场景豁免"才生效；False 时 e/f 按原判据全额生效。
+        由纵向规划器在调用本模块**之前**更新好（同一帧的闸门状态）。
 
     Returns:
       GasOverrideResult（a_target_out 恒为已应用地板/封顶后的值）
@@ -339,7 +362,7 @@ class GasOverrideController:
     # 放在 v_cruise 守卫之前：forceDecel 会把 v_cruise 置 0，先查安全例外
     # 才能把 reason 记成 "forceDecel" 而不是含糊的 "no_v_cruise"。
     safe_reason = self._check_safety(v_ego, lead_present, d_rel, v_lead, fcw, force_decel,
-                                     a_target_in)
+                                     a_target_in, crawl_gate)
     if safe_reason:
       return self._to_inactive(ctx, safe_reason)
 
@@ -354,7 +377,9 @@ class GasOverrideController:
       self._hold_left = GAS_RELEASE_RESUME_DELAY_S
       self._coast_elapsed = 0.0
       self._phase = "pressed"
-      return self._emit(ctx, GAS_PRESSED_A_FLOOR, None, "pressed", "", True)
+      # 闸门打开 ⇒ 完全暂停减速（见 GAS_CRAWL_A_FLOOR）；否则维持 -0.3
+      floor = GAS_CRAWL_A_FLOOR if crawl_gate else GAS_PRESSED_A_FLOOR
+      return self._emit(ctx, floor, None, "pressed", "", True)
 
     # ---- 3. 松油门：区分需求 2（超速）与需求 3（未超速）----
     if self._gas_last:
@@ -378,7 +403,10 @@ class GasOverrideController:
       self._hold_left -= dt
       if self._hold_left <= 0.0:
         return self._to_inactive(ctx, "")
-      return self._emit(ctx, GAS_PRESSED_A_FLOOR, None, "hold", "", True)
+      # 闸门打开 ⇒ 松油门后的 0.5 s 窗口内同样暂停减速，让「点一下油门」
+      # 真的能推动车往前走一小段（需求：加油柔性蠕动一点距离）。
+      floor = GAS_CRAWL_A_FLOOR if crawl_gate else GAS_PRESSED_A_FLOOR
+      return self._emit(ctx, floor, None, "hold", "", True)
 
     # ---- 4. 常态：不干预 ----
     return self._to_inactive(ctx, "")
@@ -386,12 +414,13 @@ class GasOverrideController:
   # ------------------------------------------------------------------------
   def _check_safety(self, v_ego: float, lead_present: bool, d_rel: float,
                     v_lead: float, fcw: bool, force_decel: bool,
-                    a_target_in: float) -> str:
+                    a_target_in: float, crawl_gate: bool = False) -> str:
     """返回非空字符串 = 安全例外成立（不让位），字符串是原因（用于日志）。
 
     判据按"响应速度"排序：forceDecel / FCW 是系统级急停信号，最优先；
     其次是需求里的两个距离例外（a/b，reason 文案保持稳定，别乱改）；
-    最后是 e/f —— 它们是**带滞回**的，闩锁状态存在实例上。
+    最后是 e/f —— 它们**带滞回**（闩锁状态存在实例上），且带场景豁免：
+    只有 `crawl_gate` 打开（本车静止 + 前车静止，见 crawl_gate.py）时才不认 e/f。
     """
     if GAS_OVERRIDE_FORCE_DECEL_GUARD and force_decel:
       return "forceDecel"
@@ -405,10 +434,11 @@ class GasOverrideController:
         return f"lead<{GAS_SAFE_D_REL_CLOSE_M:g}m+fast({d_rel:.2f}m,{closing_kph:.1f}kph)"
 
     # ---- e：系统本帧在要求"硬减速" ⇒ 放弃让位（带滞回）----
-    # 低速豁免见 GAS_SAFE_LOW_SPEED_MS：停车场里对静止障碍的 −2.0 不代表危险。
+    # 场景豁免：闸门打开（本车静止 + 前车静止）时，−2.0 只是系统对几米外静止
+    # 障碍"保持停止"的意图，不代表危险，故不认 e。
     if GAS_SAFE_A_TARGET_HARD is not None:
-      if v_ego < GAS_SAFE_LOW_SPEED_MS:
-        # 低速段清闩锁 ⇒ 一旦回到高速立即重新按原判据判断，不带旧状态
+      if crawl_gate:
+        # 闸门开 ⇒ 清闩锁；闸门一关立即按原判据重新判断，不带旧状态
         self._hard_decel_latch = False
       else:
         if a_target_in >= GAS_SAFE_A_TARGET_RELEASE:
@@ -419,10 +449,12 @@ class GasOverrideController:
           return f"aTgt{a_target_in:.2f}"
 
     # ---- f：TTC 兜底（带滞回）----
-    # 豁免：**静止前车 AND 本车低速**（见 GAS_SAFE_STATIC_LEAD_MS）。两者必须同时成立
-    # —— 只按"前车静止"会放掉"高速冲向静止前车"这个真危险场景。
+    # 场景豁免：闸门打开（本车静止 + 前车静止；latch 后覆盖整个"起步→蠕动→
+    # 再停住"过程）时，TTC 对厘米级蠕行过于保守，不认 f。
+    # ⚠️ 必须是"本车静止"而不是"本车低速" —— 否则会放掉
+    #    **「高速冲向静止前车」**（54 km/h / 30 m ⇒ TTC = 2 s，真危险）。
     if GAS_SAFE_TTC_ENTER_S is not None:
-      slow_crawl = (v_lead <= GAS_SAFE_STATIC_LEAD_MS) and (v_ego < GAS_SAFE_LOW_SPEED_MS)
+      slow_crawl = crawl_gate
       ttc = None
       if lead_present and d_rel > 0.0 and not slow_crawl:
         closing = v_ego - v_lead
