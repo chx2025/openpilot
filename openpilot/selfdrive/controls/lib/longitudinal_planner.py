@@ -20,6 +20,10 @@ from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import Lon
 from openpilot.sunnypilot.selfdrive.controls.lib.turn_decel import TurnDecelController
 from openpilot.sunnypilot.selfdrive.controls.lib.gas_override import GasOverrideController
 from openpilot.sunnypilot.selfdrive.controls.lib.stop_soften import StopSoftenController
+from openpilot.sunnypilot.selfdrive.controls.lib.crawl_gate import (
+  CRAWL_GATE_A_BOOST, CrawlGate)
+from openpilot.sunnypilot.selfdrive.controls.lib.creep_guard import CreepGuard
+from openpilot.sunnypilot.selfdrive.controls.lib.creep_step import CreepStep
 
 A_CRUISE_MAX_BP = [0., 2.77, 5.55, 8.33, 11.11, 13.89, 16.6, 19.4, 22.22, 25, 27.78, 33.33]
 A_CRUISE_MAX_VALS = [1.10, 0.9, 0.80, 0.65, 0.50, 0.40, 0.35, 0.35, 0.35, 0.33, 0.31, 0.29]
@@ -41,12 +45,12 @@ _A_TOTAL_MAX_BP = [20., 40.]
 # 比非实验模式的查表值（低速 1.10 → 高速 0.29）猛得多，畅通路段模型
 # 会把 desiredAcceleration 拉满，体感偏冲。
 #
-# 这里单独把 e2e 分支收窄到 1.6（≈0.16 g）。
+# 这里单独把 e2e 分支收窄到 1.3（≈0.13 g）。
 # ★生效机制：a_cruise 永远在 candidates 里且 min() 取小 ⇒ 只要压住
 #   a_cruise 的上限，最终 output_a_target 就不可能超过它，
 #   无论 MPC 轨迹或 e2e 候选给多大都会被 min 掉。
 #   （所以不需要去改 long_mpc.py 的求解约束，也就避开了动求解器的风险。）
-E2E_MAX_ACCEL = 1.6
+E2E_MAX_ACCEL = 1.3
 
 def get_max_accel(v_ego):
   return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
@@ -55,7 +59,7 @@ def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
 
 def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
-  # 实验模式走 E2E_MAX_ACCEL(1.6)，非实验模式走速度查表（低速 1.10 → 高速 0.29）。
+  # 实验模式走 E2E_MAX_ACCEL(1.3)，非实验模式走速度查表（低速 1.10 → 高速 0.29）。
   # 见上方 E2E_MAX_ACCEL 的说明：这里压住 a_cruise 的上限，就压住了整条链路的正加速上限。
   max_accel = E2E_MAX_ACCEL if e2e else get_max_accel(v_ego)
 
@@ -99,9 +103,26 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.gas_override = GasOverrideController(Params())
 
     # 「低速/静止 + 前方静止目标」的减速柔化（见 stop_soften.py 文件头）。
-    # 只在 v_ego 低 + 前车静止 + 距离 > 2 m 时抬下限，且地板含
-    # "恰好停得住"的物理下界 ⇒ 不削弱任何真正的制动能力。
+    # 二版（2026-09-26）：只在**场景闸门**打开时参与 —— 即"本车静止 + 前车静止"，
+    # 且 2 m 是最小车间距（用户："保证最小车距为 2"）。
     self.stop_soften = StopSoftenController()
+
+    # 「静止起步蠕动」场景闸门（见 crawl_gate.py 文件头）。
+    # 本车静止 + 前车静止 ⇒ 开门（latch，覆盖整个"起步→蠕动→再停住"），
+    # 此后 gas_override 的 e/f 豁免与 stop_soften 的柔化才允许参与；
+    # 其余一切工况（行进中减速接近、前车在动、高速）一律跳过。
+    self.crawl_gate = CrawlGate()
+
+    # 「前车静止 + 未踩油门」自动靠近守卫（第 6 版，见 creep_guard.py 文件头）。
+    # 它只压上限（min），与 crawl_gate / stop_soften 的「抬下限」方向相反，
+    # 所以在 planner 里必须排在最后（见接线段说明），否则收紧量会被 max 抬回去。
+    self.creep_guard = CreepGuard()
+
+    # 「松油门 ⇒ 定量蠕动一步」（第 8 版，见 creep_step.py 文件头）。
+    # 需求：「松油门，如果车间距大于 4，蠕动 1 米；小于 2 m 直接刹死；
+    #        二者之间蠕动 0.5 米」+「像油车怠速蠕行」。
+    # 它同时提供一条独立的近距硬底线（dRel ≤ 2 m ⇒ −2.0），闸门内外都生效。
+    self.creep_step = CreepStep()
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -146,6 +167,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.gas_override.reset()
       # 柔化模块无累计状态以外的相位，但保持与上面两个模块一致的复位语义
       self.stop_soften.reset()
+      # 场景闸门：上下文已丢失（不知道车从哪来），必须重新满足
+      # "本车静止 + 前车静止"才开门，不能把上一段行程的 latch 带过来
+      self.crawl_gate.reset()
+      # 自动靠近守卫无 latch，但保持与其它模块一致的复位语义
+      self.creep_guard.reset()
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -225,6 +251,32 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     #     在没接管时武装松油门窗口。
     if not reset_state:
       lead = sm['radarState'].leadOne
+
+      # ★ 场景闸门（见 crawl_gate.py 文件头）：本车静止 + 前车静止 ⇒ 开门
+      #   （latch，覆盖整个"起步→蠕动→再停住"过程）；踩刹车 / 前车起步 /
+      #   车速超 3 m/s / 贴到 2 m ⇒ 关门。
+      #   必须在两个柔性模块**之前**更新 —— 它们是同一帧的同一份状态。
+      crawl = self.crawl_gate.update(
+        v_ego=v_ego,
+        lead_present=bool(lead.present),
+        d_rel=float(lead.dRel),
+        v_lead=float(lead.vLead),
+        brake_pressed=bool(sm['carState'].brakePressed),
+      )
+      if self.crawl_gate.last_change:
+        # 闸门进出是"这段为什么柔化 / 为什么不柔化"的关键证据，必落盘。
+        # ★ `present` / `brk` / `why` 三个字段是 2026-09-26 补的：
+        #   上一版只打了 vEgo/dRel/vLead，结果实车出现 20 Hz enter/exit 抖动
+        #   时，三个可见值**完全不变** ⇒ 无法判断到底是哪条退出判据在生效。
+        #   补上之后，看 `why=` 一眼就知道关门原因（min_gap / brake /
+        #   lead_lost / lead_moving / vEgo）。
+        cloudlog.info(f"[CrawlGate] {self.crawl_gate.last_change} "
+                      f"vEgo={v_ego * 3.6:.1f} dRel={lead.dRel:.1f} "
+                      f"vLead={lead.vLead * 3.6:.1f} "
+                      f"present={int(bool(lead.present))} "
+                      f"brk={int(bool(sm['carState'].brakePressed))} "
+                      f"why={self.crawl_gate.last_reason or '-'}")
+
       gas_res = self.gas_override.update(
         gas_pressed=bool(sm['carState'].gasPressed),
         v_ego=v_ego,
@@ -240,20 +292,109 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         v_lead=float(lead.vLead),
         fcw=bool(self.fcw),
         force_decel=bool(sm['controlsState'].forceDecel),
+        # e/f 的**场景豁免**：只有"本车静止 + 前车静止"闸门打开时才豁免（见 crawl_gate.py）
+        crawl_gate=crawl,
       )
       output_a_target = gas_res.a_target_out
       # 需求 3「不要有空档期」：低速时 LongControl 会因为 should_stop 把状态机
       # 切到 stopping（不再跟随 a_target）。让位期间一并清掉该意图。
-      if gas_res.suppress_should_stop:
+      # ★ 2026-09-26 三版：**场景闸门打开期间也清「停车意图」**。
+      #
+      # 为什么：`should_stop(v_ego, a_target) = v_ego < 0.3 and a_target < 0.1`
+      # （见 gas_override.py 文件头）在「本车静止 + 前车静止」时**恒为 True**
+      # —— 候选池第 190 行还并入了 e2e 的 `modelV2.action.shouldStop`，前方几米
+      # 停着车时它必然置位。而 `longcontrol.py` 的 `stopping` 分支**完全不看
+      # a_target**，只把 last_output_accel 以 1 m/s²/s 爬向 `CP.stopAccel`(−2.0)
+      # 并锁存 ⇒ 驾驶员踩的那一脚油门（物理油门，本车无 gas interceptor）被
+      # −2.0 正好抵消 ⇒ 车 0.0 km/h 纹丝不动。
+      #
+      # 实车证据（2026-09-26 09:55，swaglog.0000000966，重启后新代码）：
+      #   [CrawlGate] enter vEgo=1.0 dRel=3.7 vLead=0.1     ← 闸门正常开门
+      #   [GasOverride] pressed  gas=1 vEgo=0.0 aIn=-0.03   ← 让位也正常，上游只给 −0.03
+      # 两个柔性模块都在正常工作、上游根本没有硬刹，车却不动 ⇒ 减速度只可能来自
+      # 这条状态机锁存。旧做法只在**踩油门那几帧**（gas_override 的
+      # `suppress_should_stop`）清，让位窗口一过（松油门 0.5 s）它就回来 ⇒ 正是
+      # 用户说的「还是直接刹住」。
+      #
+      # 为什么安全：清理范围被闸门圈得很死 ——
+      #   * 进入要求「本车静止 + 有前车 + 前车静止 + dRel > 2 m」；
+      #   * 退出任一成立即恢复：踩刹车 / 前车起步 / v_ego > 3 m/s / **dRel ≤ 2 m**；
+      #   * 贴到 2 m 闸门立刻关 ⇒ should_stop 立即恢复 ⇒ stopping 接管 ⇒
+      #     **停位就是需求里的最小车距 2 m**，该停的时候一秒不晚；
+      #   * 闸门窗口内 a_target 仍由候选池 + gas_override 地板 + 柔化共同决定，
+      #     FCW / forceDecel / a、b 两条绝对距离例外（< 2 m、< 4 m 且快 10 km/h）
+      #     一个字没动 —— 真正需要刹的时刻一点没让。
+      if gas_res.suppress_should_stop or crawl:
         self.output_should_stop = False
       if gas_res.log is not None:
         cloudlog.info(gas_res.log)
 
-      # 「低速/静止 + 前方静止目标」的减速柔化（需求与安全论证见
-      # stop_soften.py 文件头）。位置：gas_override 之后、np.clip 之前。
+      # ---- 闸门 latch 期间「放行蠕动」（第 8 版；论证见 crawl_gate.py / creep_step.py）----
+      # 演进史（每一版都是被实车否掉后重写的，别回退旧结论）：
+      #   5 版：闸门内「未踩油门 ⇒ 地板 0.0」把上游减速整段清零 ⇒ 从 8 m 滑到 2.0 m。
+      #   7 版：改成「温柔减速 + 底线保护」，但实车证明这一档**从未参与运算**
+      #         （接线是 max，而上游低速给 0 ~ -0.5 永远更高）。
+      #   8 版：删掉未踩油门那一档，闸门内只留踩油门放行；松油门后的定量蠕动
+      #         交给 creep_step.py 的位置闭环**主动完成**。
+      #   * 踩油门 ⇒ +0.6：放行油门（旧版把 aTarget 发 0，车机 ACC 会抑制油门）
+      # 位置：gas_override 之后、stop_soften 之前（同为“只抬下限”，max 幂等）。
+      if crawl and bool(sm['carState'].gasPressed):
+        # 第 8 版：闸门内**只保留"踩着油门"的放行档**。
+        #   为什么删掉"未踩油门"那一档：实车实证（swaglog 1185/1190）它发出的
+        #   `aFloor=-0.89` 与同帧 `aOut=+0.00` 并存 —— 接线是
+        #   `a_target = max(a_target, floor)`，而上游在低速给的是 0 ~ -0.5，
+        #   永远不低于地板 ⇒ 这一档从未真正参与过运算（减法方向是死的）。
+        #   真正让车停下的是上游自己的 -0.17 ~ -0.50。
+        #   现在松油门后的蠕动改由 creep_step.py 的位置闭环**主动完成**。
+        crawl_gap = self.crawl_gate.gap_m
+        crawl_floor = CRAWL_GATE_A_BOOST
+        crawl_tag = 'boost'
+        if output_a_target < crawl_floor:
+          output_a_target = crawl_floor
+        self._crawl_a_t = getattr(self, '_crawl_a_t', 0.0) + self.dt
+        if self._crawl_a_t >= 1.0 or getattr(self, '_crawl_a_tag', '') != crawl_tag:
+          self._crawl_a_t = 0.0
+          self._crawl_a_tag = crawl_tag
+          cloudlog.info(
+            f"[CrawlAid] {crawl_tag} vEgo={v_ego * 3.6:.1f} dRel={crawl_gap:.1f} "
+            f"gas=1 aFloor={crawl_floor:+.2f} aOut={output_a_target:+.2f}")
+      else:
+        self._crawl_a_t = 0.0
+        self._crawl_a_tag = ''
+
+      # ---- 定量蠕动步（第 8 版；需求与安全论证见 creep_step.py 文件头）----
+      # 位置：闸门放行档之后、stop_soften 之前。
+      # 接线方向与其它柔性模块相反 ——
+      #   * 蠕动推进（a ≥ 0）：max —— 抬下限，放行驾驶员的蠕动；
+      #   * 近距硬底线（dRel ≤ 2 m）：min —— 压上限，直接刹死。
+      # 安全：本模块只在「闸门内 + 油门下落沿」触发一步，且上游强减速
+      # （≤ -1.0）/ FCW / forceDecel 一出现就立刻让位（见 creep_step.py）。
+      self.creep_step.update(
+        v_ego=v_ego,
+        gas_pressed=bool(sm['carState'].gasPressed),
+        d_rel=float(lead.dRel),
+        lead_present=bool(lead.present),
+        v_lead=float(lead.vLead),
+        crawl_gate=crawl,
+        brake_pressed=bool(sm['carState'].brakePressed),
+        fcw=bool(self.fcw),
+        force_decel=bool(sm['controlsState'].forceDecel),
+        a_target_in=output_a_target,
+        dt=self.dt,
+      )
+      if self.creep_step.hard_stop:
+        output_a_target = min(output_a_target, self.creep_step.a_target)
+      elif self.creep_step.active:
+        output_a_target = max(output_a_target, self.creep_step.a_target)
+      if self.creep_step.log is not None:
+        cloudlog.info(self.creep_step.log)
+
+      # 「静止起步蠕动」场景下的减速柔化（需求与安全论证见 stop_soften.py 文件头）。
+      # 位置：gas_override 之后、np.clip 之前。
       #   - 与 gas_override 同为"只抬下限"，两者互不覆盖（连续两次 max）
-      #   - 触发条件含"前车静止"⇒ 常规跟车/前车在动完全不受影响
-      #   - 地板含物理下界（恰好停得住）⇒ 不会因为柔化而追尾
+      #   - 二版（2026-09-26）触发条件是**场景闸门**（本车静止 + 前车静止），
+      #     行进中减速接近静止前车不再柔化 ⇒ 不再有"柔化撤出"造成的阶跃
+      #   - 地板含物理下界（恰好能在前车前 2 m 停住）⇒ 不会因为柔化追尾
       soften_res = self.stop_soften.update(
         v_ego=v_ego,
         lead_present=bool(lead.present),
@@ -263,10 +404,33 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         force_decel=bool(sm['controlsState'].forceDecel),
         a_target_in=output_a_target,
         dt=self.dt,
+        # 场景闸门：非"本车静止 + 前车静止"一律跳过（见 crawl_gate.py）
+        crawl_gate=crawl,
       )
       output_a_target = soften_res.a_target_out
       if soften_res.log is not None:
         cloudlog.info(soften_res.log)
+
+      # ---- 自动靠近守卫（第 6 版；论证见 creep_guard.py 文件头）----
+      # 位置：crawl aid / stop_soften **之后**、np.clip 之前。
+      #   * 它们只抬下限（max），本模块只压上限（min），方向相反
+      #     ⇒ 必须排最后，否则收紧量会被它们的 max 又抬回去；
+      #   * 踩油门时本模块完全不介入
+      #     ⇒ 「蠕动到 2 m」仍然只由驾驶员的脚触发。
+      guard_res = self.creep_guard.update(
+        v_ego=v_ego,
+        lead_present=bool(lead.present),
+        d_rel=float(lead.dRel),
+        v_lead=float(lead.vLead),
+        gas_pressed=bool(sm['carState'].gasPressed),
+        fcw=bool(self.fcw),
+        force_decel=bool(sm['controlsState'].forceDecel),
+        a_target_in=output_a_target,
+        dt=self.dt,
+      )
+      output_a_target = guard_res.a_target_out
+      if guard_res.log is not None:
+        cloudlog.info(guard_res.log)
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
