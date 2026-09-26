@@ -19,6 +19,7 @@ from openpilot.common.params import Params
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 from openpilot.sunnypilot.selfdrive.controls.lib.turn_decel import TurnDecelController
 from openpilot.sunnypilot.selfdrive.controls.lib.gas_override import GasOverrideController
+from openpilot.sunnypilot.selfdrive.controls.lib.stop_soften import StopSoftenController
 
 A_CRUISE_MAX_BP = [0., 2.77, 5.55, 8.33, 11.11, 13.89, 16.6, 19.4, 22.22, 25, 27.78, 33.33]
 A_CRUISE_MAX_VALS = [1.10, 0.9, 0.80, 0.65, 0.50, 0.40, 0.35, 0.35, 0.35, 0.33, 0.31, 0.29]
@@ -97,6 +98,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # 由控制器自己按 1 Hz 轮询，所以这里只把 Params 句柄注入进去。
     self.gas_override = GasOverrideController(Params())
 
+    # 「低速/静止 + 前方静止目标」的减速柔化（见 stop_soften.py 文件头）。
+    # 只在 v_ego 低 + 前车静止 + 距离 > 2 m 时抬下限，且地板含
+    # "恰好停得住"的物理下界 ⇒ 不削弱任何真正的制动能力。
+    self.stop_soften = StopSoftenController()
+
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
@@ -138,6 +144,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.turn_decel.reset()
       # 同理清掉踩油门让位的相位机（否则再接管时可能带着旧的 coast/hold 相位）
       self.gas_override.reset()
+      # 柔化模块无累计状态以外的相位，但保持与上面两个模块一致的复位语义
+      self.stop_soften.reset()
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -240,6 +248,25 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
         self.output_should_stop = False
       if gas_res.log is not None:
         cloudlog.info(gas_res.log)
+
+      # 「低速/静止 + 前方静止目标」的减速柔化（需求与安全论证见
+      # stop_soften.py 文件头）。位置：gas_override 之后、np.clip 之前。
+      #   - 与 gas_override 同为"只抬下限"，两者互不覆盖（连续两次 max）
+      #   - 触发条件含"前车静止"⇒ 常规跟车/前车在动完全不受影响
+      #   - 地板含物理下界（恰好停得住）⇒ 不会因为柔化而追尾
+      soften_res = self.stop_soften.update(
+        v_ego=v_ego,
+        lead_present=bool(lead.present),
+        d_rel=float(lead.dRel),
+        v_lead=float(lead.vLead),
+        fcw=bool(self.fcw),
+        force_decel=bool(sm['controlsState'].forceDecel),
+        a_target_in=output_a_target,
+        dt=self.dt,
+      )
+      output_a_target = soften_res.a_target_out
+      if soften_res.log is not None:
+        cloudlog.info(soften_res.log)
 
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
