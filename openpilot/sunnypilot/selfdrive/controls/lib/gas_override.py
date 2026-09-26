@@ -152,6 +152,32 @@ GAS_SAFE_TTC_MIN_CLOSING_MS: float = 1.0        # 闭合速度下限，低于此
 # ⇒ 车一顿一顿。进入/退出用两个不同阈值把带拉开。
 # 把 e/f 的"进入"阈值置 None 可单独关掉那一条（测试与调试用）。
 
+# ==== e/f 的低速豁免（2026-09-26 实车后新增）================================
+# 背景：**停车起步**场景（本车静止 + 前方 4 m 静止障碍 + 巡航已设 30）——
+# 让位在踩油门当下被 e/f 反复闩锁，车"只动一下"、松油门"直接被按死"。
+# 证据 + 复现：gas_patch/evidence/静止起步踩油门被刹_*.md、verify_park_start3.py。
+#
+#   e 豁免：`a_target ≤ −2.0` 在低速**没有物理意义** —— 系统在停车场里对 4 m 外的
+#     静止障碍也会给 −2.0 的"保持停止"意图，那不是"危险"信号。
+#   f 豁免：**静止前车 + 本车低速**时 `TTC = dRel / vEgo` 过于保守 ——
+#     驾驶员正用油门做厘米级蠕行控制，而 4 m 障碍在 3.6 km/h 就算"危险"
+#     （`v_ego ≥ dRel/4`），车一动就撞线，且释放要 TTC > 6 s ⇒ 几乎要重新停住
+#     才解除 ⇒ 让位反复失效 ⇒ 一冲一停。
+#
+# ⚠️ f 豁免必须**两个条件同时成立**（静止前车 AND 本车低速），这是本次修复里
+#    最容易写错、后果最严重的一处：只写"前车静止"会把
+#    **「高速冲向静止前车」**（54 km/h / 30 m ⇒ TTC = 2 s，货真价实的碰撞风险）
+#    一并豁免掉。回归 verify_ef_exempt.py 段 2 专门守这条边界。
+#
+# ⚠️ 豁免**有严格边界**，不是放松保护：
+#   * 09-25 实车那一次（前车 33.9 km/h 在动、本车 43.9 km/h、dRel 28.7 m）
+#     **不受任何影响**（回归：34/160 帧完全一致）。
+#   * 两条 a/b **绝对距离例外（< 2 m / < 4 m+快 10 km/h）一个字没动**，
+#     低速下始终无条件生效，是真正的兜底。
+#   * 回到高速立即恢复全部保护：e 在低速段主动清闩锁，不留"旧状态"。
+GAS_SAFE_LOW_SPEED_MS: float = 3.0       # v_ego < 此值 ⇒ 不认 e（≈10.8 km/h）
+GAS_SAFE_STATIC_LEAD_MS: float = 1.0     # v_lead <= 此值 ⇒ 前车视为静止（≈3.6 km/h）
+
 # vCruise <= 该值（m/s）视为"没有设定巡航速度"，不干预（3.6 km/h）
 GAS_OVERRIDE_MIN_V_CRUISE_MS: float = 1.0
 
@@ -379,18 +405,26 @@ class GasOverrideController:
         return f"lead<{GAS_SAFE_D_REL_CLOSE_M:g}m+fast({d_rel:.2f}m,{closing_kph:.1f}kph)"
 
     # ---- e：系统本帧在要求"硬减速" ⇒ 放弃让位（带滞回）----
+    # 低速豁免见 GAS_SAFE_LOW_SPEED_MS：停车场里对静止障碍的 −2.0 不代表危险。
     if GAS_SAFE_A_TARGET_HARD is not None:
-      if a_target_in >= GAS_SAFE_A_TARGET_RELEASE:
+      if v_ego < GAS_SAFE_LOW_SPEED_MS:
+        # 低速段清闩锁 ⇒ 一旦回到高速立即重新按原判据判断，不带旧状态
         self._hard_decel_latch = False
-      elif a_target_in <= GAS_SAFE_A_TARGET_HARD:
-        self._hard_decel_latch = True
-      if self._hard_decel_latch:
-        return f"aTgt{a_target_in:.2f}"
+      else:
+        if a_target_in >= GAS_SAFE_A_TARGET_RELEASE:
+          self._hard_decel_latch = False
+        elif a_target_in <= GAS_SAFE_A_TARGET_HARD:
+          self._hard_decel_latch = True
+        if self._hard_decel_latch:
+          return f"aTgt{a_target_in:.2f}"
 
     # ---- f：TTC 兜底（带滞回）----
+    # 豁免：**静止前车 AND 本车低速**（见 GAS_SAFE_STATIC_LEAD_MS）。两者必须同时成立
+    # —— 只按"前车静止"会放掉"高速冲向静止前车"这个真危险场景。
     if GAS_SAFE_TTC_ENTER_S is not None:
+      slow_crawl = (v_lead <= GAS_SAFE_STATIC_LEAD_MS) and (v_ego < GAS_SAFE_LOW_SPEED_MS)
       ttc = None
-      if lead_present and d_rel > 0.0:
+      if lead_present and d_rel > 0.0 and not slow_crawl:
         closing = v_ego - v_lead
         if closing >= GAS_SAFE_TTC_MIN_CLOSING_MS:
           ttc = d_rel / closing
