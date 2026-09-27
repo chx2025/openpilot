@@ -1247,6 +1247,9 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
     lead1 @2;
     lead2 @3;
     e2e @4;
+    # sunnypilot：红灯 / 停止标志的虚拟停止线成为绑定约束（见 long_mpc.py）。
+    # 纯增量、接在 e2e 后面 ⇒ 不影响既有 wire 兼容性。
+    trafficStop @5;
   }
 
 

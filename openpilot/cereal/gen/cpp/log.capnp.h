@@ -466,6 +466,7 @@ enum class LongitudinalPlanSource_b231a753cc079120: uint16_t {
   LEAD1,
   LEAD2,
   E2E,
+  TRAFFIC_STOP,
 };
 CAPNP_DECLARE_ENUM(LongitudinalPlanSource, b231a753cc079120);
 CAPNP_DECLARE_SCHEMA(f241315ad87f2721);

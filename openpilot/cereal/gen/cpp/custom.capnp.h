@@ -175,6 +175,7 @@ enum class LongitudinalPlanSource_ad47440556d96ec4: uint16_t {
   SCC_VISION,
   SCC_MAP,
   SPEED_LIMIT_ASSIST,
+  TRAFFIC_STOP,
 };
 CAPNP_DECLARE_ENUM(LongitudinalPlanSource, ad47440556d96ec4);
 CAPNP_DECLARE_SCHEMA(a567bce822ae28fe);

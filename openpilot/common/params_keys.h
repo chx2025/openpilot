@@ -122,6 +122,12 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"SshEnabled", {PERSISTENT | BACKUP, BOOL}},
     {"TermsVersion", {PERSISTENT, STRING}},
     {"TorqueBar", {PERSISTENT | BACKUP, BOOL, "1"}},
+    // 红灯 / 停止标志辅助（sunnypilot 追加；见 sunnypilot/.../traffic_stop.py）
+    // 开关默认 0（关）。UI：设置 → Toggles → "Traffic Light / Stop Sign Assist"。
+    {"TrafficStopAssist", {PERSISTENT | BACKUP, BOOL, "0"}},
+    // 停位微调，单位**分米**（-50..+50 = ±5.0 m，UI 步长 5 dm = 0.5 m）。
+    // ★正值 = 停止位置往前移（车头更靠前 / 离停止线更近）；负值 = 往后移。
+    {"TrafficStopDistanceAdjust", {PERSISTENT | BACKUP, INT, "0"}},
     {"TrainingVersion", {PERSISTENT, STRING}},
     {"UbloxAvailable", {PERSISTENT, BOOL}},
     {"UpdateAvailable", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},

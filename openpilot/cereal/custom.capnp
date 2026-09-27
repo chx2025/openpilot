@@ -301,6 +301,8 @@ struct LongitudinalPlanSP @0xf35cc4560bbf6ec2 {
     sccVision @1;
     sccMap @2;
     speedLimitAssist @3;
+    # sunnypilot：红灯辅助在 targets 字典里成为 v_target 最小的一方（见 traffic_stop.py）
+    trafficStop @4;
   }
 
   struct E2eAlerts {
