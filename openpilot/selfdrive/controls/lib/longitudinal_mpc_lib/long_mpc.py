@@ -23,7 +23,11 @@ EXPORT_DIR = os.path.join(LONG_MPC_DIR, "c_generated_code")
 JSON_FILE = os.path.join(LONG_MPC_DIR, "acados_ocp_long.json")
 
 LongitudinalPlanSource = log.LongitudinalPlan.LongitudinalPlanSource
-MPC_SOURCES = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1)
+# 与 x_obstacles 的列**一一对应，顺序不能错**。第 3 栏 trafficStop 是
+# sunnypilot 追加的红灯/停止标志虚拟停止线，只在 traffic_stop.py 给出
+# 虚拟停止线时才出现（见下面 update() 的分支）。
+MPC_SOURCES = (LongitudinalPlanSource.lead0, LongitudinalPlanSource.lead1,
+               LongitudinalPlanSource.trafficStop)
 
 X_DIM = 3
 U_DIM = 1
@@ -307,7 +311,8 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  def update(self, radarstate, personality=log.LongitudinalPersonality.standard):
+  def update(self, radarstate, personality=log.LongitudinalPersonality.standard,
+             traffic_stop_obstacle_m: float | None = None):
     t_follow = get_T_FOLLOW(personality)
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
@@ -320,7 +325,18 @@ class LongitudinalMpc:
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 
     x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle])
-    self.source = MPC_SOURCES[np.argmin(x_obstacles[0])]
+
+    # sunnypilot 追加：红灯 / 停止标志的虚拟停止线，作为第 3 栏障碍物。
+    # 求解器会把它当成一台停在那里的车，一次求解出完整的 jerk-limited 减速
+    # 曲线去逼近它（见 sunnypilot/.../traffic_stop.py）。None = 本帧不参与。
+    if traffic_stop_obstacle_m is not None:
+      ts_obstacle = np.full(len(x_obstacles), float(traffic_stop_obstacle_m))
+      x_obstacles = np.column_stack([x_obstacles, ts_obstacle])
+
+    # 最近的障碍物 = 当前绑定约束（诊断值，最终会写进 longitudinalPlanSource）。
+    # 索引做防御性夹取：列数由上面的分支决定，不能假设恒等于 MPC_SOURCES 长度。
+    idx = int(np.argmin(x_obstacles[0]))
+    self.source = MPC_SOURCES[idx] if idx < len(MPC_SOURCES) else MPC_SOURCES[0]
 
     self.yref[:,:] = 0.0
     for i in range(N):

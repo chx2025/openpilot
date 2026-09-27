@@ -172,6 +172,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       self.crawl_gate.reset()
       # 自动靠近守卫无 latch，但保持与其它模块一致的复位语义
       self.creep_guard.reset()
+      # 红灯辅助：未接管 = 上下文已丢失（可能换了一趟行程），必须从 CRUISE
+      # 重新识别，不能把上一段的停等带过来（其滤波器按设计保留，见 traffic_stop.py）
+      self.traffic_stop.reset()
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -179,12 +182,52 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
+    # ── 红灯 / 停止标志「虚拟停止线」（见 sunnypilot/.../traffic_stop.py）────────
+    # 位置三要素，改前必读：
+    #  * 必须在 update_targets() **之前** —— 它产出的 output_v_target 要参与
+    #    targets 字典的 min() 竞选（压低 v_cruise ⇒ 压低 a_cruise）；
+    #  * 用**本帧原始 v_cruise**（上面刚算出、尚未被 SP 层降级）⇒ 无循环依赖；
+    #  * 必须在 mpc.update() **之前** —— stop_dist_m 要作为第 3 栏障碍物传进去。
+    # 为什么"实验模式下也有用"：主 planner 的 min(candidates, key=a_target)
+    # 只取更保守的一方。本模块让 aMpc 与 a_cruise 同时更保守 ⇒ 天然压得住
+    # e2e 的正加速，同时**从不削弱** e2e 自己更保守的判断（min 只会取更小值）。
+    self.traffic_stop.update(
+      model_x_traj=sm['modelV2'].position.x,
+      model_y_traj=sm['modelV2'].position.y,
+      model_v_traj=sm['modelV2'].velocity.x,
+      steering_angle_deg=steer_angle_without_offset,
+      gas_pressed=bool(sm['carState'].gasPressed),
+      left_blinker=bool(sm['carState'].leftBlinker),
+      lead_present=bool(sm['radarState'].leadOne.present),
+      d_rel=float(sm['radarState'].leadOne.dRel),
+      v_ego=v_ego,
+      a_ego=float(sm['carState'].aEgo),
+      v_cruise=v_cruise,
+      dt=self.dt,
+    )
+    if self.traffic_stop.log is not None:
+      cloudlog.info(self.traffic_stop.log)
+
     # Get new v_cruise and a_target from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.output_a_target = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.output_a_target, v_cruise)
 
+    # ★ 诊断探针（2026-09-27 加）：红灯辅助**是否真的赢下**候选池。
+    #   赢家由 SP 层 `min(targets, key=lambda k: targets[k][0])` 按 v_target 选出。
+    #   纵向链路原本没有"谁赢"的留痕 ⇒ 排查"半路莫名减速"只能靠这一条。
+    #   只在赢的时候打（1 Hz 节流）；没赢就静默，不吵。
+    if self.source == LongitudinalPlanSource.trafficStop:
+      self._ts_win_t = getattr(self, '_ts_win_t', 0.0) + self.dt
+      if self._ts_win_t >= 1.0:
+        self._ts_win_t = 0.0
+        cloudlog.info(f"[LongSrc] trafficStop WINS vTgt={v_cruise:.2f} "
+                      f"aTgt={self.output_a_target:+.2f} "
+                      f"ts_vTgt={self.traffic_stop.output_v_target:.2f} "
+                      f"d={self.traffic_stop.stop_dist_m}")
+
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.output_a_target)
-    self.mpc.update(sm['radarState'], personality=sm['selfdriveState'].personality)
+    self.mpc.update(sm['radarState'], personality=sm['selfdriveState'].personality,
+                    traffic_stop_obstacle_m=self.traffic_stop.stop_dist_m)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
@@ -324,7 +367,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       #   * 闸门窗口内 a_target 仍由候选池 + gas_override 地板 + 柔化共同决定，
       #     FCW / forceDecel / a、b 两条绝对距离例外（< 2 m、< 4 m 且快 10 km/h）
       #     一个字没动 —— 真正需要刹的时刻一点没让。
-      if gas_res.suppress_should_stop or crawl:
+      # ★ 2026-09-27 修（实车 swaglog 1272-1273 证据）：原来是
+      #   `if gas_res.suppress_should_stop or crawl:` —— **闸门一打开就清
+      #   output_should_stop**，后果是车刚停稳就失去主动保压：
+      #     02:12:04 `[LongCtrl] 2      vEgo=0.0 out=-1.36 sStop=1`（刹住）
+      #     02:12:05 `[LongCtrl] 2 -> 1 vEgo=0.0 out= 0.00 sStop=0`（闸门开 ⇒ 保压没了）
+      #   之后 47 s 只剩上游 -0.02~-0.18 的微值 ⇒ D 档怠速会自己往前蹭
+      #   （用户看到车距 4 m → 3 m）。
+      #   真正需要放行的是**驾驶员踩油门起步**：§22 修1 已给 longcontrol.py 的
+      #   stopping 加了 `not CS.gasPressed` 解锁，所以这里只需在 gasPressed 时放行
+      #   —— 与第 8 版「闸门内只保留踩油门档」完全一致。
+      if gas_res.suppress_should_stop or (crawl and bool(sm['carState'].gasPressed)):
         self.output_should_stop = False
       if gas_res.log is not None:
         cloudlog.info(gas_res.log)

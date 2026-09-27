@@ -8,17 +8,30 @@ See the LICENSE.md file in the root directory for more details.
 from openpilot.cereal import messaging, custom
 from opendbc.car import structs
 from openpilot.common.constants import CV
+from openpilot.common.realtime import DT_MDL
+from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.sunnypilot.selfdrive.controls.lib.dec.dec import DynamicExperimentalController
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver
+from openpilot.sunnypilot.selfdrive.controls.lib.traffic_stop import TrafficStopController
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
+
+# [LongWin] 探针用：候选来源 → 短名（**绝不 int(枚举)**，那会让 plannerd 崩循环）
+_LW_NAMES = {
+  LongitudinalPlanSource.cruise: "cruise",
+  LongitudinalPlanSource.sccVision: "sccV",
+  LongitudinalPlanSource.sccMap: "sccM",
+  LongitudinalPlanSource.speedLimitAssist: "sla",
+  LongitudinalPlanSource.trafficStop: "tstop",
+}
+_LW_ORDER = tuple(_LW_NAMES.keys())
 
 
 class LongitudinalPlannerSP:
@@ -29,12 +42,22 @@ class LongitudinalPlannerSP:
     self.scc = SmartCruiseControl()
     self.resolver = SpeedLimitResolver()
     self.sla = SpeedLimitAssist(CP, CP_SP)
+    # 红灯 / 停止标志「虚拟停止线」辅助（机制与安全边界见 traffic_stop.py 文件头）。
+    # 在**这里**实例化（SP 基类），主 planner `LongitudinalPlanner` 直接用
+    # `self.traffic_stop`。输出两条：
+    #   ① stop_dist_m  → 主 planner 传给 mpc.update(traffic_stop_obstacle_m=...)
+    #   ② output_v_target/output_a_target → 下面 targets 字典的候选之一
+    self.traffic_stop = TrafficStopController()
     self.generation = int(model_bundle.generation) if (model_bundle := get_active_bundle()) else None
     self.source = LongitudinalPlanSource.cruise
     self.e2e_alerts_helper = E2EAlertsHelper()
 
     self.output_v_target = 0.
     self.output_a_target = 0.
+
+    # [LongWin] 探针节流（见 update_targets 末段）
+    self._lw_t = 999.0
+    self._lw_last = None
 
   def is_e2e(self, sm: messaging.SubMaster) -> bool:
     experimental_mode = sm['selfdriveState'].experimentalMode
@@ -67,10 +90,41 @@ class LongitudinalPlannerSP:
       LongitudinalPlanSource.sccVision: (self.scc.vision.output_v_target, self.scc.vision.output_a_target),
       LongitudinalPlanSource.sccMap: (self.scc.map.output_v_target, self.scc.map.output_a_target),
       LongitudinalPlanSource.speedLimitAssist: (self.sla.output_v_target, self.sla.output_a_target),
+      # 红灯辅助：未激活时发 V_TARGET_SENTINEL（远大于任何真实巡航速度）
+      # ⇒ min() 永远选不中它 ⇒ 对上面四个来源严格零影响。
+      LongitudinalPlanSource.trafficStop: (self.traffic_stop.output_v_target,
+                                           self.traffic_stop.output_a_target),
     }
 
     self.source = min(targets, key=lambda k: targets[k][0])
     self.output_v_target, self.output_a_target = targets[self.source]
+
+    # ── [LongWin] 探针（2026-09-27 加；纯留痕，不参与任何控制判断）───────────
+    # 为什么必须有：本行的 `min(targets, key=v_target)` 会把**赢家的 v_target
+    # 直接当成新的巡航速度**返回给主 planner（`a_cruise = clip(v_cruise − v_ego)`
+    # 随之变负）⇒ 这就是「打直后莫名减速」的来源层。此前判赢家只能拿
+    # `[GasOverride]` 里的 vCruise 反推，**没有直接证据**，甚至无法区分
+    # 「setpoint 本身被压低」与「某个候选把 v_target 压下来了」。
+    # 字段：win= 赢家短名（见 _LW_NAMES）/ vCruise= 进本函数时的巡航设定 /
+    #       各候选 `v/a`：v 单位 **km/h**（便于对照车机显示，m/s × 3.6）、
+    #       a 单位 m/s²；`inf` = 该来源未激活（发的是 V_TARGET_SENTINEL）。
+    # 触发：赢家切换当帧必打 + 否则 1 Hz（两条都要 —— 只看跳变会在
+    #       「一直同一个赢家」时完全静默，而那正是需要证据的常态）。
+    try:
+      self._lw_t += DT_MDL
+      if self.source != self._lw_last or self._lw_t >= 1.0:
+        self._lw_t = 0.0
+        self._lw_last = self.source
+        parts = []
+        for k in _LW_ORDER:
+          v_kph = targets[k][0] * 3.6
+          vs = 'inf' if v_kph > 200.0 else f'{v_kph:.1f}'
+          parts.append(f"{_LW_NAMES[k]}={vs}/{targets[k][1]:+.2f}")
+        cloudlog.info(f"[LongWin] win={_LW_NAMES.get(self.source, '?')} "
+                      f"vCruise={v_cruise * 3.6:.0f} | " + " ".join(parts))
+    except Exception:
+      pass
+
     return self.output_v_target, self.output_a_target
 
   def update(self, sm: messaging.SubMaster) -> None:
