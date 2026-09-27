@@ -27,15 +27,45 @@
 
 唯一的例外是**滑行相位**（需求 2）额外加了一条**加速度封顶**（默认 0.0），
 因为"滑行"的物理语义就是"不加油"；理由见 GAS_RELEASE_COAST_A_CEIL 的注释。
+**缓释相位**（release）也只在减速侧动，且地板额外用 `min(0.0, ...)` 夹一层，
+保证 a_target > 0（想加速）时地板退化为 0 ⇒ `max(a_target, 0) = a_target`，
+加速侧**逐位透明**（与「只削加速仅限滑行相位」的不变式一致）。
 
-四个相位
+五个相位
 ──────────────────────────────────────────────────────────────────────────
   inactive  不干预（a_floor = None）——绝大多数时间
   pressed   gas=1 且无安全例外 → floor = GAS_PRESSED_A_FLOOR（默认 −0.3 m/s²）
   coast     松油门且 vEgo > vCruise → clamp 到 [floor, ceil] =
-            [滑行减速度, 0.0]，滑回到 vCruise 附近后交还原逻辑
+            [滑行减速度, 0.0]，滑回到 vCruise 附近后进入缓释
   hold      松油门且 vEgo <= vCruise → floor = GAS_PRESSED_A_FLOOR，维持
-            GAS_RELEASE_RESUME_DELAY_S（默认 0.5 s）后彻底交还原逻辑
+            GAS_RELEASE_RESUME_DELAY_S（默认 0.5 s）后进入缓释
+  release   缓释（2026-09-27 新增，补齐需求 3）：地板在 GAS_RELEASE_RAMP_S
+            （默认 0.4 s）内从「退出瞬间的地板」**线性斜坡到当前 a_target**；
+            斜坡走完那一帧地板恰好等于 a_target ⇒ 输出与原值**逐位相同**，
+            之后才彻底 inactive。（为什么需要它见下一节）
+
+需求 3 的「缓释」（release 相位，2026-09-27 实车后新增）
+──────────────────────────────────────────────────────────────────────────
+症状（用户 09-27 实车反馈）：路口转弯时踩油门，**方向回正后突然一脚刹车**，
+左转、右转都出现过。原话「感觉是跟踩油门和转弯有关系」。
+
+日志（swaglog，同一趟车）：
+    pressed  gas=1 vEgo=15.3 vCruise=55.0 aIn=-1.66 floor=-0.30 aOut=-0.30 ← 藏在 −0.30
+    inactive gas=0 vEgo=19.1 vCruise=22.1 aIn=-1.01 floor=None  aOut=-1.01 ← 一帧全放
+
+机制（两个东西叠加，**单项都无害**）：
+  * **源** = 上游（SCC-V 把路口当急弯 / MPC / 模型）本帧要 −1.0 ~ −1.7；
+  * **放大器** = 本模块「抬高地板」把那个负值**藏住**（floor = −0.3）；
+  * hold 窗口一过，`_to_inactive` 把 floor 从 −0.3 直接撤成 None
+    ⇒ **一帧内 −0.30 → −1.01**。下游 `LongControl` 是纯 PID + 前馈、
+    **没有 jerk 限幅** ⇒ 上游跳变 1:1 传到执行器，驾驶员感到"突然一脚"。
+
+修法：**不改变"藏住"这件事**（那是需求 1 的设计），只把**撤地板**这个过程
+从「一帧」摊成「GAS_RELEASE_RAMP_S」。用户脚还在踏板上时那段连续减速
+仍然被平滑掉，只是松油门后不再"一次兑现"。
+
+⚠️ 缓释**只作用于正常退出**（hold/coast 到期）。**安全例外一触发仍是
+一帧退出、不走缓释** —— 见 update() 里 `_check_safety` 排在最前面。
 
 开关（默认开启）
 ──────────────────────────────────────────────────────────────────────────
@@ -219,6 +249,21 @@ GAS_RELEASE_COAST_MAX_S: float = 60.0
 # ==== 需求 3：松油门且未超速 -> GAS_RELEASE_RESUME_DELAY_S 后交还 ===========
 GAS_RELEASE_RESUME_DELAY_S: float = 0.5
 
+# ==== 需求 3 补齐：「缓释」斜坡（2026-09-27 实车后新增）=====================
+# 让位退出（hold / coast 到期）时，地板不直接撤成 None，而是在 GAS_RELEASE_RAMP_S
+# 内从「退出瞬间的地板」线性斜坡到**当前 a_target**；斜坡终点地板 == a_target
+# ⇒ 交还那一帧的输出与下一帧「完全不干预」**逐位相同**，没有阶跃。
+# 实车问题与证据见文件头「需求 3 的『缓释』」一节：
+#   退出前一帧 aOut=−0.30、退出当帧 aOut=−1.01，一帧放出 0.71 m/s²；
+#   本轮实测最狠的一帧是 −4.34（那类会被安全例外 e 先挡掉，见下）。
+# 0.4 s 的依据：按最坏可缓释幅度（a_target = −2.0，正好是 e 的门槛）算，
+#   d(floor)/dt = (2.0 − 0.3) / 0.4 = 4.25 m/s³，与「无缓释时的一帧跳变」
+#   相比仍是 1/8 的斜率；而"少刹的那部分"总共只损失约 0.34 m/s 的 Δv
+#   （≈7 cm 行程）—— 对安全性无实质影响，故不额外加斜率上限。
+# 一键回退：GAS_RELEASE_RAMP_ENABLE = False（等价于回到"一帧撤地板"的老行为）。
+GAS_RELEASE_RAMP_ENABLE: bool = True
+GAS_RELEASE_RAMP_S: float = 0.4
+
 # ==== 低速"停车意图"清理（落地需求 3「不要有空档期」，见文件头说明）========
 GAS_OVERRIDE_CLEAR_STOP_INTENT: bool = True
 
@@ -248,11 +293,13 @@ class GasOverrideResult:
 class GasOverrideController:
   """每帧由 longitudinal_planner 调一次 update()。
 
-  内部维护：上次 gas 状态、hold 剩余时长、coast 已持续时长、Params 轮询到的
-  运行期开关，以及安全例外 e/f 的两个滞回闩锁。地板本身是**纯静态映射**，
+  内部维护：上次 gas 状态、hold 剩余时长、coast 已持续时长、**缓释（release）
+  的起点地板与已持续时长**、Params 轮询到的运行期开关，以及安全例外 e/f 的两个
+  滞回闩锁。地板本身是**纯静态映射**（缓释相位除外，见下），
   相位只由 (gas, v_ego, v_cruise) 决定，行为可预测、可复现；
-  唯一的额外状态是 e/f 的闩锁 —— 它们在 a_target / TTC 进入危险区时置位，
-  数值回升过释放阈值后才复位（没有它，输出会在让位/不让位之间逐帧跳变）。
+  唯一的额外状态是 e/f 的闩锁与缓释计时器 —— 闩锁在 a_target / TTC 进入危险区时
+  置位，数值回升过释放阈值后才复位（没有它，输出会在让位/不让位之间逐帧跳变）；
+  缓释计时器只在「退出让位」后的 GAS_RELEASE_RAMP_S 内有效，到期即清。
 
   `params` 用依赖注入而不是本模块 import，好处：
     - 模块保持零依赖，单测可以在没有 cereal/capnp 的机器上直接跑
@@ -265,6 +312,8 @@ class GasOverrideController:
     self._gas_last: bool = False       # 上一帧的 gasPressed（用于识别下降沿）
     self._hold_left: float = 0.0       # 松油门后 0.5 s 窗口剩余时长
     self._coast_elapsed: float = 0.0   # coast 已持续时长
+    self._release_from: float | None = None  # 缓释起点地板（退出让位那一帧的地板）
+    self._release_elapsed: float = 0.0       # 缓释已持续时长（s）
     self._log_next_t: float = 0.0      # 下一次允许打印的时刻（节流）
     self._logged_phase: str = ""       # 上一次已落盘的相位
     self._param_t: float = GAS_OVERRIDE_PARAMS_PERIOD_S  # 让首帧就同步一次参数
@@ -285,6 +334,8 @@ class GasOverrideController:
     self._gas_last = False
     self._hold_left = 0.0
     self._coast_elapsed = 0.0
+    self._release_from = None
+    self._release_elapsed = 0.0
     self._hard_decel_latch = False
     self._ttc_latch = False
 
@@ -376,6 +427,7 @@ class GasOverrideController:
       # 武装松油门后的短窗口（只在松油门的当帧被消费）
       self._hold_left = GAS_RELEASE_RESUME_DELAY_S
       self._coast_elapsed = 0.0
+      self._cancel_release()   # 缓释中又踩油门：立刻回到 pressed（地板本来就更松）
       self._phase = "pressed"
       # 闸门打开 ⇒ 完全暂停减速（见 GAS_CRAWL_A_FLOOR）；否则维持 -0.3
       floor = GAS_CRAWL_A_FLOOR if crawl_gate else GAS_PRESSED_A_FLOOR
@@ -392,21 +444,27 @@ class GasOverrideController:
 
     if self._phase == "coast":
       self._coast_elapsed += dt
-      if v_ego <= v_cruise + GAS_RELEASE_COAST_EXIT_MARGIN_MS or self._coast_elapsed >= GAS_RELEASE_COAST_MAX_S:
-        return self._to_inactive(ctx, "")
       # 滑行：允许的减速度取「真实滑行」与「固定上限」里更狠的那个，
       # 且恒 <= GAS_RELEASE_COAST_MAX_DECEL < 0 → 一定收敛回 v_cruise。
       coast_floor = min(GAS_RELEASE_COAST_MAX_DECEL, accel_coast)
+      if v_ego <= v_cruise + GAS_RELEASE_COAST_EXIT_MARGIN_MS or self._coast_elapsed >= GAS_RELEASE_COAST_MAX_S:
+        # 到期交还：先缓释（地板从 coast_floor 斜坡到 a_target），不直接撤
+        return self._begin_release(ctx, coast_floor, dt)
       return self._emit(ctx, coast_floor, GAS_RELEASE_COAST_A_CEIL, "coast", "", True)
 
     if self._phase == "hold":
       self._hold_left -= dt
-      if self._hold_left <= 0.0:
-        return self._to_inactive(ctx, "")
       # 闸门打开 ⇒ 松油门后的 0.5 s 窗口内同样暂停减速，让「点一下油门」
       # 真的能推动车往前走一小段（需求：加油柔性蠕动一点距离）。
-      floor = GAS_CRAWL_A_FLOOR if crawl_gate else GAS_PRESSED_A_FLOOR
-      return self._emit(ctx, floor, None, "hold", "", True)
+      hold_floor = GAS_CRAWL_A_FLOOR if crawl_gate else GAS_PRESSED_A_FLOOR
+      if self._hold_left <= 0.0:
+        # 到期交还：先缓释（地板从 hold_floor 斜坡到 a_target），不直接撤
+        return self._begin_release(ctx, hold_floor, dt)
+      return self._emit(ctx, hold_floor, None, "hold", "", True)
+
+    # ---- 3b. 缓释（2026-09-27）：把"撤地板"这个阶跃摊到 GAS_RELEASE_RAMP_S 上 ----
+    if self._phase == "release":
+      return self._release_step(ctx, dt)
 
     # ---- 4. 常态：不干预 ----
     return self._to_inactive(ctx, "")
@@ -474,6 +532,7 @@ class GasOverrideController:
 
     `reason` 非空表示"本来该干预但被挡下"（安全例外 / 开关关闭 / 没设巡航），
     只有日志用途 —— 输出与"没有本模块"逐位相同。
+    ⚠️ 安全例外走这里时**不经过缓释**（一帧完全交还）：安全永远优先于舒适。
     """
     (gas_pressed, _v_ego, _v_cruise, _accel_coast, _a_target_in,
      _d_rel, _v_lead, _fcw) = ctx
@@ -481,15 +540,65 @@ class GasOverrideController:
     self._gas_last = bool(gas_pressed)
     self._hold_left = 0.0    # 安全例外/退化状态下不武装松油门窗口
     self._coast_elapsed = 0.0
+    self._cancel_release()
     return self._emit(ctx, None, None, "inactive", reason, False)
 
   # ------------------------------------------------------------------------
+  def _cancel_release(self) -> None:
+    """清掉缓释计时器（进入 pressed / 安全例外 / reset 时调用）。"""
+    self._release_from = None
+    self._release_elapsed = 0.0
+
+  def _begin_release(self, ctx: tuple, floor_from: float, dt: float) -> GasOverrideResult:
+    """进入缓释相位：地板从 floor_from 起，在 GAS_RELEASE_RAMP_S 内斜坡到 a_target。
+
+    `floor_from` 必须是**上一帧实际生效的地板**（pressed/hold 的 −0.3、闸门打开时的
+    0.0、或 coast 的 min(−0.3, accel_coast)）—— 这样缓释第一帧的输出与上一帧连续。
+    关掉 GAS_RELEASE_RAMP_ENABLE 时退回老行为（直接 inactive、无缓释）。
+    """
+    if not GAS_RELEASE_RAMP_ENABLE:
+      return self._to_inactive(ctx, "")
+    self._phase = "release"
+    self._release_from = floor_from
+    self._release_elapsed = 0.0
+    return self._release_step(ctx, dt)
+
+  def _release_step(self, ctx: tuple, dt: float) -> GasOverrideResult:
+    """缓释相位的一帧：floor = min(0.0, floor_from + (a_target − floor_from) · alpha)。
+
+    三条性质（都靠 max/min 的单调性保证，不依赖任何外部状态）：
+      * alpha ∈ [0, 1] ⇒ 地板**恒在 [floor_from, a_target] 之间** ⇒ a_target_out
+        只可能比原值**更温和**，绝不会更狠（仍是「只抬地板」）。
+      * `min(0.0, ·)` ⇒ a_target > 0（上游想加速）时地板退化为 0，
+        `max(a_target, 0) = a_target` ⇒ 加速侧**逐位透明**。
+      * alpha == 1 时地板**恰好等于**当前 a_target ⇒ 本帧 a_target_out == 原值，
+        与下一帧「完全不干预」逐位相同 ⇒ **交还没有阶跃**（这是缓释能成立的关键）。
+    终止条件：alpha 走满，或地板已经不再约束（floor <= a_target，此时本模块
+    对输出已无影响）—— 两者都让输出等于原值，故可以安全地退回 inactive。
+    """
+    (_gas_pressed, _v_ego, _v_cruise, _accel_coast, a_target_in,
+     _d_rel, _v_lead, _fcw) = ctx
+    floor_from = 0.0 if self._release_from is None else self._release_from
+    self._release_elapsed += dt
+    if GAS_RELEASE_RAMP_S <= 0.0:
+      alpha = 1.0
+    else:
+      alpha = min(1.0, self._release_elapsed / GAS_RELEASE_RAMP_S)
+    ramp_floor = min(0.0, floor_from + (a_target_in - floor_from) * alpha)
+    if alpha >= 1.0 or ramp_floor <= a_target_in:
+      # 地板不再约束（或斜坡已走满）⇒ 本帧与"不干预"等价，安全退回
+      return self._to_inactive(ctx, "")
+    return self._emit(ctx, ramp_floor, None, "release", "", True, ramp=alpha)
+
+  # ------------------------------------------------------------------------
   def _emit(self, ctx: tuple, a_floor: float | None, a_ceil: float | None,
-            phase: str, reason: str, active: bool) -> GasOverrideResult:
+            phase: str, reason: str, active: bool,
+            ramp: float | None = None) -> GasOverrideResult:
     """组装结果并做日志节流。
 
     地板只抬不降：`max(a_target_in, a_floor)`；封顶只削不加：`min(..., a_ceil)`。
     常态（a_floor/a_ceil 均为 None）时 a_target_out 与输入**逐位相同**。
+    `ramp` 只在缓释相位传入（[0,1] 的斜坡进度），其余相位日志里打 `--`。
     """
     (gas_pressed, v_ego, v_cruise, _accel_coast, a_target_in,
      d_rel, v_lead, fcw) = ctx
@@ -517,6 +626,7 @@ class GasOverrideController:
         f"gas={int(gas_pressed)} vEgo={v_ego * 3.6:.1f} vCruise={v_cruise * 3.6:.1f} "
         f"aIn={a_target_in:+.2f} floor={'None' if a_floor is None else f'{a_floor:+.2f}'} "
         f"ceil={'None' if a_ceil is None else f'{a_ceil:+.2f}'} "
+        f"ramp={'--' if ramp is None else f'{ramp:.2f}'} "
         f"aOut={a_target_out:+.2f} dRel={d_rel:.1f} vLead={v_lead * 3.6:.1f} "
         f"fcw={int(fcw)} reason={reason or '-'}"
       )

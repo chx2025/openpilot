@@ -10,6 +10,8 @@ Spec (user requirement, 2026-09-25):
      then the original logic takes over.
   3. After releasing the gas, if vEgo < vCruise -> the original system resumes
      normally after 0.5 s, with no dead gap.
+  3b. (2026-09-27) The hand-over at the end of requirement 2/3 must not be a step:
+     the floor is ramped back down over GAS_RELEASE_RAMP_S (section 5b).
 
 The controller is a stand-alone sunnypilot module that longitudinal_planner
 post-applies (`a_target = max(a_target, floor)`). These tests cover the
@@ -21,6 +23,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.gas_override import (
   GAS_OVERRIDE_ENABLE, GAS_OVERRIDE_PARAM_KEY, GAS_PRESSED_A_FLOOR,
   GAS_RELEASE_COAST_A_CEIL, GAS_RELEASE_COAST_EXIT_MARGIN_MS,
   GAS_RELEASE_COAST_MAX_DECEL, GAS_RELEASE_COAST_MAX_S,
+  GAS_RELEASE_RAMP_ENABLE, GAS_RELEASE_RAMP_S,
   GAS_RELEASE_RESUME_DELAY_S, GAS_SAFE_A_TARGET_HARD,
   GAS_SAFE_A_TARGET_RELEASE, GAS_SAFE_CLOSING_KPH, GAS_SAFE_D_REL_CLOSE_M,
   GAS_SAFE_D_REL_MIN_M, GAS_SAFE_TTC_ENTER_S, GAS_SAFE_TTC_RELEASE_S,
@@ -60,6 +63,9 @@ def test_constants_match_user_spec():
   assert GAS_RELEASE_RESUME_DELAY_S == 0.5
   assert GAS_RELEASE_COAST_A_CEIL == 0.0
   assert GAS_OVERRIDE_ENABLE is True
+  # release ramp added 2026-09-27 (see section 5b)
+  assert GAS_RELEASE_RAMP_ENABLE is True
+  assert GAS_RELEASE_RAMP_S == 0.4
   # safety exceptions e/f added after the 2026-09-25 real-world event
   assert GAS_SAFE_A_TARGET_HARD == -2.0
   assert GAS_SAFE_TTC_ENTER_S == 4.0
@@ -385,14 +391,21 @@ def test_coast_still_decelerates_on_downhill():
   assert res.a_floor == GAS_RELEASE_COAST_MAX_DECEL
 
 
-def test_coast_exits_once_back_at_cruise():
+def test_coast_exits_into_release_then_inactive():
+  """[2026-09-27] coast 到期不再一帧交还：先进 release（缓释），走完才 inactive。"""
   c = GasOverrideController()
   step(c, gas_pressed=True, v_ego=30.0, v_cruise=25.0)
   assert step(c, gas_pressed=False, v_ego=30.0, v_cruise=25.0).phase == "coast"
   assert step(c, gas_pressed=False, v_ego=26.0, v_cruise=25.0).phase == "coast"
   res = step(c, gas_pressed=False, v_ego=25.0 + 0.1, v_cruise=25.0)
+  assert res.phase == "release"
+  assert res.active is True
+  # 缓释走完后彻底交还：地板撤掉，输出与输入逐位相同
+  n = int(GAS_RELEASE_RAMP_S / DT) + 4
+  res = run(c, n, gas_pressed=False, v_ego=25.0, v_cruise=25.0)
   assert res.phase == "inactive"
   assert res.a_floor is None
+  assert res.a_target_out == -1.0
 
 
 def test_coast_holds_just_above_exit_margin():
@@ -406,7 +419,7 @@ def test_coast_holds_just_above_exit_margin():
 def test_coast_has_max_duration_fallback():
   c = GasOverrideController()
   step(c, gas_pressed=True, v_ego=30.0, v_cruise=25.0)
-  n = int(GAS_RELEASE_COAST_MAX_S / DT) + 3
+  n = int(GAS_RELEASE_COAST_MAX_S / DT) + int(GAS_RELEASE_RAMP_S / DT) + 5
   res = run(c, n, gas_pressed=False, v_ego=30.0, v_cruise=25.0)
   assert res.phase == "inactive"
 
@@ -455,13 +468,210 @@ def test_hold_keeps_acceleration_open_no_dead_gap():
   assert res.suppress_should_stop is True
 
 
-def test_hold_delay_zero_hands_over_immediately(monkeypatch):
+def test_hold_delay_zero_still_ramps_then_hands_over(monkeypatch):
+  """The 0.5 s window can be zeroed, but the release ramp still applies afterwards."""
   monkeypatch.setattr(gas_override, "GAS_RELEASE_RESUME_DELAY_S", 0.0)
+  c = GasOverrideController()
+  step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0)
+  res = step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0)
+  assert res.phase == "release"
+  n = int(GAS_RELEASE_RAMP_S / DT) + 4
+  res = run(c, n, gas_pressed=False, v_ego=20.0, v_cruise=25.0)
+  assert res.phase == "inactive"
+  assert res.a_target_out == -1.0
+
+
+def test_hold_delay_zero_and_ramp_off_hands_over_immediately(monkeypatch):
+  """One-line revert of BOTH knobs => the pre-2026-09-27 behaviour."""
+  monkeypatch.setattr(gas_override, "GAS_RELEASE_RESUME_DELAY_S", 0.0)
+  monkeypatch.setattr(gas_override, "GAS_RELEASE_RAMP_ENABLE", False)
   c = GasOverrideController()
   step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0)
   res = step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0)
   assert res.phase == "inactive"
   assert res.a_target_out == -1.0
+
+
+# ===== 5b. release ramp: the hand-over is spread over GAS_RELEASE_RAMP_S =====
+# Added 2026-09-27, after a real drive. User report: turn the wheel with a bit of
+# gas, straighten out, and the car brakes "all of a sudden" (both left and right
+# turns). Log from that drive:
+#   pressed  vEgo=15.3 vCruise=55.0 aIn=-1.66 floor=-0.30 aOut=-0.30   <- hidden
+#   inactive vEgo=19.1 vCruise=22.1 aIn=-1.01 floor=None  aOut=-1.01   <- one frame
+# The yield itself is by design (requirement 1: hide the upstream decel while the
+# driver is on the gas). What was *not* by design is that the hand-over was a step:
+# `max(a_target, -0.3)` -> `a_target` in a single 20 Hz frame, and LongControl is a
+# plain PID+feedforward with no jerk limit, so it reaches the actuator 1:1.
+# The ramp spreads that step over GAS_RELEASE_RAMP_S while keeping the invariant
+# "only ever soften" (the ramp may never produce a harsher request than upstream).
+
+
+def _drain(c, *, a_target_in: float, v_ego: float = 20.0, v_cruise: float = 25.0,
+           frames: int = 60):
+  """Press once, release, then collect frames until the module stops intervening."""
+  step(c, gas_pressed=True, v_ego=v_ego, v_cruise=v_cruise, a_target_in=a_target_in)
+  out = []
+  for _ in range(frames):
+    res = step(c, gas_pressed=False, v_ego=v_ego, v_cruise=v_cruise, a_target_in=a_target_in)
+    out.append(res)
+    if res.phase == "inactive":
+      break
+  return out
+
+
+def test_release_ramp_spreads_the_handover_over_several_frames():
+  """The whole point: -0.30 -> -1.01 must NOT happen inside one frame."""
+  c = GasOverrideController()
+  seq = _drain(c, a_target_in=-1.01)
+  phases = [r.phase for r in seq]
+  assert "release" in phases, phases
+  n_rel = sum(1 for p in phases if p == "release")
+  assert n_rel >= 3, f"ramp too short ({n_rel} frames): {phases}"
+
+  outs = [r.a_target_out for r in seq]
+  deltas = [abs(b - a) for a, b in zip(outs, outs[1:])]
+  step_size = abs(-1.01 - GAS_PRESSED_A_FLOOR) / 3.0
+  assert max(deltas) <= step_size, f"still a step: max delta {max(deltas):.3f} in {deltas}"
+  # 地板只可能越来越允许刹车（单调），不会来回抖
+  assert all(b <= a + 1e-9 for a, b in zip(outs, outs[1:])), outs
+
+
+def test_release_ramp_ends_bit_exact():
+  """The frame before the hand-over must be within one ramp step of a_target.
+
+  That is what makes the hand-over itself a non-event: at alpha == 1 the floor
+  equals a_target, so the last intervening frame and the first fully transparent
+  frame produce the same number.
+  """
+  c = GasOverrideController()
+  a_target = -1.01
+  seq = _drain(c, a_target_in=a_target)
+  last = seq[-1]
+  assert last.phase == "inactive"
+  assert last.a_floor is None
+  assert last.a_target_out == a_target                 # byte-identical passthrough
+  prev = seq[-2]
+  assert prev.phase == "release"
+  tol = abs(a_target - GAS_PRESSED_A_FLOOR) * DT / GAS_RELEASE_RAMP_S * 1.05 + 1e-9
+  assert abs(prev.a_target_out - a_target) <= tol, (prev.a_target_out, a_target, tol)
+
+
+def test_release_ramp_duration_is_bounded():
+  """hold + ramp together last ~GAS_RELEASE_RESUME_DELAY_S + GAS_RELEASE_RAMP_S."""
+  c = GasOverrideController()
+  n_hold = n_rel = 0
+  step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0, a_target_in=-1.9)
+  for _ in range(60):
+    res = step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0, a_target_in=-1.9)
+    if res.phase == "hold":
+      n_hold += 1
+    elif res.phase == "release":
+      n_rel += 1
+    else:
+      break
+  assert abs(n_hold * DT - GAS_RELEASE_RESUME_DELAY_S) <= 2 * DT, n_hold
+  assert abs(n_rel * DT - GAS_RELEASE_RAMP_S) <= 2 * DT, n_rel
+
+
+def test_release_ramp_only_ever_softens():
+  """Invariant: a_target_out >= a_target_in for every frame of the ramp."""
+  c = GasOverrideController()
+  a_target = -1.4
+  for r in _drain(c, a_target_in=a_target):
+    assert r.a_target_out >= a_target - 1e-12, (a_target, r.a_target_out)
+
+
+def test_release_ramp_is_transparent_when_accelerating():
+  """Upstream wants to accelerate => the ramp must leave it bit-identical."""
+  c = GasOverrideController()
+  for r in _drain(c, a_target_in=1.2):
+    assert r.a_target_out == 1.2, r
+
+
+def test_release_ramp_never_exceeds_the_original_request():
+  """Fuzz the ramp over a grid of requests; it must never add acceleration nor hurt."""
+  for a_target in (-1.99, -1.7, -1.0, -0.5, -0.2, -0.05, 0.0, 0.5, 2.0):
+    c = GasOverrideController()
+    for r in _drain(c, a_target_in=a_target):
+      assert r.a_target_out >= a_target - 1e-12, (a_target, r.a_target_out)
+      assert r.a_target_out <= max(a_target, 0.0) + 1e-12, (a_target, r.a_target_out)
+
+
+def test_release_ramp_safety_exception_cancels_it_at_once():
+  """Safety first: a hard request mid-ramp must hand over in ONE frame, not ramp."""
+  c = GasOverrideController()
+  seq = None
+  step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0, a_target_in=-1.0)
+  for _ in range(40):
+    res = step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0, a_target_in=-1.0)
+    if res.phase == "release":
+      seq = res
+      break
+  assert seq is not None, "never entered the release phase"
+  hard = step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0, a_target_in=-2.5)
+  assert hard.phase == "inactive"
+  assert hard.a_target_out == -2.5            # 全额交还，没有缓释
+  assert hard.reason.startswith("aTgt")
+  assert c._release_from is None              # 缓释计时器已清
+
+
+def test_release_ramp_repress_returns_to_pressed():
+  c = GasOverrideController()
+  step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0, a_target_in=-1.0)
+  for _ in range(40):
+    res = step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0, a_target_in=-1.0)
+    if res.phase == "release":
+      break
+  else:
+    raise AssertionError("never entered the release phase")
+  res = step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0, a_target_in=-1.0)
+  assert res.phase == "pressed"
+  assert res.a_floor == GAS_PRESSED_A_FLOOR
+  assert c._release_from is None
+
+
+def test_release_ramp_can_be_disabled(monkeypatch):
+  """One-line revert (GAS_RELEASE_RAMP_ENABLE=False) => the old single-frame gap."""
+  monkeypatch.setattr(gas_override, "GAS_RELEASE_RAMP_ENABLE", False)
+  c = GasOverrideController()
+  step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0, a_target_in=-1.01)
+  seq = [step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0, a_target_in=-1.01)
+         for _ in range(20)]
+  phases = [r.phase for r in seq]
+  assert "release" not in phases, phases
+  assert phases[-1] == "inactive"
+  assert seq[-1].a_target_out == -1.01
+
+
+def test_release_ramp_zero_seconds_hands_over_at_once(monkeypatch):
+  """GAS_RELEASE_RAMP_S = 0 must not add any extra phase.
+
+  Note the 0.5 s hold window still comes first (requirement 3), so we drive the
+  whole release and assert the ramp itself contributes nothing.
+  """
+  monkeypatch.setattr(gas_override, "GAS_RELEASE_RAMP_S", 0.0)
+  c = GasOverrideController()
+  step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0, a_target_in=-1.01)
+  seq = [step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0, a_target_in=-1.01)
+         for _ in range(20)]
+  phases = [r.phase for r in seq]
+  assert "release" not in phases, phases
+  assert phases[-1] == "inactive"
+  assert seq[-1].a_target_out == -1.01
+
+
+def test_reset_clears_the_release_timer():
+  c = GasOverrideController()
+  step(c, gas_pressed=True, v_ego=20.0, v_cruise=25.0, a_target_in=-1.0)
+  for _ in range(40):
+    if step(c, gas_pressed=False, v_ego=20.0, v_cruise=25.0, a_target_in=-1.0).phase == "release":
+      break
+  else:
+    raise AssertionError("never entered the release phase")
+  c.reset()
+  assert c._release_from is None
+  assert c._release_elapsed == 0.0
+  assert c._phase == "inactive"
 
 
 # ===== 6. state handling =====
@@ -473,6 +683,8 @@ def test_reset_clears_everything():
   assert c._gas_last is False
   assert c._hold_left == 0.0
   assert c._coast_elapsed == 0.0
+  assert c._release_from is None
+  assert c._release_elapsed == 0.0
   assert step(c, gas_pressed=False, a_target_in=-2.0).phase == "inactive"
 
 
@@ -486,11 +698,12 @@ def test_repress_during_coast_returns_to_pressed():
 
 
 def test_coast_does_not_stick_after_handover():
-  """Once the coast phase ends, staying inactive must be fully transparent."""
+  """Once the coast -> release ramp is drained, staying inactive must be transparent."""
   c = GasOverrideController()
   step(c, gas_pressed=True, v_ego=30.0, v_cruise=25.0)
   assert step(c, gas_pressed=False, v_ego=30.0, v_cruise=25.0).phase == "coast"
-  assert step(c, gas_pressed=False, v_ego=25.0, v_cruise=25.0).phase == "inactive"   # exits
+  assert step(c, gas_pressed=False, v_ego=25.0, v_cruise=25.0).phase == "release"   # exits coast
+  run(c, int(GAS_RELEASE_RAMP_S / DT) + 4, gas_pressed=False, v_ego=25.0, v_cruise=25.0)
   res = step(c, gas_pressed=False, v_ego=24.0, v_cruise=25.0, a_target_in=-1.7)
   assert res.phase == "inactive"
   assert res.a_target_out == -1.7
