@@ -13,8 +13,28 @@ from openpilot.common.hardware import HARDWARE
 if gui_app.sunnypilot_ui():
   from openpilot.system.ui.sunnypilot.widgets.list_view import toggle_item_sp as toggle_item
   from openpilot.system.ui.sunnypilot.widgets.list_view import multiple_button_item_sp as multiple_button_item
+  # 数值选择器（绑 Params）：红灯辅助的停位微调，见下面 _traffic_stop_adjust。
+  # sunnypilot UI 才有；非 SP UI 时保持 None，下面会跳过该项而不是崩。
+  from openpilot.system.ui.sunnypilot.widgets.list_view import option_item_sp
+else:
+  option_item_sp = None
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
+
+# ── 列表顺序 / 默认值（阿丽定制）───────────────────────────────────────
+# **实验模式置顶**，其后是自定义的「踩油门让位 / 红绿灯辅助 / 使用公制单位」（三项连在一起），
+# 其余项整体下移。渲染顺序完全由下面这张表决定，**不再依赖 dict 的插入顺序**；
+# 表里写了但没注册的键（比如 params 未声明 / 该项被隐藏）会被自动跳过。
+HEAD_TOGGLE_ORDER = (
+  "ExperimentalMode",
+  "GasPedalOverride",
+  "TrafficStopAssist",
+  "IsMetric",
+)
+
+# 这三项按需求「首次运行默认开启」：Params.get_bool() 对不存在的键返回 False，
+# 会让 toggle 首次显示成关，所以首次运行时显式落一次 True（不覆盖用户已改过的值）。
+DEFAULT_ON_PARAMS = ("GasPedalOverride", "TrafficStopAssist", "IsMetric")
 
 # Description constants
 DESCRIPTIONS = {
@@ -24,10 +44,9 @@ DESCRIPTIONS = {
   ),
   "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage sunnypilot."),
   "GasPedalOverride": tr_noop(
-    "While the accelerator pedal is pressed, deceleration asked for by the model or the system is reduced so the car " +
-    "gently closes on the lead car. Releasing the pedal coasts back down to the set speed, or hands control back after " +
-    "0.5 s if you are below it. Override is disabled while a lead car is closer than 2 m, or closer than 4 m and you are " +
-    "more than 10 km/h faster than it."
+    "踩下油门时，模型或系统请求的减速度会被削弱，让车辆平顺地贴近前车。松开油门后自动滑行回落至设定速度；"
+    "若当前车速低于设定速度，0.5 秒后交还控制权。当前车距离小于 2 米，或距离小于 4 米且本车比前车快 10 km/h 以上时，"
+    "本功能不介入（把刹车交还给系统）。"
   ),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, sunnypilot will follow lead cars closer and be more aggressive with the gas and brake. " +
@@ -40,9 +59,17 @@ DESCRIPTIONS = {
   ),
   "AlwaysOnDM": tr_noop("Enable driver monitoring even when sunnypilot is not engaged."),
   'RecordFront': tr_noop("Upload data from the driver facing camera and help improve the driver monitoring algorithm."),
-  "IsMetric": tr_noop("Display speed in km/h instead of mph."),
+  "IsMetric": tr_noop("以 km/h 显示速度，而不是 mph。"),
   "RecordAudio": tr_noop("Record and store microphone audio while driving. The audio will be included in the dashcam video in comma connect."),
   "UseMiciLayout": tr_noop("Use the compact UI layout (Comma 4)."),
+  "TrafficStopAssist": tr_noop(
+    "用驾驶模型自己预测的轨迹作为前方红灯 / 停止标志的证据，据此对一条虚拟停止线制动（该停止线喂给纵向 MPC），"
+    "不需要专门的红绿灯识别模型。chill 与 experimental 模式都可用。"
+  ),
+  "TrafficStopDistanceAdjust": tr_noop(
+    "微调车辆相对检测到的停止线的停车位置：正值让停车点前移（更贴近停止线），负值后移。"
+    "它叠加在一个固定的「摄像头到车头」修正之上，建议从小幅度开始、按自己车上的实际安装情况调整。"
+  ),
 }
 
 
@@ -52,20 +79,33 @@ class TogglesLayout(Widget):
     self._params = Params()
     self._is_release = False  # self._params.get_bool("IsReleaseBranch")
 
-    # GasPedalOverride（踩油门纵向让位）按需求**默认开启**，但 Params.get_bool()
-    # 对不存在的键返回 False（C++ Params::get 不走 default_value 回退），会让
-    # toggle 首次显示成关。所以在首次运行时显式落一次声明里的默认值 "1"。
-    if self._params.get("GasPedalOverride") is None:
-      self._params.put_bool("GasPedalOverride", True, block=True)
+    # 红灯辅助的停位微调控件：在下面"traffic-stop 注册块"里创建（需要 Param 已生效）；
+    # 未注册时保持 None，循环里会据此跳过它。
+    self._traffic_stop_adjust = None
+
+    # 自定义项按需求「首次运行默认开启」：Params.get_bool() 对不存在的键返回 False
+    # （C++ Params::get 不走 default_value 回退），会让 toggle 首次显示成关。
+    # 所以在首次运行时显式落一次声明里的默认值；已经有值的（用户改过的）不覆盖。
+    for _p in DEFAULT_ON_PARAMS:
+      try:
+        if self._params.get(_p) is None:
+          self._params.put_bool(_p, True, block=True)
+      except UnknownKeyName:
+        # 该 key 还没在 params_keys.h 里生效（例如 libparams_c.so 未重编）——跳过，
+        # 功能侧同样是安全退化。
+        pass
 
     # param, title, desc, icon, needs_restart
     self._toggle_defs = {
-      "OpenpilotEnabledToggle": (
-        lambda: tr("Enable sunnypilot"),
-        DESCRIPTIONS["OpenpilotEnabledToggle"],
-        "chffr_wheel.png",
-        True,
-      ),
+      # 「启用 sunnypilot」(OpenpilotEnabledToggle) 按需求隐藏 ⇒ 不注册，列表里不再出现。
+      # ⚠️ 隐藏后 UI 上没有总开关（param 本身、功能都不受影响，仍由其它入口控制）。
+      # 需要恢复时把下面这块取消注释即可：
+      # "OpenpilotEnabledToggle": (
+      #   lambda: tr("Enable sunnypilot"),
+      #   DESCRIPTIONS["OpenpilotEnabledToggle"],
+      #   "chffr_wheel.png",
+      #   True,
+      # ),
       "ExperimentalMode": (
         lambda: tr("Experimental Mode"),
         "",
@@ -76,7 +116,7 @@ class TogglesLayout(Widget):
       # 默认开启：参数在 params_keys.h 里声明为 "1"，而 Params.get_bool 对
       # 不存在的键返回 False，所以首次运行前显式落一次默认值（见 __init__）。
       "GasPedalOverride": (
-        lambda: tr("Gas Pedal Override"),
+        lambda: tr("踩油门让位"),
         DESCRIPTIONS["GasPedalOverride"],
         "disengage_on_accelerator.png",
         False,
@@ -112,20 +152,52 @@ class TogglesLayout(Widget):
         True,
       ),
       "IsMetric": (
-        lambda: tr("Use Metric System"),
+        lambda: tr("使用公制单位"),
         DESCRIPTIONS["IsMetric"],
         "metric.png",
         False,
       ),
     }
 
-    if HARDWARE.get_device_type() in ("tici", "tizi", "pc"):
-      self._toggle_defs["UseMiciLayout"] = (
-        lambda: tr("Use Compact UI Layout"),
-        DESCRIPTIONS["UseMiciLayout"],
-        "settings.png",
+    # 「使用C4界面」(UseMiciLayout) 按需求隐藏 ⇒ 不注册，列表里就不再出现。
+    # 需要恢复时把下面这三行取消注释即可（HARDWARE 的 import 已保留）：
+    # if HARDWARE.get_device_type() in ("tici", "tizi", "pc"):
+    #   self._toggle_defs["UseMiciLayout"] = (
+    #     lambda: tr("Use Compact UI Layout"), DESCRIPTIONS["UseMiciLayout"], "settings.png", False,
+    #   )
+
+    # ── 红灯 / 停止标志辅助（sunnypilot 追加；机制见 .../traffic_stop.py）──────
+    # 它的两个 Params 由 params_keys.h 声明 ⇒ **必须先重编译 libparams_c.so** 才存在。
+    # 若 key 尚未生效（例如 .so 还没重编），这里就整个不注册（开关 + 偏移值都不加）：
+    # 因为下面 `self._params.get_bool(param)` 对未声明的 key 会抛 UnknownKeyName，
+    # 那会把**整个设置页打崩**。功能侧同样是安全退化（traffic_stop.py 用容错读取）。
+    try:
+      self._params.get_bool("TrafficStopAssist")
+    except UnknownKeyName:
+      pass
+    else:
+      # needs_restart=False：参数由控制器自己 1 Hz 轮询 ⇒ 行车中切换即时生效，
+      # 不触发 OnroadCycleRequested、也不需要重启。
+      self._toggle_defs["TrafficStopAssist"] = (
+        lambda: tr("红绿灯/停止标志辅助"),
+        DESCRIPTIONS["TrafficStopAssist"],
+        "",
         False,
       )
+      if option_item_sp is not None:
+        # 停位微调（单位分米；±50 dm = ±5.0 m，步长 5 dm = 0.5 m）。
+        # ★ 正值 = 停止位置往前移（车头更靠前 / 离停止线更近）；负值 = 往后移。
+        #   正负号的实际方向由后端 ADJUST_POSITIVE_MOVES_STOP_FORWARD 决定。
+        self._traffic_stop_adjust = option_item_sp(
+          title=lambda: tr("红灯停位微调"),
+          param="TrafficStopDistanceAdjust",
+          min_value=-50,
+          max_value=50,
+          value_change_step=5,
+          label_callback=lambda dm: ("0.0 m" if dm == 0 else f"{dm / 10.0:+.1f} m"),
+          description=lambda: tr(DESCRIPTIONS["TrafficStopDistanceAdjust"]),
+          icon="",
+        )
 
     self._long_personality_setting = multiple_button_item(
       lambda: tr("Driving Personality"),
@@ -137,9 +209,21 @@ class TogglesLayout(Widget):
       icon="speed_limit.png"
     )
 
+    # 跟在自己主开关后面渲染的**从属项**（不是纯开关，所以不进 _toggle_defs）。
+    FOLLOWERS = {
+      "TrafficStopAssist": ("TrafficStopDistanceAdjust", self._traffic_stop_adjust),
+      "ExperimentalMode": ("LongitudinalPersonality", self._long_personality_setting),
+    }
+
     self._toggles = {}
     self._locked_toggles = set()
-    for param, (title, desc, icon, needs_restart) in self._toggle_defs.items():
+
+    # 渲染顺序 = 置顶表（实验模式 → 自定义三项）+ 其余按 _toggle_defs 原有顺序（⇒ 其它项整体下移）。
+    ordered_params = [p for p in HEAD_TOGGLE_ORDER if p in self._toggle_defs]
+    ordered_params += [p for p in self._toggle_defs if p not in ordered_params]
+
+    for param in ordered_params:
+      title, desc, icon, needs_restart = self._toggle_defs[param]
       toggle = toggle_item(
         title,
         desc,
@@ -166,9 +250,10 @@ class TogglesLayout(Widget):
 
       self._toggles[param] = toggle
 
-      # insert longitudinal personality after NDOG toggle
-      if param == "ExperimentalMode":
-        self._toggles["LongitudinalPersonality"] = self._long_personality_setting
+      # 从属项（停位微调 / 驾驶风格）紧跟在自己的主开关后面
+      follower = FOLLOWERS.get(param)
+      if follower is not None and follower[1] is not None:
+        self._toggles[follower[0]] = follower[1]
 
     self._update_experimental_mode_icon()
     self._scroller = Scroller(list(self._toggles.values()), line_separator=True, spacing=0)

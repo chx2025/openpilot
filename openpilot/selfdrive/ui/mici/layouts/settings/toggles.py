@@ -42,36 +42,50 @@ class TogglesLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
 
-    # GasPedalOverride（踩油门纵向让位）按需求默认开启，但 Params.get_bool() 对
-    # 不存在的键返回 False，会让 toggle 首次显示成关。首次运行显式落一次默认值。
-    if ui_state.params.get("GasPedalOverride") is None:
-      ui_state.params.put_bool("GasPedalOverride", True, block=True)
+    # 自定义项（踩油门让位 / 红绿灯辅助 / 使用公制单位）按需求「首次运行默认开启」，
+    # 但 Params.get_bool() 对不存在的键返回 False，会让 toggle 首次显示成关。
+    # 首次运行显式落一次默认值；已经有值的（用户改过的）不覆盖。
+    for _p in ("GasPedalOverride", "TrafficStopAssist", "IsMetric"):
+      try:
+        if ui_state.params.get(_p) is None:
+          ui_state.params.put_bool(_p, True, block=True)
+      except Exception:
+        pass
 
     self._personality_toggle = BigMultiParamToggle("driving personality", "LongitudinalPersonality", ["aggressive", "standard", "relaxed"])
     self._experimental_btn = BigToggle("experimental mode", initial_state=ui_state.params.get_bool("ExperimentalMode"),
                                        toggle_callback=self._on_experimental_mode)
-    is_metric_toggle = BigParamControl("use metric units", "IsMetric")
-    gas_override_toggle = BigParamControl("gas pedal override", "GasPedalOverride")
+    is_metric_toggle = BigParamControl("使用公制单位", "IsMetric")
+    gas_override_toggle = BigParamControl("踩油门让位", "GasPedalOverride")
+    # 红灯 / 停止标志辅助（见 sunnypilot/.../traffic_stop.py）。
+    # 紧凑布局没有数值选择器控件，停位微调只在标准设置页里提供。
+    traffic_stop_toggle = BigParamControl("红绿灯/停止标志辅助", "TrafficStopAssist")
     ldw_toggle = BigParamControl("lane departure warnings", "IsLdwEnabled")
     always_on_dm_toggle = BigParamControl("always-on driver monitor", "AlwaysOnDM")
     record_front = BigParamControl("record & upload cabin camera", "RecordFront", toggle_callback=restart_needed_callback)
     record_mic = BigParamControl("record & upload mic audio", "RecordAudio", toggle_callback=restart_needed_callback)
     enable_openpilot = BigParamControl("enable sunnypilot", "OpenpilotEnabledToggle", toggle_callback=restart_needed_callback)
 
+    # 「使用C4界面」(UseMiciLayout) 按需求隐藏 ⇒ 不注册，列表里就不再出现。
+    # 需要恢复时把下面三行取消注释即可（HARDWARE 的 import 已保留）：
+    # layout_toggle = None
+    # if HARDWARE.get_device_type() in ("tici", "tizi", "pc"):
+    #   layout_toggle = BigParamControl("use compact ui layout", "UseMiciLayout")
     layout_toggle = None
-    if HARDWARE.get_device_type() in ("tici", "tizi", "pc"):
-      layout_toggle = BigParamControl("use compact ui layout", "UseMiciLayout")
 
+    # **实验模式置顶**，其后是自定义三项（顺序与标准设置页一致），其余项整体下移。
+    # 「启用 sunnypilot」(enable_openpilot) 按需求隐藏 ⇒ 不加入列表；对象仍然创建，
+    # 供下面 _refresh_toggles / set_enabled 引用。需要恢复时把 enable_openpilot 加回列表即可。
     scroller_items = [
-      self._personality_toggle,
       self._experimental_btn,
-      is_metric_toggle,
+      self._personality_toggle,
       gas_override_toggle,
+      traffic_stop_toggle,
+      is_metric_toggle,
       ldw_toggle,
       always_on_dm_toggle,
       record_front,
       record_mic,
-      enable_openpilot,
     ]
 
     if layout_toggle is not None:
@@ -84,6 +98,7 @@ class TogglesLayoutMici(NavScroller):
       ("ExperimentalMode", self._experimental_btn),
       ("IsMetric", is_metric_toggle),
       ("GasPedalOverride", gas_override_toggle),
+      ("TrafficStopAssist", traffic_stop_toggle),
       ("IsLdwEnabled", ldw_toggle),
       ("AlwaysOnDM", always_on_dm_toggle),
       ("RecordFront", record_front),
