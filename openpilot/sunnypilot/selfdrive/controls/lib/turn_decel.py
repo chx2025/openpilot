@@ -40,7 +40,57 @@
 """
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass
+
+
+# === [TurnDecel] 诊断探针（2026-09-27 加）==================================
+# **只写日志，不参与任何控制判断**；本模块的行为逐位不变。
+#
+# 【为什么要它】本模块是纵向链路上**唯一没有任何留痕**的 post-min 覆盖模块
+#   （旧的 [E2eTrace] 已移除）。而它的行为——打转向灯后主动减速到 15 km/h、
+#   方向盘 >15° 时暂停、**一回正立刻恢复**——与用户 2026-09-27 实车反馈的
+#   「右转弯然后直行的时候又一脚刹车」高度吻合。没有日志就只能猜。
+#
+# 【触发】相位或关键量跳变必打 + 非 idle 相位 1 Hz（100 Hz 控制回路，必须节流）。
+#   注意 swaglog 最低只落 INFO ⇒ 只能用 info（debug 查不到）。
+#
+# 【字段】phase / act / blk / aOvr / blink（L、R、LR、on、-）/ blinkT（打灯累计
+#   秒数，= 2.0 是 debounce 门槛）/ decelA（当前 ramp 减速度）/ v（km/h）/ steer（deg）
+_PROBE_STATE: dict = {"t": 0.0, "sig": None}
+
+
+def _emit_probe(res, *, left_blinker: bool, right_blinker: bool, blinker_on: bool,
+                blinker_on_time: float, decel_a: float,
+                v_ego: float, steering_angle_deg: float) -> None:
+  """打一行 `[TurnDecel]` 探针。任何异常都吞掉——绝不能影响控制回路。"""
+  try:
+    now = _time.monotonic()
+    ovr = None if res.a_target_override is None else round(res.a_target_override, 2)
+    # ⚠️ 变化检测里**绝不能放连续变化的量**：`a_target_override` 在 deceling 期
+    #   每帧都随 ramp 变（0.50→0.51→…）⇒ 若把它计入 sig，`changed` 恒为真 ⇒
+    #   100 Hz 每帧一条，swaglog 会被瞬间淹掉（2026-09-27 真机冒烟实测：
+    #   20 s 打了 71 条而非 ~20 条）。sig 只放**离散量**。
+    sig = (res.phase, bool(res.active), bool(res.block_accel),
+           bool(left_blinker), bool(right_blinker))
+    changed = sig != _PROBE_STATE["sig"]
+    if not changed and not (res.phase != "idle" and now - _PROBE_STATE["t"] >= 1.0):
+      return
+    _PROBE_STATE["t"] = now
+    _PROBE_STATE["sig"] = sig
+
+    bl = ('L' if left_blinker else '') + ('R' if right_blinker else '')
+    if not bl:
+      bl = 'on' if blinker_on else '-'
+    a_ovr = 'None' if ovr is None else f'{ovr:.2f}'
+
+    from openpilot.common.swaglog import cloudlog
+    cloudlog.info(
+      f"[TurnDecel] phase={res.phase} act={int(res.active)} blk={int(res.block_accel)} "
+      f"aOvr={a_ovr} blink={bl} blinkT={blinker_on_time:.2f} decelA={decel_a:.2f} "
+      f"v={v_ego * 3.6:.1f} steer={steering_angle_deg:+.1f}")
+  except Exception:
+    pass
 
 
 # === 配置常量（按用户需求固定） ===
@@ -140,6 +190,8 @@ class TurnDecelController:
     steering_angle_deg: float,
     dt: float,
     gas_pressed: bool = False,
+    left_blinker: bool = False,
+    right_blinker: bool = False,
   ) -> TurnDecelResult:
     """每帧调用一次。
 
@@ -150,10 +202,40 @@ class TurnDecelController:
       dt: 帧间隔（s），通常 0.05 (DT_MDL)
       gas_pressed: 驾驶员踩油门（carState.gasPressed）。见文件头「驾驶员加速意图让位」。
         默认 False 以保持旧调用方（含测试）行为不变。
+      left_blinker / right_blinker: 仅**诊断探针**用来区分左右灯（2026-09-27 加）。
+        默认 False ⇒ 旧调用方（含 tests/）行为逐位不变；**不参与任何控制判断**
+        —— 控制只看 blinker_on（左转与右转在本模块行为完全相同）。
 
     Returns:
       TurnDecelResult 含 a_target_override / block_accel / active / phase
     """
+    res = self._update_impl(
+      blinker_on=blinker_on,
+      v_ego=v_ego,
+      steering_angle_deg=steering_angle_deg,
+      dt=dt,
+      gas_pressed=gas_pressed,
+    )
+    _emit_probe(res,
+                left_blinker=left_blinker,
+                right_blinker=right_blinker,
+                blinker_on=blinker_on,
+                blinker_on_time=self._blinker_on_time,
+                decel_a=self._decel_a,
+                v_ego=v_ego,
+                steering_angle_deg=steering_angle_deg)
+    return res
+
+  def _update_impl(
+    self,
+    *,
+    blinker_on: bool,
+    v_ego: float,
+    steering_angle_deg: float,
+    dt: float,
+    gas_pressed: bool = False,
+  ) -> TurnDecelResult:
+    """真正的控制逻辑。**与加探针之前逐位相同**（探针在 update() 里包一层）。"""
     # ---- 0a. 驾驶员加速意图让位（最早评估：让位优先级高于一切本模块约束）----
     # 见文件头「驾驶员加速意图让位」。放在 big_angle_lock 之前，所以
     # big_angle_guard（>60° 安全锁）在驾驶员踩油门时同样让位 —— 理由见文件头：

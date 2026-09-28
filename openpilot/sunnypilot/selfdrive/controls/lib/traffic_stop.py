@@ -346,6 +346,10 @@ class TrafficStopController:
     self._dbg_mask = '----'
     self._dbg_block = 'none'
     self._dbg_blinker = '-'
+    # ★ 2026-09-27 加：**独立的**右灯诊断位。刻意不复用 `_dbg_blinker`——
+    #   后者在 `_heartbeat_on()` 里被当行为判断用（`== 'L'`），改成 'LR'/'R'
+    #   会让「双闪 / 同时打灯」时的心跳判定翻转。新增字段 ⇒ 零行为改动。
+    self._dbg_blink_r = False
     self._dbg_stop_raw = None      # 被门槛挡住（stop_dist_m=None）时的原始停止距离
     self._dbg_v_limited = float('inf')   # 门槛判据用的限速值（与 vEgo 比大小）
 
@@ -409,7 +413,11 @@ class TrafficStopController:
              v_ego: float,
              a_ego: float,
              v_cruise: float,
-             dt: float = DT_MDL) -> None:
+             dt: float = DT_MDL,
+             # [2026-09-27] 仅供诊断探针区分左右灯。**不参与任何控制判断**
+             # （原有 left_blinker 语义 0 改动；本字段只影响日志的 blinkR= 字段）。
+             # 默认 False ⇒ 旧调用方（含 ts_patch/sim_*.py）行为逐位不变。
+             right_blinker: bool = False) -> None:
     """每帧一次。参数由 planner 从 sm 里取出后显式传入（便于离线仿真）。
 
     Args:
@@ -419,6 +427,7 @@ class TrafficStopController:
       steering_angle_deg: carState.steeringAngleDeg（已去 angleOffset）
       gas_pressed: carState.gasPressed
       left_blinker: carState.leftBlinker
+      right_blinker: carState.rightBlinker（**2026-09-27 加，仅诊断探针用**）
       lead_present: radarState.leadOne.present
       d_rel: radarState.leadOne.dRel (m)
       v_ego: 本车车速 (m/s)
@@ -473,6 +482,7 @@ class TrafficStopController:
     self._dbg_model_v = (float(sum(self.model_v_hist) / len(self.model_v_hist))
                          if len(self.model_v_hist) > 0 else 0.0)
     self._dbg_blinker = 'L' if left_blinker else '-'
+    self._dbg_blink_r = bool(right_blinker)
     self._dbg_mask = get_stop_sign_breakdown(model_x_end, model_y_end, self._dbg_model_v,
                                              self._dbg_v_start, v_ego * 3.6, d_rel_eff)[1]
     if self.traffic_state != RED and '0' not in self._dbg_mask and '-' not in self._dbg_mask:
@@ -678,5 +688,6 @@ class TrafficStopController:
                   f"vTgt={'inf' if self.output_v_target >= V_TARGET_SENTINEL else f'{self.output_v_target:.1f}'} "
                   f"vLim={v_lim} block={self._dbg_block} c={self._dbg_mask} "
                   f"lead={int(self._dbg_lead)} dRel={self._dbg_d_rel:.1f} blink={self._dbg_blinker} "
+                  f"blinkR={int(self._dbg_blink_r)} "
                   f"steer={self._dbg_steer:+.1f} xEnd={self._dbg_x_end:.1f} "
                   f"yEnd={self._dbg_y_end:+.1f} mv={self._dbg_model_v:.1f} mv0={self._dbg_v_start:.1f}")
