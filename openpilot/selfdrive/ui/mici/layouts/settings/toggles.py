@@ -42,10 +42,10 @@ class TogglesLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
 
-    # 自定义项（踩油门让位 / 红绿灯辅助 / 使用公制单位）按需求「首次运行默认开启」，
+    # 自定义项（红绿灯辅助 / 使用公制单位）
     # 但 Params.get_bool() 对不存在的键返回 False，会让 toggle 首次显示成关。
     # 首次运行显式落一次默认值；已经有值的（用户改过的）不覆盖。
-    for _p in ("GasPedalOverride", "TrafficStopAssist", "IsMetric"):
+    for _p in ("TrafficStopAssist", "IsMetric"):
       try:
         if ui_state.params.get(_p) is None:
           ui_state.params.put_bool(_p, True, block=True)
@@ -56,7 +56,13 @@ class TogglesLayoutMici(NavScroller):
     self._experimental_btn = BigToggle("experimental mode", initial_state=ui_state.params.get_bool("ExperimentalMode"),
                                        toggle_callback=self._on_experimental_mode)
     is_metric_toggle = BigParamControl("使用公制单位", "IsMetric")
-    gas_override_toggle = BigParamControl("踩油门让位", "GasPedalOverride")
+    # 踩油门挂起纵向（patch12）。BigParamControl 构造时就会读 Params，
+    # 所以先探活 key：未生效（libparams_c.so 未重编）时该项为 None，下面会被过滤掉。
+    try:
+      ui_state.params.get_bool("GasLongCancel")
+      gas_long_cancel_toggle = BigParamControl("踩油门挂起纵向", "GasLongCancel")
+    except Exception:
+      gas_long_cancel_toggle = None
     # 红灯 / 停止标志辅助（见 sunnypilot/.../traffic_stop.py）。
     # 紧凑布局没有数值选择器控件，停位微调只在标准设置页里提供。
     traffic_stop_toggle = BigParamControl("红绿灯/停止标志辅助", "TrafficStopAssist")
@@ -79,7 +85,7 @@ class TogglesLayoutMici(NavScroller):
     scroller_items = [
       self._experimental_btn,
       self._personality_toggle,
-      gas_override_toggle,
+      gas_long_cancel_toggle,
       traffic_stop_toggle,
       is_metric_toggle,
       ldw_toggle,
@@ -91,13 +97,15 @@ class TogglesLayoutMici(NavScroller):
     if layout_toggle is not None:
       scroller_items.append(layout_toggle)
 
+    # 踩油门挂起纵向：key 未生效时该项为 None ⇒ 过滤掉，别塞给 scroller
+    scroller_items = [item for item in scroller_items if item is not None]
+
     self._scroller.add_widgets(scroller_items)
 
     # Toggle lists
     self._refresh_toggles = (
       ("ExperimentalMode", self._experimental_btn),
       ("IsMetric", is_metric_toggle),
-      ("GasPedalOverride", gas_override_toggle),
       ("TrafficStopAssist", traffic_stop_toggle),
       ("IsLdwEnabled", ldw_toggle),
       ("AlwaysOnDM", always_on_dm_toggle),
@@ -105,6 +113,9 @@ class TogglesLayoutMici(NavScroller):
       ("RecordAudio", record_mic),
       ("OpenpilotEnabledToggle", enable_openpilot),
     )
+
+    if gas_long_cancel_toggle is not None:
+      self._refresh_toggles += (("GasLongCancel", gas_long_cancel_toggle),)
 
     if layout_toggle is not None:
       self._refresh_toggles += (("UseMiciLayout", layout_toggle),)

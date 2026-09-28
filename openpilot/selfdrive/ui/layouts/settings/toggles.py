@@ -22,19 +22,19 @@ else:
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 
 # ── 列表顺序 / 默认值（阿丽定制）───────────────────────────────────────
-# **实验模式置顶**，其后是自定义的「踩油门让位 / 红绿灯辅助 / 使用公制单位」（三项连在一起），
+# **实验模式置顶**，其后是自定义的「踩油门让位 / 踩油门挂起纵向 / 红绿灯辅助 / 使用公制单位」（四项连在一起），
 # 其余项整体下移。渲染顺序完全由下面这张表决定，**不再依赖 dict 的插入顺序**；
 # 表里写了但没注册的键（比如 params 未声明 / 该项被隐藏）会被自动跳过。
 HEAD_TOGGLE_ORDER = (
   "ExperimentalMode",
-  "GasPedalOverride",
+  "GasLongCancel",
   "TrafficStopAssist",
   "IsMetric",
 )
 
 # 这三项按需求「首次运行默认开启」：Params.get_bool() 对不存在的键返回 False，
 # 会让 toggle 首次显示成关，所以首次运行时显式落一次 True（不覆盖用户已改过的值）。
-DEFAULT_ON_PARAMS = ("GasPedalOverride", "TrafficStopAssist", "IsMetric")
+DEFAULT_ON_PARAMS = ("TrafficStopAssist", "IsMetric")
 
 # Description constants
 DESCRIPTIONS = {
@@ -43,11 +43,6 @@ DESCRIPTIONS = {
     "Your attention is required at all times to use this feature."
   ),
   "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage sunnypilot."),
-  "GasPedalOverride": tr_noop(
-    "踩下油门时，模型或系统请求的减速度会被削弱，让车辆平顺地贴近前车。松开油门后自动滑行回落至设定速度；"
-    "若当前车速低于设定速度，0.5 秒后交还控制权。当前车距离小于 2 米，或距离小于 4 米且本车比前车快 10 km/h 以上时，"
-    "本功能不介入（把刹车交还给系统）。"
-  ),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, sunnypilot will follow lead cars closer and be more aggressive with the gas and brake. " +
     "In relaxed mode sunnypilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
@@ -69,6 +64,12 @@ DESCRIPTIONS = {
   "TrafficStopDistanceAdjust": tr_noop(
     "微调车辆相对检测到的停止线的停车位置：正值让停车点前移（更贴近停止线），负值后移。"
     "它叠加在一个固定的「摄像头到车头」修正之上，建议从小幅度开始、按自己车上的实际安装情况调整。"
+  ),
+  "GasLongCancel": tr_noop(
+    "踩下油门时，暂时取消 openpilot 的纵向控制：纵向 PID 归零、车辆只滑行（不加速也不刹车）；"
+    "松开油门 0.5 秒后自动恢复纵向控制。"
+    "如果纵向是被刹车或按键取消的，本功能不会把它恢复回来——必须重新启用。"
+    "只影响纵向，横向（车道保持）完全不受影响。"
   ),
 }
 
@@ -110,15 +111,6 @@ class TogglesLayout(Widget):
         lambda: tr("Experimental Mode"),
         "",
         "experimental_white.png",
-        False,
-      ),
-      # 踩油门时暂停/减小模型与系统的减速（see gas_override.py）。
-      # 默认开启：参数在 params_keys.h 里声明为 "1"，而 Params.get_bool 对
-      # 不存在的键返回 False，所以首次运行前显式落一次默认值（见 __init__）。
-      "GasPedalOverride": (
-        lambda: tr("踩油门让位"),
-        DESCRIPTIONS["GasPedalOverride"],
-        "disengage_on_accelerator.png",
         False,
       ),
       # "DisengageOnAccelerator": (
@@ -198,6 +190,23 @@ class TogglesLayout(Widget):
           description=lambda: tr(DESCRIPTIONS["TrafficStopDistanceAdjust"]),
           icon="",
         )
+
+    # ── 踩油门挂起纵向（patch12；机制见 sunnypilot/.../lib/gas_long_cancel.py）──
+    # key 由 params_keys.h 声明 ⇒ 必须先重编译 libparams_c.so 才存在；
+    # 未生效时整项不注册（否则下面 `get_bool(param)` 抛 UnknownKeyName 会把设置页打崩）。
+    # needs_restart=False：gas_long_cancel.py 自己 1 Hz 轮询 ⇒ 行车中切换约 1 秒生效，不用重启。
+    # ★ 默认关闭：params_keys.h 里默认 "0"，且**不**进 __init__ 里那份"首次落实 True"的名单。
+    try:
+      self._params.get_bool("GasLongCancel")
+    except UnknownKeyName:
+      pass
+    else:
+      self._toggle_defs["GasLongCancel"] = (
+        lambda: tr("踩油门挂起纵向"),
+        DESCRIPTIONS["GasLongCancel"],
+        "",
+        False,
+      )
 
     self._long_personality_setting = multiple_button_item(
       lambda: tr("Driving Personality"),
