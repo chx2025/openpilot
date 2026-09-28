@@ -171,6 +171,14 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"EnableCopyparty", {PERSISTENT | BACKUP, BOOL}},
     {"EnableGithubRunner", {PERSISTENT | BACKUP, BOOL}},
     {"GasPedalOverride", {PERSISTENT | BACKUP, BOOL, "1"}},
+    // 踩油门挂起纵向（2026-09-28）：踩下油门 -> 暂时取消 openpilot 纵向控制（
+    // 纵向总闸 CC.longActive 被压成 False），松开油门 GasLongCancelResumeMs
+    // 毫秒后自动恢复。只作用于纵向，横向完全不受影响。
+    // ★ 被刹车 / 按键取消掉的纵向不受本功能影响（不会因踩油门而复活）。
+    // 运行期热切换：改 /data/params/d/GasLongCancel（1 Hz 轮询生效，不用重启）。
+    {"GasLongCancel", {PERSISTENT | BACKUP, BOOL, "0"}},
+    // 松油门后恢复纵向的等待时间（毫秒）。范围 0..5000，超出会被夹取。
+    {"GasLongCancelResumeMs", {PERSISTENT | BACKUP, INT, "500"}},
     {"GreenLightAlert", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"GithubRunnerSufficientVoltage", {CLEAR_ON_MANAGER_START , BOOL}},
     {"HasAcceptedTermsSP", {PERSISTENT, STRING, "0"}},

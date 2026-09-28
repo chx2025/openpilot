@@ -23,6 +23,7 @@ from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
 from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
+from openpilot.sunnypilot.selfdrive.controls.lib.gas_long_cancel import GasLongCancel
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -69,6 +70,9 @@ class Controls(ControlsExt):
       self.LaC = LatControlTorque(self.CP, self.CP_SP, self.CI, DT_CTRL)
 
     self.LaC = ControlsExt.initialize_lateral_control(self, self.LaC, self.CI, DT_CTRL)
+
+    # sunnypilot: 踩油门挂起纵向（详见 gas_long_cancel.py 模块头）。
+    self.gas_long_cancel = GasLongCancel(self.params)
 
   def update(self):
     self.sm.update(15)
@@ -118,6 +122,15 @@ class Controls(ControlsExt):
     CC.latActive = _lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
     CC.longActive = CC.enabled and (self.CP.openpilotLongitudinalControl or not self.CP_SP.pcmCruiseSpeed)
+
+    # sunnypilot: 踩油门挂起纵向（gas_long_cancel.py）。
+    # 只压纵向总闸 ⇒ 下面的 `if not CC.longActive: self.LoC.reset()` 与丰田侧
+    # carcontroller 的 long_pid.reset() 都会执行；横向一个字都不碰。
+    # 返回 True 的条件：本帧正踩着油门，或松油门后的恢复倒计时还没走完。
+    # ★ 若纵向是被刹车/按键取消的，CC.enabled 已是 False ⇒ 模块保持解除武装，
+    #   之后踩油门/松油门都不会把纵向「复活」（需求 3）。
+    if self.gas_long_cancel.update(bool(CS.gasPressed), CC.enabled, CS.vEgo, CS.aEgo):
+      CC.longActive = False
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
