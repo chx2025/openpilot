@@ -56,7 +56,10 @@ def run(c: GasOverrideController, n: int, **kw) -> gas_override.GasOverrideResul
 
 # ===== 0. constants match the user spec =====
 def test_constants_match_user_spec():
-  assert GAS_PRESSED_A_FLOOR == -0.3
+  # 2026-09-28: 由 -0.3 改为 0.0（踩油门时完全暂停减速）。
+  # 原因：实车 351 个 pressed 帧里 37.6% 仍在 aOut<0，其中无前车+减速 71 次
+  # ⇒ 用户需求原文的「暂停」才是要的行为。见 gas_override.py 文件头与常量注释。
+  assert GAS_PRESSED_A_FLOOR == 0.0
   assert GAS_SAFE_D_REL_CLOSE_M == 4.0
   assert GAS_SAFE_CLOSING_KPH == 10.0
   assert GAS_SAFE_D_REL_MIN_M == 2.0
@@ -88,7 +91,7 @@ def test_inactive_when_gas_not_pressed():
 
 # ===== 2. requirement 1: gas pressed raises the deceleration floor =====
 def test_gas_pressed_reduces_braking():
-  """The core behaviour: a mild model brake (-1.5) becomes -0.3.
+  """The core behaviour: a mild model brake (-1.5) becomes 0.0 (floor=0.0, 2026-09-28).
 
   Note the mild value: since 2026-09-25 a *hard* request (<= -2.0) is no longer
   overridden -- see the safety exception e tests below.
@@ -108,10 +111,18 @@ def test_gas_pressed_never_cuts_acceleration():
   assert res.a_target_out == 1.75
 
 
-def test_gas_pressed_leaves_milder_braking_untouched():
+def test_gas_pressed_zeroes_even_mild_braking():
+  """2026-09-28（floor 由 -0.3 改为 0.0）：**任何**减速都被清零，含 -0.1 这种极轻的。
+
+  旧语义下 -0.1 比地板 -0.3 更"温和" ⇒ 原样透传；改成 0.0 后它就是需求原文的
+  「暂停一切减速」⇒ -0.1 → 0.0 是**有意的语义变更**，不是回归。
+  加速侧完全不受影响，由 test_gas_pressed_never_cuts_acceleration 守着。
+  """
   c = GasOverrideController()
   res = step(c, gas_pressed=True, a_target_in=-0.1)
-  assert res.a_target_out == -0.1
+  assert res.phase == "pressed"
+  assert res.a_target_out == 0.0
+  assert res.a_target_out > -0.1        # 确认是被"抬升"上来的，而不是巧合相等
 
 
 def test_gas_pressed_suppresses_stop_intent():
