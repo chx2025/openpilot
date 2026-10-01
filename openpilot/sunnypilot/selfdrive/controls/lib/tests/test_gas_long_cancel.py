@@ -1,8 +1,8 @@
-"""Tests for GasLongCancel: 踩油门挂起纵向 / 松油门 0.5 s 后恢复。
+"""Tests for GasLongCancel: 踩油门挂起纵向 / 松油门立即恢复（本机 ResumeMs=0）。
 
 Spec (user requirement, 2026-09-28):
   1. 踩油门 -> 取消纵向（把 CC.longActive 压成 False，不是"减小减速"）。
-  2. 松开油门 -> 0.5 s 后恢复纵向。
+  2. 松开油门 -> 立即恢复纵向（本机配置 0 ms；延时可调 GasLongCancelResumeMs）。
   3. 如果纵向是被 刹车 / 按键 取消掉的，那么之后再踩油门、松油门
      都不能恢复纵向 —— 「踩油门挂起」和「真的取消」必须分清楚。
 
@@ -161,6 +161,29 @@ def test_zero_resume_delay_releases_immediately():
   assert c.resume_frames == 0
   assert c.update(gas_pressed=True, engaged=True) is True
   assert c.update(gas_pressed=False, engaged=True) is False
+  # ★ 0 ms = 无空窗期：松油门当帧就交回纵向，相位 held -> ready 直跳，绝不出现 wait
+  assert c.phase == PHASE_READY
+  assert c.n_resume == 1
+  assert c.timer == 0
+
+
+def test_zero_resume_never_enters_wait_phase():
+  """★ 本机配置（GasLongCancelResumeMs=0）：松油门当帧接管，wait 相位永不出现。"""
+  params = FakeParams({GAS_LONG_CANCEL_PARAM_KEY: True, GAS_LONG_CANCEL_RESUME_PARAM_KEY: 0})
+  c = mk(params=params)
+  c.update(gas_pressed=False, engaged=True)      # 首帧读参数
+  seen = set()
+  trues = 0
+  for _ in range(3):                             # 踩 3 次
+    for _ in range(5):                           # 按下那帧 + 持续踩住 4 帧 = 5 帧挂起
+      trues += 1 if c.update(gas_pressed=True, engaged=True) else 0
+      seen.add(c.phase)
+    trues += 1 if c.update(gas_pressed=False, engaged=True) else 0   # ★ 松手当帧
+    seen.add(c.phase)
+  assert PHASE_WAIT not in seen, "0 ms 配置下不该出现 wait 相位（空窗期）"
+  assert c.n_suspend == 3 and c.n_resume == 3
+  assert c.phase == PHASE_READY
+  assert trues == 3 * 5, "只有踩住那 5 帧该挂起，松手帧必须立刻交回"
 
 
 def test_repeated_gas_taps_each_suspend():
@@ -335,3 +358,26 @@ def test_probe_logs_phase_transitions():
 def test_emit_swallows_exceptions():
   """cloudlog 不可用时也绝不上抛（controlsd 是 100 Hz 关键进程）。"""
   GasLongCancel._emit("[GasLongCancel] smoke")   # 不应抛异常
+# ---------------------------------------------------------------------------
+# 裸跑入口（本机没有 pytest）：`python3 test_gas_long_cancel.py` 直接全跑。
+# ★ 必须显式调用 —— 只定义 test_* 函数就直接运行文件的话，Python 什么都不执行，
+#   表现为「退出码 0 + 零输出」，极容易被当成"全部通过"（2026-09-29 踩过）。
+# ---------------------------------------------------------------------------
+def _run_all() -> int:
+  import traceback as _tb
+  names = sorted(n for n in list(globals()) if n.startswith("test_") and callable(globals()[n]))
+  failed = 0
+  for n in names:
+    try:
+      globals()[n]()
+      print("PASS  %s" % n)
+    except Exception:
+      failed += 1
+      print("FAIL  %s" % n)
+      print(_tb.format_exc().rstrip()[-800:])
+  print("\n%d/%d passed, %d failed" % (len(names) - failed, len(names), failed))
+  return failed
+
+
+if __name__ == "__main__":
+  raise SystemExit(_run_all())

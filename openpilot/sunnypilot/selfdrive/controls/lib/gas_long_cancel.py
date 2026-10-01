@@ -1,9 +1,9 @@
-"""gas_long_cancel.py — 踩油门挂起纵向 / 松油门 0.5 s 后自动恢复（2026-09-28）
+"""gas_long_cancel.py — 踩油门挂起纵向 / 松油门立即恢复纵向（2026-09-28）
 
 需求原文（用户 2026-09-28）
 ──────────────────────────────────────────────────────────────────────────
  1. **踩油门 ⇒ 取消纵向**（不是"把减速减小"，是把整层纵向挂起）。
- 2. **松开油门 ⇒ 0.5 秒后恢复纵向**。
+ 2. **松开油门 ⇒ 立即恢复纵向**（当帧接管，无空窗期）。
  3. 如果纵向是被**刹车**或**按键**取消掉的，那么之后再怎么踩油门 / 松油门
     **都不能**把纵向恢复回来 —— 「踩油门挂起」和「真的取消」必须分清楚。
  4. 用户原话「要不你给我搞个逻辑，让我试一试」⇒ 必须先做到：
@@ -33,7 +33,7 @@
                        CC.cruiseControl.cancel 独立驱动，只在 disengage 时置位）
                        ⇒ 挂起**不会取消车的 ACC**，不需要按键就能回来
 
-即：挂起期间 PCM 只做滑行，纵向上「谁都不管」；0.5 s 后 longActive 回真，
+即：挂起期间 PCM 只做滑行，纵向上「谁都不管」；松油门当帧 longActive 回真，
 纵向 PID 从零重新接管（挂起期间的累积量已经被 reset 掉）。
 
 
@@ -73,7 +73,7 @@
 参数（声明在 common/params_keys.h）
 ──────────────────────────────────────────────────────────────────────────
   GasLongCancel            BOOL  默认 "0"（关）。1 = 开启本功能。
-  GasLongCancelResumeMs    INT   默认 "500"。松油门后恢复纵向的等待时间（ms）。
+  GasLongCancelResumeMs    INT   本机 "0"。松油门后恢复纵向的等待时间（ms）；0 = 当帧立即接管。
 
 ⚠️ `Params.get_bool()` 对**未设置**的键返回 False 而**不走 default_value 回退**
   （gas_override.py 里已经踩过这个坑），所以本模块统一用
@@ -89,13 +89,14 @@ from openpilot.common.realtime import DT_CTRL
 GAS_LONG_CANCEL_ENABLE: bool = True
 # 运行期开关（BOOL，默认 "0" = 关）。声明见 common/params_keys.h。
 GAS_LONG_CANCEL_PARAM_KEY: str = "GasLongCancel"
-# 恢复延时（INT，单位 ms，默认 "500"）。声明见 common/params_keys.h。
+# 恢复延时（INT，单位 ms）。0 = 松油门当帧立即接管（本机配置）。声明见 common/params_keys.h。
 GAS_LONG_CANCEL_RESUME_PARAM_KEY: str = "GasLongCancelResumeMs"
 # 参数轮询周期（s）：1 Hz，拨开关后约 1 s 内生效，**不需要重启**。
 GAS_LONG_CANCEL_PARAMS_PERIOD_S: float = 1.0
 
 # ==== 数值 ==================================================================
-# 松油门后恢复纵向的默认等待时间（秒）。运行期可用 GasLongCancelResumeMs 覆盖。
+# 松油门后恢复纵向的等待时间（秒）。★ 这里只是「参数读不到时的兜底值 + 首帧种子」；
+# 实际生效值来自 GasLongCancelResumeMs（本机 = 0 ⇒ 松油门当帧立即接管）。
 GAS_LONG_CANCEL_RESUME_S: float = 0.5
 # 参数允许范围（夹取，防止手写参数把控制流卡死）
 GAS_LONG_CANCEL_RESUME_S_MIN: float = 0.0
