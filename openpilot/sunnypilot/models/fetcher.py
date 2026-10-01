@@ -6,6 +6,7 @@ See the LICENSE.md file in the root directory for more details.
 """
 
 import time
+import json
 import os
 import requests
 from requests.exceptions import (SSLError, RequestException, HTTPError)
@@ -139,12 +140,17 @@ class ModelCache:
 class ModelFetcher:
   """Handles fetching and caching of model data from remote source"""
   MODEL_URL = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_v22.json"
-  MODEL_URL_CHESTNUT = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_chestnut_v25.json"
+  MODEL_URL_CHESTNUT = "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_chestnut_v26.json"
 
   MODEL_SOURCES = {
     "qcom": (MODEL_URL, ""),
     "chestnut": (MODEL_URL_CHESTNUT, "_Chestnut"),
   }
+
+  # [patch16] local manifest override. Upstream deleted models/recompiled27 on 09-28,
+  # which made the Cinque Terre V3 entry inside chestnut_v26.json a dead link. When
+  # this file exists it is preferred over the remote URL; delete it to restore upstream.
+  LOCAL_CHESTNUT_MANIFEST = "/data/openpilot/openpilot/sunnypilot/models/driving_models_chestnut_local.json"
 
   def __init__(self, params: Params):
     self.params = params
@@ -168,6 +174,21 @@ class ModelFetcher:
     Returns None on transport errors. Raises on 404 and other fatal HTTP errors.
     """
     model_url, _ = self.MODEL_SOURCES[source]
+
+    # [patch16] prefer the local chestnut manifest when present
+    if source == "chestnut" and os.path.isfile(self.LOCAL_CHESTNUT_MANIFEST):
+      try:
+        with open(self.LOCAL_CHESTNUT_MANIFEST) as f:
+          local_data = json.load(f)
+        local_bundles = self.model_parser.parse_models(local_data)
+        if local_bundles:
+          self.model_caches[source].set(local_data)
+          cloudlog.debug(f"Using local chestnut manifest: {self.LOCAL_CHESTNUT_MANIFEST}")
+          return local_bundles
+        cloudlog.warning("Local chestnut manifest yielded no valid bundles; falling back to remote")
+      except Exception:
+        cloudlog.exception("Failed to load local chestnut manifest; falling back to remote")
+
     try:
       response = requests.get(model_url, timeout=10)
 
