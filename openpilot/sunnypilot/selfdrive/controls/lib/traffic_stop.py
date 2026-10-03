@@ -80,6 +80,20 @@
      `d=None(raw=…)`（被门槛挡住时的原始停止距离）、`vLim`（离介入还差多少）。
      另把「CRUISE 且模型判红灯」也纳入 1 Hz 打印 —— 这正是"该停没停"的
      现场，原实现只在**状态跳变**时留痕，整段只有第一帧有日志。
+  ⑥ 2026-10-01 **第二路（给 MPC 的虚拟停止线）的放行门槛与第一路解耦**，做成可热调
+     Param（`TrafficStopReleaseBrake`）。**默认值 = 2.16 ⇒ 行为回退到 09-27 那版**。
+     起因：用户报「红灯辅助刹车加得有点突兀」。
+     根因：2026-09-27 为了让"半路看见红旗也减速"消失，给 ② 加了门槛，但**复用**了
+     ① 的 `comfort_brake`(=2.16) ⇒ 必须等到"按 2.16 刚好才刹得住"那一刻才把虚拟
+     停止线交给 MPC ⇒ 出手前一帧还 0、出手那一帧直接 −2.16，中间没有任何过渡。
+     第一版把默认值设成 1.5（更早交出停止线、换更轻的第一脚）——
+     ★★ **当天实车被用户否决：「误刹变多了」**（连调到 2.1 也不行）。原因见常量
+     `RELEASE_BRAKE_DEFAULT_MPS2` 处：② 才是"真正让车减速的那一路"，门槛一降就等于
+     把 09-27 刚消掉的"模型误预测 ⇒ 半路减速"**重新打开一部分**
+     （50 km/h 放行距离 45.7 m → 65.3 m，提前约 19.6 m / 1.4 s）。
+     ⇒ **默认值回退到 2.16**；旋钮保留，供用户自己在车里试更低的值。
+     同时修掉 `_dbg_stop_raw`/`_dbg_v_limited` 在 `tag=off` 行上的**残留值**
+     （探针第 7 条铁律：每个字段必须在所有代码路径上赋值）。
 """
 
 from collections import deque
@@ -92,6 +106,10 @@ from openpilot.common.realtime import DT_MDL
 # ── 参数（Params，声明见 common/params_keys.h）──────────────────────────────
 PARAM_ENABLED = "TrafficStopAssist"                  # BOOL，默认 "0"（关）
 PARAM_DISTANCE_ADJUST = "TrafficStopDistanceAdjust"  # INT，单位**分米**，默认 "0"
+# FLOAT，单位 m/s²，默认 "1.5"。第二路（给 MPC 虚拟停止线）的放行门槛，
+# 越小 ⇒ 越早交给 MPC ⇒ 起手那一脚越轻。详见下面 RELEASE_BRAKE_* 的说明。
+# UI：设置 → Toggles → 「红灯减速介入提前量」（步长 0.05）。
+PARAM_RELEASE_BRAKE = "TrafficStopReleaseBrake"
 PARAM_POLL_FRAMES = round(1.0 / DT_MDL)              # 1 s 轮询一次（热生效）
 
 DM_PER_M = 10.0        # Params 存分米 ⇒ 米 = dm / 10
@@ -116,6 +134,45 @@ ADJUST_POSITIVE_MOVES_STOP_FORWARD = False
 #           代价：远处红灯要等到真刹不住的距离（约 45 m @50 km/h）才开始减速。
 #   False ⇒ 退回旧行为（识别到就提前减速，含模型误预测）。
 MPC_OBSTACLE_ONLY_WHEN_MUST_BRAKE = True
+
+# ── 第二路的**放行门槛**（"多早把虚拟停止线交给 MPC"）—— 2026-10-01 用户拍板 ──
+#   上面的开关只决定"要不要用门槛"，这个数决定"门槛多高"。
+#   ★ 语义（与 ① 完全同构，只是常量不同）：
+#       把 `stop_dist_m` 交给 MPC  ⟺  v_release < v_ego
+#       其中  v_release = sqrt(2 · RELEASE_BRAKE · (d − 1))
+#       等价于  a_need = v_ego² / (2·(d−1))  >  RELEASE_BRAKE
+#       （a_need = "要刚好停在虚拟停止线前，此刻需要多大的减速度"）
+#   ⇒ **同一个数同时决定"什么时候交"和"交出去时第一脚多大"**：交得越早，MPC 有
+#     越多距离去解那条 jerk-limited 曲线，起手那一脚就越轻。这不是巧合 ——
+#     门槛 g 意味着"放行那一刻需要的减速度恰好等于 g"。
+#   历史：2026-09-27 之前 ②**无条件**生效（模型一误预测车就减速，用户报「半路
+#     看见红旗也减速」）⇒ 当天加了 `MPC_OBSTACLE_ONLY_WHEN_MUST_BRAKE`，但门槛
+#     **复用** ① 的 `comfort_brake`(=2.16) ⇒ 必须等到"按 2.16 刚好才刹得住"，
+#     出手前一帧 0、出手那一帧直接 −2.16，没有任何过渡 —— 这就是 2026-10-01
+#     用户报的「刹车加得有点突兀」。
+#   现在把 ② 的门槛**与 ① 解耦**：
+#     * ① `v_target` 进候选池 → 门槛**仍是** `comfort_brake`(2.16)，一个字不动
+#     * ② `stop_dist_m` 给 MPC → 门槛 = 本值（**默认 2.16 = 旧行为**，可热调）
+#   为什么只动 ②：② 才是"真正让车减速的那一路"（MPC 一拿到障碍物就会规划减速
+#     轨迹）；① 走的是压低 `v_cruise` ⇒ `a_cruise`。保持 ① 不变 ⇒ 本次是
+#     **单变量**改动，出问题只需把 Param 调回去。
+#   ⚠⚠ **实测代价（2026-10-01 实车，用户否决）**：09-27 消掉的"模型误预测 ⇒ 半路
+#     减速"的暴露窗口会重新打开一部分 —— 门槛 1.5 时 50 km/h 的放行距离是 65.3 m，
+#     而 2.16 时只有 45.7 m，**提前 19.6 m（≈1.4 s）就开始真减速**。用户连调到 2.1
+#     （仍 < 2.16，放行距离 47.0 m）都仍觉得"误刹变多"。
+#   ⇒ **默认值已回退到 2.16**（见 RELEASE_BRAKE_DEFAULT_MPS2）。
+#   ★ 本旋钮现在的用途：默认即旧行为；想试"更早介入换更柔的第一脚"再往下调，
+#     一旦觉得误刹多就拉回 ≥2.16（此时 v_release 恒 ≥ v_limited ⇒ ② 不比 ① 更早
+#     放行 ⇒ 与 2026-10-01 之前**逐位相同**）。
+#   实车参考（用户 4 天 512 个红灯停等段的回放统计）：
+#     2.16(现状) 34 段「车还在动时就把停止线交给 MPC」／1.8 → 53／1.5 → 84／1.2 → 144
+#     1.5 放行那一刻：车速中位 38.9 km/h、距离中位 36.0 m（现状是 13.5 km/h / 3.7 m）
+RELEASE_BRAKE_DEFAULT_MPS2 = 2.16   # ★★ 2026-10-01 实车回退：默认值改回 ① 的 comfort_brake(2.16)
+                                    #    ⇒ 28 号那次"消掉半路误减速"的保护**默认保持开启**；
+                                    #    本旋钮变成"只能往更低里调"（默认=旧行为，安全单向）。
+                                    #    改回 1.5 的历史：用户实车报「误刹变多」，机理见下。
+RELEASE_BRAKE_MIN_MPS2 = 0.6      # 再低就接近"识别到就减速"；留一道闸，且与 UI 的 min 一致
+RELEASE_BRAKE_MAX_MPS2 = 2.4      # > ① 的 comfort_brake(2.16) ⇒ 保守侧；与 UI 的 max 一致
 
 # ── 状态机 ─────────────────────────────────────────────────────────────────
 CRUISE, STOPPING, STOPPED = 0, 1, 2
@@ -200,6 +257,25 @@ def _read_raw(params, key: str, default=None):  # noqa: ANN001
     value = params.get(key, return_default=True)
     return default if value is None else value
   except Exception:  # noqa: BLE001
+    return default
+
+
+def _read_float(params, key: str, default: float) -> float:
+  """FLOAT 型 Param 的降级读取。理由同 `_read_bool`：key 未声明（.so 未重编）时
+  `Params.get` 会抛 `UnknownKeyName`，绝不能让异常逃出 plannerd 的启动路径。
+
+  ★ 顺手记两条在本机实测过的 `Params` 语义（省得下次再猜）：
+    * FLOAT key **声明了默认值** ⇒ `get(return_default=True)` 一定返回 `float`
+      （文件不存在时 `params_get` 返回 `b''`，会回落到声明的默认值再转 float）；
+    * FLOAT key **没声明默认值** ⇒ 返回 `None` ⇒ 本函数归到 `default`。
+  """
+  try:
+    value = params.get(key, return_default=True)
+  except Exception:  # noqa: BLE001 - 见上方说明，刻意的兜底
+    return default
+  try:
+    return float(default if value is None else value)
+  except (TypeError, ValueError):
     return default
 
 
@@ -306,6 +382,7 @@ class TrafficStopController:
     self.params = Params()
     self.is_enabled = _read_bool(self.params, PARAM_ENABLED)
     self.distance_adjust_m = self._read_adjust_m()
+    self.release_brake = self._read_release_brake()
     self._poll_frame = 0
 
     self.state = CRUISE
@@ -351,7 +428,8 @@ class TrafficStopController:
     #   会让「双闪 / 同时打灯」时的心跳判定翻转。新增字段 ⇒ 零行为改动。
     self._dbg_blink_r = False
     self._dbg_stop_raw = None      # 被门槛挡住（stop_dist_m=None）时的原始停止距离
-    self._dbg_v_limited = float('inf')   # 门槛判据用的限速值（与 vEgo 比大小）
+    self._dbg_v_limited = float('inf')   # ① 门槛判据用的限速值（与 vEgo 比大小）
+    self._dbg_v_release = float('inf')   # ② 门槛判据用的限速值（同上，2026-10-01 加）
 
   # ── 参数轮询（1 Hz 热生效）────────────────────────────────────────────────
   def _read_adjust_m(self) -> float:
@@ -362,12 +440,22 @@ class TrafficStopController:
       dm = 0.0
     return float(np.clip(dm / DM_PER_M, -ADJUST_LIMIT_M, ADJUST_LIMIT_M))
 
+  def _read_release_brake(self) -> float:
+    """第二路放行门槛（m/s²）。1 Hz 轮询 ⇒ 改 Param 约 1 s 生效，不用重启。
+
+    越界自动夹紧到 [RELEASE_BRAKE_MIN_MPS2, RELEASE_BRAKE_MAX_MPS2]，
+    ⇒ UI 滑块范围、Param 手写值、文件被写坏三种情况都不会产生危险值。
+    """
+    value = _read_float(self.params, PARAM_RELEASE_BRAKE, RELEASE_BRAKE_DEFAULT_MPS2)
+    return float(np.clip(value, RELEASE_BRAKE_MIN_MPS2, RELEASE_BRAKE_MAX_MPS2))
+
   def _poll_params(self) -> None:
     self._poll_frame += 1
     if self._poll_frame >= PARAM_POLL_FRAMES:
       self._poll_frame = 0
       self.is_enabled = _read_bool(self.params, PARAM_ENABLED)
       self.distance_adjust_m = self._read_adjust_m()
+      self.release_brake = self._read_release_brake()
 
   # ── 复位 ──────────────────────────────────────────────────────────────────
   def reset(self) -> None:
@@ -437,6 +525,21 @@ class TrafficStopController:
     """
     self.log = None
     self._poll_params()
+
+    # ★ 2026-10-01 修（"探针第 7 条铁律：每个字段必须在所有代码路径上赋值"）：
+    #   下面三个诊断字段原本只在「STOPPING/STOPPED 且没被 CRUISE / OFF / GREEN
+    #   三条提前返回拦住」的**唯一**那条路径上赋值，而 `state == CRUISE`（下面
+    #   "障碍物释放"那段的提前返回）与 `traffic_state in (OFF, GREEN)` 两条提前
+    #   返回都会跳过它们 ⇒ `tag=off` 行打出来的是**上一段停等遗留的**值。
+    #   实测（用户 4 天日志、82542 条探针）**60977 帧**同时中招：`d=None(raw=…)`
+    #   与 `vLim=` 都在 `tag=off` 行上残留，最长一段连续 4252 帧打同一个
+    #   `raw=27.3`，而同一段的 `vEgo` 从 24.4 变到 33.7 —— 日志肉眼看不出异常，
+    #   照着它去定阈值会得出完全错误的结论。
+    #   现在每帧先置「本帧未计算」，谁算谁覆盖；`tag=off` 行会诚实地打
+    #   `d=None` / `vLim=inf`（= 这两条门槛本帧根本没参与判断）。
+    self._dbg_stop_raw = None
+    self._dbg_v_limited = float('inf')
+    self._dbg_v_release = float('inf')
 
     if not self.is_enabled:
       self.reset()
@@ -603,18 +706,28 @@ class TrafficStopController:
       #   `stop_dist < 300` 守卫照抄 DP：更远时 v_limited 已高于任何合法 v_ego。
       v_limited = ((2 * comfort_brake * max(stop_dist - 1.0, 0.0)) ** 0.5
                    if stop_dist < 300.0 else float('inf'))
-      self._dbg_v_limited = v_limited   # 诊断：离"该介入"还差多少（文件头 ⑤）
+      self._dbg_v_limited = v_limited   # 诊断：① 离"该介入"还差多少（文件头 ⑤）
       if v_limited < v_ego:
+        # ① v_target 进候选池。门槛 = comfort_brake(2.16)，**2026-10-01 一个字没动**。
         self.output_v_target = v_limited
         self.output_a_target = -comfort_brake
       else:
         self.output_v_target = V_TARGET_SENTINEL
         self.output_a_target = 0.0
-        # ★ 2026-09-27 第二路（用户拍板）：同一个门槛也管住**交给 MPC 的虚拟停止线**。
+        # ★ 2026-09-27 第二路（用户拍板）：用门槛管住**交给 MPC 的虚拟停止线**。
         #   它是真正让车减速的那一路 —— MPC 拿到障碍物就会规划减速轨迹。
         #   置 None 后主 planner 传 `traffic_stop_obstacle_m=None` ⇒ MPC 不加第 3 栏
         #   障碍物；探针里的 `d=None` 正是"被门槛挡住"的可见证据。
-        if MPC_OBSTACLE_ONLY_WHEN_MUST_BRAKE:
+        #   ★ 2026-10-01：门槛与 ① **解耦**，改用可热调的 `self.release_brake`
+        #     （**默认 2.16 = 与 ① 相同 ⇒ 行为等同改动前**）。调到更低才会"更早把
+        #     停止线交给 MPC"，但那个方向已被实车否决（误刹变多）——见常量处说明。
+        #     公式与 ① 同构（只是常量不同）⇒ `release_brake ≤ comfort_brake` 时
+        #     `v_release ≤ v_limited` 恒成立 ⇒ 本改动**只可能更早放行、不可能更晚**
+        #     （安全性单向）；把 Param 调到 ≥ 2.16 就逐位回到旧行为。
+        v_release = ((2 * self.release_brake * max(stop_dist - 1.0, 0.0)) ** 0.5
+                     if stop_dist < 300.0 else float('inf'))
+        self._dbg_v_release = v_release   # 诊断：② 离"该介入"还差多少
+        if MPC_OBSTACLE_ONLY_WHEN_MUST_BRAKE and v_release >= v_ego:
           self.stop_dist_m = None
 
     self._emit_tag(v_ego, dt)
@@ -682,6 +795,11 @@ class TrafficStopController:
       else:
         d = f'{self.stop_dist_m:.1f}'
       v_lim = 'inf' if self._dbg_v_limited == float('inf') else f'{self._dbg_v_limited:.1f}'
+      # ★ 2026-10-01 新增两个字段，**追加在行尾**（不改动前面的字段顺序，
+      #   免得已经写好的日志解析正则全部失效）：
+      #     rel=  第二路门槛的**当前取值**（= 热调的 Param）⇒ 一眼可验"参数生效没有"
+      #     vRel= 第二路门槛的**判据值**（同 vLim 的量纲）⇒ 一眼可算"离该介入还差多少"
+      v_rel = 'inf' if self._dbg_v_release == float('inf') else f'{self._dbg_v_release:.1f}'
       self.log = (f"[TrafficStop] {tag} sig={sig} d={d} "
                   f"adj={self.distance_adjust_m:+.1f} vEgo={v_ego * 3.6:.1f} "
                   f"aOut={self.output_a_target:+.2f} "
@@ -690,4 +808,5 @@ class TrafficStopController:
                   f"lead={int(self._dbg_lead)} dRel={self._dbg_d_rel:.1f} blink={self._dbg_blinker} "
                   f"blinkR={int(self._dbg_blink_r)} "
                   f"steer={self._dbg_steer:+.1f} xEnd={self._dbg_x_end:.1f} "
-                  f"yEnd={self._dbg_y_end:+.1f} mv={self._dbg_model_v:.1f} mv0={self._dbg_v_start:.1f}")
+                  f"yEnd={self._dbg_y_end:+.1f} mv={self._dbg_model_v:.1f} mv0={self._dbg_v_start:.1f} "
+                  f"vRel={v_rel} rel={self.release_brake:.2f}")

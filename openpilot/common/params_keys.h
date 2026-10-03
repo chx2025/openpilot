@@ -128,6 +128,17 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     // 停位微调，单位**分米**（-50..+50 = ±5.0 m，UI 步长 5 dm = 0.5 m）。
     // ★正值 = 停止位置往前移（车头更靠前 / 离停止线更近）；负值 = 往后移。
     {"TrafficStopDistanceAdjust", {PERSISTENT | BACKUP, INT, "0"}},
+    // 红灯 / 停止标志辅助：**第二路**（交给纵向 MPC 的虚拟停止线）的放行门槛，
+    // 单位 m/s²，FLOAT 型，默认 1.5。
+    //   语义：当 a_need = v²/(2(d−1))  >  本值 时，才把虚拟停止线交给 MPC。
+    //   越小 ⇒ 越早交给 MPC ⇒ 减速起手那一脚越轻；代价是"模型误预测 ⇒ 半路轻点
+    //   一脚"的暴露窗口变大（幅度被本值封顶）。
+    //   ★ 设成 ≥ 2.16（= 后端 comfort_brake）等价于**关闭本改动**，行为逐位回到
+    //     2026-09-27 版（必须等"刚好刹得住"才交）。
+    //   ★ 后端 traffic_stop.py 以 1 Hz 轮询本值 ⇒ **热生效、无需重启**；越界自动
+    //     夹紧到 [0.6, 2.4]。UI：Toggles → 「红灯减速介入提前量」（整数 60..240
+    //     对应 0.60..2.40，步长 5 ⇒ 0.05）。
+    {"TrafficStopReleaseBrake", {PERSISTENT | BACKUP, FLOAT, "2.16"}},
     {"TrainingVersion", {PERSISTENT, STRING}},
     {"UbloxAvailable", {PERSISTENT, BOOL}},
     {"UpdateAvailable", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, BOOL}},

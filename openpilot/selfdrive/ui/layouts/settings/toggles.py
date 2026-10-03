@@ -65,6 +65,12 @@ DESCRIPTIONS = {
     "微调车辆相对检测到的停止线的停车位置：正值让停车点前移（更贴近停止线），负值后移。"
     "它叠加在一个固定的「摄像头到车头」修正之上，建议从小幅度开始、按自己车上的实际安装情况调整。"
   ),
+  "TrafficStopReleaseBrake": tr_noop(
+    "红灯减速介入提前量（m/s²）。决定「多早把虚拟停止线交给纵向 MPC」：数值越小，交得越早，"
+    "减速起手那一脚就越轻、越平顺；代价是模型偶尔误判「前方要停」时，会在半路轻点一脚刹车"
+    "（幅度同样受这个数值封顶）。默认 1.5。想更稳就往大调（1.8），想更早更柔就往小调（1.2）；"
+    "调到 2.1 以上等于关掉这个提前介入，回到原来的行为。改完约 1 秒生效，不用重启。"
+  ),
   "GasLongCancel": tr_noop(
     "踩下油门时，暂时取消 openpilot 的纵向控制：纵向 PID 归零、车辆只滑行（不加速也不刹车）；"
     "松开油门立即恢复纵向控制（当帧接管，没有空窗期）。"
@@ -80,9 +86,12 @@ class TogglesLayout(Widget):
     self._params = Params()
     self._is_release = False  # self._params.get_bool("IsReleaseBranch")
 
-    # 红灯辅助的停位微调控件：在下面"traffic-stop 注册块"里创建（需要 Param 已生效）；
-    # 未注册时保持 None，循环里会据此跳过它。
+    # 红灯辅助的两个数值控件：在下面"traffic-stop 注册块"里创建（需要 Param 已生效）；
+    # 未注册时保持 None，循环里会据此跳过它们。
+    #   _traffic_stop_adjust        → TrafficStopDistanceAdjust（INT，分米）
+    #   _traffic_stop_release_brake → TrafficStopReleaseBrake（FLOAT，m/s²，2026-10-01 加）
     self._traffic_stop_adjust = None
+    self._traffic_stop_release_brake = None
 
     # 自定义项按需求「首次运行默认开启」：Params.get_bool() 对不存在的键返回 False
     # （C++ Params::get 不走 default_value 回退），会让 toggle 首次显示成关。
@@ -191,6 +200,29 @@ class TogglesLayout(Widget):
           icon="",
         )
 
+        # ★ 2026-10-01 加：红灯减速介入提前量（第二路门槛，m/s²）。
+        #   `use_float_scaling=True` ⇒ 滑块上的整数 60..240 代表 0.60..2.40，
+        #   读 = int(float(param) * 100)、写 = put(param, value / 100.0)（**float**
+        #   ⇒ 必须配 params_keys.h 里的 FLOAT 型，否则 put 会抛 Type mismatch）。
+        #   范围与后端 RELEASE_BRAKE_MIN/MAX_MPS2 一致（后端还会再夹一层）。
+        #   默认值来自 params_keys.h 的 "1.5"，此处不写任何默认逻辑。
+        #   ⚠ 整个创建过程包 try/except：万一 key 不可用（.so 没重编），
+        #     宁可少一个滑块，也绝不能让 `UnknownKeyName` 把**整个设置页**打崩。
+        try:
+          self._traffic_stop_release_brake = option_item_sp(
+            title=lambda: tr("红灯减速介入提前量"),
+            param="TrafficStopReleaseBrake",
+            min_value=60,
+            max_value=240,
+            value_change_step=5,
+            use_float_scaling=True,
+            label_callback=lambda v: f"{v / 100.0:.2f} m/s²",
+            description=lambda: tr(DESCRIPTIONS["TrafficStopReleaseBrake"]),
+            icon="",
+          )
+        except Exception:
+          self._traffic_stop_release_brake = None
+
     # ── 踩油门挂起纵向（patch12；机制见 sunnypilot/.../lib/gas_long_cancel.py）──
     # key 由 params_keys.h 声明 ⇒ 必须先重编译 libparams_c.so 才存在；
     # 未生效时整项不注册（否则下面 `get_bool(param)` 抛 UnknownKeyName 会把设置页打崩）。
@@ -219,9 +251,16 @@ class TogglesLayout(Widget):
     )
 
     # 跟在自己主开关后面渲染的**从属项**（不是纯开关，所以不进 _toggle_defs）。
+    # 从属项：主开关 → **一串** `(param, widget)`（2026-10-01 由"单个"改成"可多个"：
+    # 红灯辅助现在挂了两个数值控件）。顺序即渲染顺序。
     FOLLOWERS = {
-      "TrafficStopAssist": ("TrafficStopDistanceAdjust", self._traffic_stop_adjust),
-      "ExperimentalMode": ("LongitudinalPersonality", self._long_personality_setting),
+      "TrafficStopAssist": (
+        ("TrafficStopDistanceAdjust", self._traffic_stop_adjust),
+        ("TrafficStopReleaseBrake", self._traffic_stop_release_brake),
+      ),
+      "ExperimentalMode": (
+        ("LongitudinalPersonality", self._long_personality_setting),
+      ),
     }
 
     self._toggles = {}
@@ -259,10 +298,10 @@ class TogglesLayout(Widget):
 
       self._toggles[param] = toggle
 
-      # 从属项（停位微调 / 驾驶风格）紧跟在自己的主开关后面
-      follower = FOLLOWERS.get(param)
-      if follower is not None and follower[1] is not None:
-        self._toggles[follower[0]] = follower[1]
+      # 从属项（停位微调 / 介入提前量 / 驾驶风格）紧跟在自己的主开关后面
+      for f_param, f_widget in FOLLOWERS.get(param, ()):
+        if f_widget is not None:
+          self._toggles[f_param] = f_widget
 
     self._update_experimental_mode_icon()
     self._scroller = Scroller(list(self._toggles.values()), line_separator=True, spacing=0)
