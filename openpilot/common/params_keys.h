@@ -315,6 +315,11 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"MapTargetVelocities", {CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"SmartCruiseControlMap", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"SmartCruiseControlVision", {PERSISTENT | BACKUP, BOOL, "0"}},
+    // SCC-V 调参（2026-10-03）：MaxLatAcc= 真实介入门槛（越小越早介入、弯中越慢；
+    // 上游原值 2.0，此处默认取积极的 1.6）；DecelBoost= 介入段减速倍率（1.0= 上游原样）。
+    // 一键回退：MaxLatAcc 写 2.0 + DecelBoost 写 1.0 ⇒ 与改动前逐位相同。
+    {"SCCVisionMaxLatAcc", {PERSISTENT | BACKUP, FLOAT, "1.6"}},
+    {"SCCVisionDecelBoost", {PERSISTENT | BACKUP, FLOAT, "1.0"}},
 
     // Torque lateral control custom params
     {"CustomTorqueParams", {PERSISTENT | BACKUP , BOOL}},

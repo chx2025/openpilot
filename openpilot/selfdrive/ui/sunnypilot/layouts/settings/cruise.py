@@ -50,7 +50,36 @@ class CruiseLayout(Widget):
     self.scc_v_toggle = toggle_item_sp(
       title=tr("Smart Cruise Control - Vision"),
       description=tr("Use vision path predictions to estimate the appropriate speed to drive through turns ahead."),
-      param="SmartCruiseControlVision")
+      param="SmartCruiseControlVision",
+      callback=self._on_scc_v_toggle)
+
+    # ── SCC-V 调参滑块（2026-10-03）────────────────────────────────────────
+    # 改完约 1 秒热生效，**不需要重启**（vision_controller.py 里 1 Hz 轮询）。
+    # ★ 整块包 try/except：旋钮构造失败绝不允许把整个设置页打崩（p18 教训）。
+    # ★ 两个数的语义与推导见
+    #   sunnypilot/selfdrive/controls/lib/smart_cruise_control/vision_controller.py
+    #   里 PARAM_MAX_LAT_ACC / PARAM_DECEL_BOOST 处的注释（含一键回退值）。
+    try:
+      self.scc_v_max_lat = option_item_sp(
+        title=lambda: tr("弯道横向加速度上限"),
+        param="SCCVisionMaxLatAcc",
+        min_value=100, max_value=300, value_change_step=5,
+        use_float_scaling=True,
+        label_callback=lambda v: f"{v / 100.0:.2f} m/s²",
+        description=lambda: tr("越小 = 越早开始减速、过弯越慢。上游原值 2.00；写回 2.00 即逐位恢复原样。"))
+    except Exception:
+      self.scc_v_max_lat = None
+
+    try:
+      self.scc_v_decel_boost = option_item_sp(
+        title=lambda: tr("弯道减速增强"),
+        param="SCCVisionDecelBoost",
+        min_value=100, max_value=250, value_change_step=5,
+        use_float_scaling=True,
+        label_callback=lambda v: f"{v / 100.0:.2f}×",
+        description=lambda: tr("介入后按比例加深减速。1.00 = 上游原样；只加深刹车，绝不增加加速。"))
+    except Exception:
+      self.scc_v_decel_boost = None
 
     self.scc_m_toggle = toggle_item_sp(
       title=tr("Smart Cruise Control - Map"),
@@ -91,13 +120,15 @@ class CruiseLayout(Widget):
     #   self.icbm_toggle,
       self.dec_toggle,
       self.scc_v_toggle,
+      self.scc_v_max_lat,       # SCC-V 调参（构造失败时为 None，下面过滤掉）
+      self.scc_v_decel_boost,
       self.scc_m_toggle,
       self.custom_acc_toggle,
       self.custom_acc_short_increment,
       self.custom_acc_long_increment,
       self.sla_settings_button,
     ]
-    return items
+    return [it for it in items if it is not None]
 
   def _render(self, rect):
     if self._current_panel == PanelType.SLA:
@@ -110,6 +141,17 @@ class CruiseLayout(Widget):
     self._scroller.show_event()
     self.icbm_toggle.show_description(True)
     self.custom_acc_toggle.show_description(True)
+    for item in (self.scc_v_max_lat, self.scc_v_decel_boost):
+      if item is not None:
+        item.show_description(True)
+
+  def _on_scc_v_toggle(self, state):
+    """SCC-V 关闭时把两个调参滑块一起藏起来（避免误以为关了还生效）。"""
+    for item in (self.scc_v_max_lat, self.scc_v_decel_boost):
+      if item is None:
+        continue
+      item.set_visible(state)
+      item.action_item.set_enabled(self.scc_v_toggle.action_item.enabled)
 
   def _set_current_panel(self, panel: PanelType):
     self._current_panel = panel
@@ -152,6 +194,8 @@ class CruiseLayout(Widget):
         ui_state.params.remove("DynamicExperimentalControl")
         ui_state.params.remove("SmartCruiseControlVision")
         ui_state.params.remove("SmartCruiseControlMap")
+        # ★ 注意：**不 remove** SCCVisionMaxLatAcc / SCCVisionDecelBoost ——
+        #   纯数值调参项，删掉会丢掉用户已调好的值；这里只禁用控件。
         self.custom_acc_toggle.action_item.set_enabled(False)
         self.dec_toggle.action_item.set_enabled(False)
         self.scc_v_toggle.action_item.set_enabled(False)
@@ -185,6 +229,8 @@ class CruiseLayout(Widget):
         self.custom_acc_toggle.show_description(True)
 
     self._on_custom_acc_toggle(self.custom_acc_toggle.action_item.get_state())
+    # SCC-V 开关 ⇒ 两个调参滑块的显隐（每帧跑一次，保证与开关状态一致）
+    self._on_scc_v_toggle(self.scc_v_toggle.action_item.get_state())
 
   def _on_custom_acc_toggle(self, state):
     self.custom_acc_short_increment.set_visible(state)
