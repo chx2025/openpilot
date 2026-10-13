@@ -569,3 +569,23 @@ msgstr "scan to access"
 #, python-format
 msgid "sec"
 msgstr ""
+
+#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:8
+#, python-format
+msgid "Auto Brake Hold (TSS2)"
+msgstr ""
+
+#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:9
+#, python-format
+msgid "For vehicles without a factory Auto Hold. Holds the car at a standstill using the PCS brake once stopped for 2 seconds with cruise disengaged. Press the gas to release; press the brake again to release and restart the timer.<br>Off: Disabled.<br>On: Active whenever in Drive (D).<br>Speed: Active in Drive (D) only after exceeding 18 km/h (5 m/s) since shifting into D.<br>Requires a TSS2 camera-ACC vehicle with openpilot longitudinal control. Takes effect after the car is restarted."
+msgstr ""
+
+#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:10
+#, python-format
+msgid "On"
+msgstr ""
+
+#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:10
+#, python-format
+msgid "Speed"
+msgstr ""
