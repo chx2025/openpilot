@@ -73,6 +73,15 @@ static bool toyota_lock_ctrl = false;
 // 車輪轉動或踩油門時：恢復轉送相機原始 0x344，並拒絕 openpilot 送出的 0x344
 static bool toyota_auto_brake_hold = false;
 
+// dp - 蠕動容許（修正汽油車「有作動但壓不住」）：candy 以 vehicle_moving（輪速加總 != 0，解析度 0.01 km/h）判斷，
+// 汽油車 D 檔怠速蠕行一動就放開保持。改為平均輪速 sample 最大值低於 0.75 m/s (2.7 km/h) 才視為可保持。
+// 必須與 opendbc/car/toyota/auto_brake_hold.py 的 CREEP_HOLD_SPEED 一致。
+#define TOYOTA_ABH_MAX_SPEED_MMS 750  // mm/s（vehicle_speed 以 VEHICLE_SPEED_FACTOR = 1000 儲存）
+
+static bool toyota_abh_hold_allowed(void) {
+  return !gas_pressed && (vehicle_speed.max < TOYOTA_ABH_MAX_SPEED_MMS);
+}
+
 static uint32_t toyota_compute_checksum(const CANPacket_t *msg) {
   int len = GET_LEN(msg);
   uint8_t checksum = (uint8_t)(msg->addr) + (uint8_t)((unsigned int)(msg->addr) >> 8U) + (uint8_t)(len);
@@ -333,11 +342,11 @@ static bool toyota_tx_hook(const CANPacket_t *msg) {
       }
     }
 
-    // dp - 自動煞車維持：只有停車且未踩油門時才允許 openpilot 送出 PRE_COLLISION_2
+    // dp - 自動煞車維持：只有低速（< 0.75 m/s）且未踩油門時才允許 openpilot 送出 PRE_COLLISION_2
     // 與 candy 的差異：candy 不論功能開關都套用此限制；這裡只在 toyota_auto_brake_hold 時套用，
-    // 未啟用時 0x344 的行為與 dplcc 原本完全相同
+    // 未啟用時 0x344 的行為與原本完全相同
     if (toyota_auto_brake_hold && (msg->addr == 0x344U)) {
-      if (vehicle_moving || gas_pressed) {
+      if (!toyota_abh_hold_allowed()) {
         tx = false;
       }
     }
@@ -506,14 +515,14 @@ static void toyota_rx_ext_hook(const CANPacket_t *msg) {
   }
 }
 
-// dp - 自動煞車維持：停車且未踩油門時擋掉相機 (bus 2) 的 PRE_COLLISION_2，改由 openpilot 送出
+// dp - 自動煞車維持：低速（< 0.75 m/s）且未踩油門時擋掉相機 (bus 2) 的 PRE_COLLISION_2，改由 openpilot 送出
 // 與 candy 的差異：candy 的 fwd hook 對所有豐田無條件生效（即使功能關閉、甚至原廠縱向），
 // 這裡只在 toyota_auto_brake_hold 時才攔截，功能關閉時相機 0x344 永遠照常轉送
 static bool toyota_fwd_hook(int bus_num, int addr) {
   bool block_msg = false;
   if (toyota_auto_brake_hold && (bus_num == 2)) {
     bool is_aeb_msg = (addr == 0x344);
-    block_msg = is_aeb_msg && !vehicle_moving && !gas_pressed;
+    block_msg = is_aeb_msg && toyota_abh_hold_allowed();
   }
   return block_msg;
 }

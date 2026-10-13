@@ -93,6 +93,8 @@ class ToyotaFlags(IntFlag):
   # dp - 自動煞車維持 (Auto Brake Hold, ported from sunnypilot-candy SP_AUTO_BRAKE_HOLD / SP_AUTO_BRAKE_HOLD_SPEED)
   AUTO_BRAKE_HOLD = 2 ** 18
   AUTO_BRAKE_HOLD_SPEED = 2 ** 19
+  AUTO_BRAKE_HOLD_FORCE_HIGH = 2 ** 20  # 保持力道：加強 (-3.0)
+  AUTO_BRAKE_HOLD_FORCE_MAX = 2 ** 21   # 保持力道：最強 (-4.0)
 
 def dbc_dict(pt, radar):
   return {Bus.pt: pt, Bus.radar: radar}

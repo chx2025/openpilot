@@ -14,4 +14,17 @@ ITEMS = [
     "flags": "PERSISTENT",
     "param_type": "INT",
   },
+  {
+    "section": "Toyota / Lexus",
+    "key": "dp_toyota_auto_brake_hold_force",
+    "type": "text_spin_button_item",
+    "title": lambda: tr("Auto Brake Hold Force"),
+    "description": lambda: tr("Brake force used while holding. Standard (-2.0 m/s²) matches the original implementation. If the car still creeps forward while holding (common on gasoline models due to idle creep in Drive), try High (-3.0) or Max (-4.0). Takes effect after the car is restarted."),
+    "options": [lambda: tr("Standard"), lambda: tr("High"), lambda: tr("Max")],
+    "default": "0",
+    "brands": ["toyota"],
+    "condition": "openpilotLongitudinalControl",
+    "flags": "PERSISTENT",
+    "param_type": "INT",
+  },
 ]

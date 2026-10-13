@@ -13,3 +13,18 @@ settings:
       - "速度"
     flags: PERSISTENT
     param_type: INT
+
+  - key: dp_toyota_auto_brake_hold_force
+    type: text_spin_button_item
+    title: "自動煞車維持力道"
+    description: "保持時使用的煞車力道。標準（-2.0 m/s²）與原始實作相同。若保持中車輛仍會往前蠕動（汽油車在 D 檔怠速有蠕行力時常見），可改用加強（-3.0）或最強（-4.0）。重新發動車輛後生效。"
+    category: "Toyota / Lexus"
+    brands: ["toyota"]
+    condition: "openpilotLongitudinalControl"
+    default: 0
+    options:
+      - "標準"
+      - "加強"
+      - "最強"
+    flags: PERSISTENT
+    param_type: INT

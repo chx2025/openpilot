@@ -947,3 +947,23 @@ msgstr "開啟"
 #, python-format
 msgid "Speed"
 msgstr "速度"
+
+#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:21
+#, python-format
+msgid "Auto Brake Hold Force"
+msgstr "自動煞車維持力道"
+
+#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:22
+#, python-format
+msgid "Brake force used while holding. Standard (-2.0 m/s²) matches the original implementation. If the car still creeps forward while holding (common on gasoline models due to idle creep in Drive), try High (-3.0) or Max (-4.0). Takes effect after the car is restarted."
+msgstr "保持時使用的煞車力道。標準（-2.0 m/s²）與原始實作相同。若保持中車輛仍會往前蠕動（汽油車在 D 檔怠速有蠕行力時常見），可改用加強（-3.0）或最強（-4.0）。重新發動車輛後生效。"
+
+#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:23
+#, python-format
+msgid "High"
+msgstr "加強"
+
+#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:23
+#, python-format
+msgid "Max"
+msgstr "最強"
