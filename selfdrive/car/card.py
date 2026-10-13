@@ -122,12 +122,6 @@ class Car:
         dp_params |= structs.DPFlags.ToyotaAutoBrakeHold
       if int(dp_toyota_auto_brake_hold) == 2:
         dp_params |= structs.DPFlags.ToyotaAutoBrakeHoldSpeed
-      # 保持力道：0 = 標準 (-2.0)，1 = 加強 (-3.0)，2 = 最強 (-4.0)
-      dp_toyota_auto_brake_hold_force = int(self.params.get("dp_toyota_auto_brake_hold_force", return_default=True) or 0)
-      if dp_toyota_auto_brake_hold_force == 1:
-        dp_params |= structs.DPFlags.ToyotaAutoBrakeHoldForceHigh
-      elif dp_toyota_auto_brake_hold_force >= 2:
-        dp_params |= structs.DPFlags.ToyotaAutoBrakeHoldForceMax
 
       if self.params.get_bool("dp_vag_a0_sng"):
         dp_params |= structs.DPFlags.VagA0SnG

@@ -577,7 +577,7 @@ msgstr ""
 
 #: dragonpilot/settings/brand.toyota.auto-brake-hold.py:9
 #, python-format
-msgid "For vehicles without a factory Auto Hold. Holds the car at a standstill using the PCS brake once stopped for 2 seconds with cruise disengaged. Press the gas to release; press the brake again to release and restart the timer.<br>Off: Disabled.<br>On: Active whenever in Drive (D).<br>Speed: Active in Drive (D) only after exceeding 18 km/h (5 m/s) since shifting into D.<br>Requires a TSS2 camera-ACC vehicle with openpilot longitudinal control. Takes effect after the car is restarted."
+msgid "<b>Hybrid models only (not supported on gasoline models).</b><br>For vehicles without a factory Auto Hold. Holds the car at a standstill using the PCS brake once stopped for 2 seconds with cruise disengaged. Press the gas to release; press the brake again to release and restart the timer.<br>Off: Disabled.<br>On: Active whenever in Drive (D).<br>Speed: Active in Drive (D) only after exceeding 18 km/h (5 m/s) since shifting into D.<br>Requires a TSS2 camera-ACC vehicle with openpilot longitudinal control. Takes effect after the car is restarted."
 msgstr ""
 
 #: dragonpilot/settings/brand.toyota.auto-brake-hold.py:10
@@ -588,24 +588,4 @@ msgstr ""
 #: dragonpilot/settings/brand.toyota.auto-brake-hold.py:10
 #, python-format
 msgid "Speed"
-msgstr ""
-
-#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:21
-#, python-format
-msgid "Auto Brake Hold Force"
-msgstr ""
-
-#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:22
-#, python-format
-msgid "Brake force used while holding. Standard (-2.0 m/s²) matches the original implementation. If the car still creeps forward while holding (common on gasoline models due to idle creep in Drive), try High (-3.0) or Max (-4.0). Takes effect after the car is restarted."
-msgstr ""
-
-#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:23
-#, python-format
-msgid "High"
-msgstr ""
-
-#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:23
-#, python-format
-msgid "Max"
 msgstr ""

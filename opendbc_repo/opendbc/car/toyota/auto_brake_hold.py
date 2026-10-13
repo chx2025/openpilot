@@ -38,28 +38,11 @@ BRAKE_HOLD_TIMER = 100
 # SPEED 模式的速度門檻 (m/s)，5 m/s = 18 km/h，與 candy 相同
 BRAKE_HOLD_SPEED_THRESHOLD = 5.
 
-# dp - 蠕動容許（與 candy 的差異，修正汽油車「有作動但壓不住」）：
-# candy 只要車輪一動（panda vehicle_moving / vEgoRaw > 0.001）就取消保持並放開煞車。汽油車 D 檔怠速有蠕行力，
-# PCS 建壓瞬間只要滑動 0.01 km/h 就整個解除，車子接著一路往前蠕動。
-# 改為：進入 ACTIVE 後，車速低於 CREEP_HOLD_SPEED 仍持續保持，把蠕動壓住；超過才放開。
-# 必須與 panda safety (toyota.h TOYOTA_ABH_MAX_SPEED_MMS = 750 mm/s) 一致：
-CREEP_HOLD_SPEED = 0.75   # m/s (2.7 km/h)：ACTIVE 狀態的蠕動容許上限，與 panda 門檻相同
-SEND_MAX_SPEED = 0.9      # m/s：送出 0x344 的速度上限，略高於 panda 門檻，確保 panda 擋相機時 openpilot 一定有補送
-
-# dp - 保持力道 (DSS1GDRV, m/s^2)：0 = 標準 (-2.0，與 candy 相同)，1 = 加強 (-3.0)，2 = 最強 (-4.0)
-BRAKE_HOLD_DECELS = (-2.0, -3.0, -4.0)
-
 
 class AutoBrakeHold:
   def __init__(self, CP):
     self.enabled = bool(CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD.value)
     self.speed_mode = bool(CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD_SPEED.value)
-    if CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD_FORCE_MAX.value:
-      self.decel = BRAKE_HOLD_DECELS[2]
-    elif CP.flags & ToyotaFlags.AUTO_BRAKE_HOLD_FORCE_HIGH.value:
-      self.decel = BRAKE_HOLD_DECELS[1]
-    else:
-      self.decel = BRAKE_HOLD_DECELS[0]
 
     self.state = BRAKE_HOLD_IDLE
     self.counter = 0
@@ -77,9 +60,7 @@ class AutoBrakeHold:
       elif CS.out.vEgo > BRAKE_HOLD_SPEED_THRESHOLD:
         self._speed_gear_lock = True
 
-    # 進入保持前必須完全靜止；保持中容許低於 CREEP_HOLD_SPEED 的蠕動（繼續煞住它，而不是放開）
-    stopped = CS.out.standstill or (self.state == BRAKE_HOLD_ACTIVE and CS.out.vEgoRaw < CREEP_HOLD_SPEED)
-    standstill_ok = gear and stopped and not CS.out.gasPressed
+    standstill_ok = gear and CS.out.standstill and not CS.out.gasPressed
     speed_enabled = self._speed_gear_lock if self.speed_mode else True
     cruise_disabled = not CS.out.cruiseState.enabled and speed_enabled
     brake_hold_allowed = standstill_ok and cruise_disabled
@@ -129,9 +110,9 @@ class AutoBrakeHold:
 
     self._update_state(CS)
 
-    # 與 candy 的差異：只在 panda 會接受的條件（低速且未踩油門）下才送出。
+    # 與 candy 的差異：只在 panda 會接受的條件（靜止且未踩油門）下才送出。
     # 其餘時間 panda 正在轉送相機原始 0x344，openpilot 送了也只會被 panda 拒絕（徒增 safetyTxBlocked 計數）
-    if CS.out.vEgoRaw >= SEND_MAX_SPEED or CS.out.gasPressed:
+    if not CS.out.standstill or CS.out.gasPressed:
       CS.auto_brake_hold_active = False
       return []
 
@@ -139,4 +120,4 @@ class AutoBrakeHold:
     # （只有真的送出 -2.0 保持指令時才算作動中）
     CS.auto_brake_hold_active = self.active
 
-    return [toyotacan.create_brake_hold_command(packer, frame, CS.pre_collision_2, self.active, self.decel)]
+    return [toyotacan.create_brake_hold_command(packer, frame, CS.pre_collision_2, self.active)]

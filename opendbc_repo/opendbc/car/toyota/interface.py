@@ -193,10 +193,6 @@ class CarInterface(CarInterfaceBase):
       ret.safetyConfigs[0].safetyParam |= ToyotaSafetyFlags.AUTO_BRAKE_HOLD.value
       if dp_params & structs.DPFlags.ToyotaAutoBrakeHoldSpeed:
         ret.flags |= ToyotaFlags.AUTO_BRAKE_HOLD_SPEED.value
-      if dp_params & structs.DPFlags.ToyotaAutoBrakeHoldForceMax:
-        ret.flags |= ToyotaFlags.AUTO_BRAKE_HOLD_FORCE_MAX.value
-      elif dp_params & structs.DPFlags.ToyotaAutoBrakeHoldForceHigh:
-        ret.flags |= ToyotaFlags.AUTO_BRAKE_HOLD_FORCE_HIGH.value
 
     return ret
 

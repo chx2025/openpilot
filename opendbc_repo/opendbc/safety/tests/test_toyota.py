@@ -301,24 +301,14 @@ class TestToyotaAutoBrakeHoldSafety(TestToyotaSafetyTorque):
     return self.packer.make_can_msg_safety("PRE_COLLISION_2", 0, {"DSS1GDRV": decel, "PBRTRGR": pbrtrgr})
 
   def test_auto_brake_hold(self):
-    # 蠕動容許：車速 < 0.75 m/s 且未踩油門 -> 允許 openpilot 送 0x344、擋掉相機 0x344
-    for speed, gas in itertools.product([0., 0.3, 0.7, 0.8, 1.5, 5.], [False, True]):
+    for moving, gas in itertools.product([False, True], [False, True]):
       self.safety.init_tests()
-      for _ in range(6):  # 填滿 vehicle_speed sample
-        self._rx(self._speed_msg(speed))
+      self._rx(self._speed_msg(1 if moving else 0))
       self._rx(self._user_gas_msg(gas))
-      allowed = speed < 0.75 and not gas
-      self.assertEqual(allowed, self._tx(self._pre_collision_2_msg(-2.0, 1)), f"{speed=} {gas=}")
-      self.assertEqual(-1 if allowed else 0, self.safety.safety_fwd_hook(2, 0x344), f"{speed=} {gas=}")
-
-  def test_auto_brake_hold_speed_sample_max(self):
-    # 最近的 sample 內只要有一筆超過門檻就不允許（保守）
-    self.safety.init_tests()
-    self._rx(self._speed_msg(1.0))
-    for _ in range(3):
-      self._rx(self._speed_msg(0.))
-    self.assertFalse(self._tx(self._pre_collision_2_msg(-2.0, 1)))
-    self.assertEqual(0, self.safety.safety_fwd_hook(2, 0x344))
+      allowed = not moving and not gas
+      # 停車且未踩油門：允許 openpilot 送 0x344，擋掉相機的 0x344
+      self.assertEqual(allowed, self._tx(self._pre_collision_2_msg(-2.0, 1)), f"{moving=} {gas=}")
+      self.assertEqual(-1 if allowed else 0, self.safety.safety_fwd_hook(2, 0x344), f"{moving=} {gas=}")
 
 
 class TestToyotaAutoBrakeHoldOffSafety(TestToyotaSafetyTorque):
