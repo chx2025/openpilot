@@ -4,7 +4,7 @@ import pyray as rl
 from dataclasses import dataclass
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
-from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
+from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus, JetlinkState
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
@@ -168,6 +168,14 @@ class HudRenderer(Widget):
     self._wheel_y_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
 
     self._set_speed_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
+
+    # dp - jetlink: zoompilot's mici model-source icon
+    self._txt_jetlink: rl.Texture = gui_app.texture('../../dragonpilot/selfdrive/assets/icons/jetlink.png', 60, 44)
+    self._txt_jetlink_green: rl.Texture = gui_app.texture('../../dragonpilot/selfdrive/assets/icons/jetlink_green.png', 60, 44)
+    self._txt_jetlink_orange: rl.Texture = gui_app.texture('../../dragonpilot/selfdrive/assets/icons/jetlink_orange.png', 75, 44)
+    self._jetlink_icon: rl.Texture | None = None
+    self._jetlink_fade_time: float = 0
+    self._jetlink_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
 
   def set_wheel_critical_icon(self, critical: bool):
     """Set the wheel icon to critical or normal state."""
@@ -341,9 +349,41 @@ class HudRenderer(Widget):
     else:
       self._draw_tdx_info(rect)
 
+    # dp - jetlink: which model drives
+    self._draw_model_source(rect)
+
     # --- 最後繪製：自帶雙閃爍頻率的方向燈與盲區邊條 ---
     # 確保圖層順序在最上方，不被裁切
     self._draw_edge_warnings(rect)
+
+  def _draw_model_source(self, rect: rl.Rectangle) -> None:
+    """dp - jetlink (zoompilot's mici _draw_model_source): pulses while the link joins,
+    shows for a moment whenever the state changes; waiting is a steady dim green."""
+    if ui_state.sm.recv_frame['selfdriveState'] < ui_state.started_frame:
+      return
+    state = ui_state.jetlink_state
+    loading = state == JetlinkState.LOADING
+    if loading:
+      icon = self._txt_jetlink
+      opacity = 0.35 + 0.65 * (0.5 - 0.5 * math.cos(rl.get_time() * 6.0))
+    elif state in (JetlinkState.UNCOMPILED, JetlinkState.FAILED):
+      icon, opacity = self._txt_jetlink_orange, 1.0
+    elif state == JetlinkState.ACTIVE:
+      icon, opacity = self._txt_jetlink_green, 1.0
+    elif state == JetlinkState.WAITING:
+      icon, opacity = self._txt_jetlink_green, 0.5
+    else:
+      return
+
+    if icon is not self._jetlink_icon:
+      self._jetlink_fade_time = rl.get_time()
+      self._jetlink_icon = icon
+    visible = loading or state == JetlinkState.WAITING or rl.get_time() - self._jetlink_fade_time < SET_SPEED_PERSISTENCE
+    alpha = self._jetlink_alpha_filter.update(visible)
+    if alpha < 1e-2:
+      return
+    pos = rl.Vector2(rect.x + rect.width - 10 - icon.width, rect.y + rect.height - 14 - (50 + icon.height) / 2)
+    rl.draw_texture_ex(icon, pos, 0.0, 1.0, rl.Color(255, 255, 255, int(255 * opacity * alpha)))
 
   def _draw_edge_warnings(self, rect: rl.Rectangle) -> None:
     """繪製兩側方向燈與盲區警示 (加入圓角效果並垂直置中)"""

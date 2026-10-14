@@ -263,6 +263,21 @@ def calibration_incomplete_alert(CP: car.CarParams, CS: car.CarState, sm: messag
     Priority.LOWEST, VisualAlert.none, AudibleAlert.none, .2)
 
 
+def big_model_available_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+  # dp - jetlink: what releases control depends on ALKA. With it on, ALKA steers whenever ACC
+  # main is on, so cancelling cruise is not enough: main off, or P/N/R (jetlink_adapter.SWAP_WHILE_PARKED)
+  from opendbc.safety import ALTERNATIVE_EXPERIENCE
+  if CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA:
+    text2 = "ALKA 開啟中：關閉巡航主開關或排入 P 檔即切換"
+  else:
+    text2 = "取消巡航即可切換"
+  return Alert(
+    "大模型已就緒",
+    text2,
+    AlertStatus.normal, AlertSize.mid,
+    Priority.LOW, VisualAlert.none, AudibleAlert.prompt, .2)
+
+
 def audio_feedback_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
   duration = FEEDBACK_MAX_DURATION - ((sm['audioFeedback'].blockNum + 1) * SAMPLE_BUFFER / SAMPLE_RATE)
   return NormalPermanentAlert(
@@ -1032,6 +1047,39 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   EventName.audioFeedback: {
     ET.PERMANENT: audio_feedback_alert,
+  },
+
+  # dp - jetlink (ported from zoompilot): the large model on an attached device.
+  # For a second after a swap nothing engages while the large model builds its
+  # history and proves it keeps up (accelerator_events)
+  EventName.bigModelLoading: {
+    ET.NO_ENTRY: NoEntryAlert("大模型切換中"),
+  },
+
+  # a second after its swap, when the driver can engage
+  EventName.bigModelReady: {
+    ET.PERMANENT: Alert(
+      "大模型已啟用",
+      "",
+      AlertStatus.normal, AlertSize.small,
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 2.),
+  },
+
+  # ready while something is in control: it swaps in only when nothing is,
+  # so the next engagement after a full disengage drives it. Raised for 3 s
+  EventName.bigModelAvailable: {
+    ET.PERMANENT: big_model_available_alert,
+  },
+
+  # lost or too slow while engaged: the small model drives on from a reset
+  # history and nothing disengages. As loud as a soft disable for 5 s, but it
+  # says what happened, not TAKE CONTROL
+  EventName.bigModelLinkLost: {
+    ET.WARNING: Alert(
+      "大模型連線中斷",
+      "改用小模型駕駛",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.MID, VisualAlert.steerRequired, AudibleAlert.warningSoft, .2),
   },
 }
 

@@ -175,6 +175,11 @@ function launch {
   ln -sfn $(pwd) /data/pythonpath
   export PYTHONPATH="$PWD"
 
+  # dp - jetlink: the vendored package, importable as `jetlink` from the tree root
+  if [ -d jetlink_repo/jetlink ]; then
+    ln -sfn jetlink_repo/jetlink jetlink
+  fi
+
   if [ -f /AGNOS ]; then
     set_tici_hw
     set_lite_hw

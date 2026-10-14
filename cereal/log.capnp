@@ -133,6 +133,12 @@ struct OnroadEvent @0xc4fa6047f024e718 {
     userBookmark @95;
     excessiveActuation @96;
     audioFeedback @97;
+    # dp - jetlink (ported from zoompilot: bigModelLoading native, the rest OnroadEventSP).
+    # @101-@104: @100 is dp's autoBrakeHold
+    bigModelLoading @101;
+    bigModelReady @102;
+    bigModelAvailable @103;
+    bigModelLinkLost @104;
 
     soundsUnavailableDEPRECATED @47;
   }

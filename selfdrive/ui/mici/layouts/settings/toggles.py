@@ -21,6 +21,9 @@ class TogglesLayoutMici(NavScroller):
     record_front = BigParamControl("record & upload driver camera", "RecordFront", toggle_callback=restart_needed_callback)
     record_mic = BigParamControl("record & upload mic audio", "RecordAudio", toggle_callback=restart_needed_callback)
     enable_openpilot = BigParamControl("enable openpilot", "OpenpilotEnabledToggle", toggle_callback=restart_needed_callback)
+    # dp - jetlink: zoompilot's mici AcceleratorLinkToggle, as a plain param toggle (off / usb / ios); parked only
+    self._jetlink_toggle = BigMultiParamToggle("jetlink", "JetlinkLink", ["off", "usb", "ios"])
+    self._jetlink_toggle.set_enabled(lambda: ui_state.is_offroad())
 
     self._scroller.add_widgets([
       self._personality_toggle,
@@ -31,6 +34,7 @@ class TogglesLayoutMici(NavScroller):
       record_front,
       record_mic,
       enable_openpilot,
+      self._jetlink_toggle,
     ])
 
     # Toggle lists
@@ -69,6 +73,7 @@ class TogglesLayoutMici(NavScroller):
 
   def _update_toggles(self):
     ui_state.update_params()
+    self._jetlink_toggle._load_value()  # dp - jetlink
 
     # CP gating for experimental mode
     if ui_state.CP is not None:

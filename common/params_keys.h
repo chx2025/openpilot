@@ -129,6 +129,22 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UptimeOnroad", {PERSISTENT, FLOAT, "0.0"}},
     {"UsbGpuPresent", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"UsbGpuCompiled", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
+    // dp - jetlink (ported from zoompilot): the large driving model on a device attached to the USB-C port.
+    // JetlinkLink is an index into jetlink.openpilot.MODES: 0 off, 1 usb (Jetson / Linux PC / Mac), 2 ios (iPhone).
+    // JetlinkSpec carries whether the far end's engine is built, which must survive a reboot, or every
+    // ignition cycle would rebuild a multi-minute engine.
+    {"AcceleratorProgress", {CLEAR_ON_MANAGER_START, JSON}},
+    {"Offroad_AcceleratorUnavailable", {CLEAR_ON_MANAGER_START, JSON}},
+    {"JetlinkLink", {PERSISTENT, INT, "0"}},
+    {"JetlinkSpec", {PERSISTENT, JSON}},
+    {"JetlinkModelPointers", {PERSISTENT, JSON}},
+    // the big-model pick on the comma, {ref, displayName}; unset = follow the far end's loaded model
+    {"JetlinkBigModel", {PERSISTENT, JSON}},
+    // sunnypilot's chestnut catalog as the phone apps list it, {bundles}; fetched from the Jetlink panel
+    {"JetlinkCatalog", {PERSISTENT, JSON}},
+    // dp: SEALED, read by nothing (jetlink.comma.port.PHONE_CHARGING_SEALED): the comma charging a phone burnt out a
+    // C3 mainboard. Kept declared only so the panel can clear a value an older build stored
+    {"JetlinkChargePhone", {PERSISTENT, BOOL, "0"}},
     {"Version", {PERSISTENT, STRING}},
     {"dp_dev_last_log", {CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"dp_dev_reset_conf", {CLEAR_ON_MANAGER_START, BOOL, "0"}},

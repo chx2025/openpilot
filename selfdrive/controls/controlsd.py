@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 from numbers import Number
 
 from cereal import car, log
@@ -26,6 +27,7 @@ from dragonpilot.selfdrive.controls.lib.human_turn_detection import HumanTurnDet
 # dp: 車道置中 (Lane Centering)，移植自 StarPilot，核心演算法見 lane_centering.py，
 # dp_ 參數讀取與啟用邏輯見 dp_lane_centering.py
 from dragonpilot.selfdrive.controls.lib.dp_lane_centering import DpLaneCentering
+from dragonpilot import jetlink_adapter
 
 State = log.SelfdriveState.OpenpilotState
 LaneChangeState = log.LaneChangeState
@@ -45,7 +47,7 @@ class Controls:
 
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
                                    'liveCalibration', 'livePose', 'longitudinalPlan', 'lateralManeuverPlan', 'carState', 'carOutput',
-                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance', 'carStateExt'], poll='selfdriveState')
+                                   'driverMonitoringState', 'onroadEvents', 'driverAssistance', 'carStateExt', 'modelExt'], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState', 'controlsStateExt'])
 
     self.steer_limited_by_safety = False
@@ -68,6 +70,9 @@ class Controls:
     # dp - ALKA: cache enabled state (CP doesn't change after init)
     self.alka_enabled = bool(self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA)
     self.alka_active = False
+    # dp - jetlink: when the large model last swapped in (modelExt.bigModel rising), see state_control
+    self.big_model_prev = False
+    self.big_model_since = -1e9
 
     # 初始化 HTD
     self.htd = HumanTurnDetection()
@@ -118,7 +123,18 @@ class Controls:
       # Conditions: lkas_on, gear not in P/N/R, calibration complete, seatbelt latched, doors closed
       calibrated = self.sm['liveCalibration'].calStatus == log.LiveCalibrationData.Status.calibrated
       gear_ok = CS.gearShifter not in (car.CarState.GearShifter.park, car.CarState.GearShifter.neutral, car.CarState.GearShifter.reverse)
-      self.alka_active = lkas_on and gear_ok and calibrated and not CS.seatbeltUnlatched and not CS.doorOpen
+      alka_ok = lkas_on and gear_ok and calibrated and not CS.seatbeltUnlatched and not CS.doorOpen
+      # dp - jetlink: the large model swaps in only while nothing steers, then proves itself for a second.
+      # ALKA does not START steering inside that second (it keeps steering if it already was), as
+      # zoompilot holds MADS paused through bigModelLoading
+      big = self.sm['modelExt'].bigModel and self.sm.alive['modelExt']
+      now = time.monotonic()
+      if big and not self.big_model_prev:
+        self.big_model_since = now
+      self.big_model_prev = big
+      if alka_ok and not self.alka_active and big and now - self.big_model_since < jetlink_adapter.ALKA_HOLD_SECONDS:
+        alka_ok = False
+      self.alka_active = alka_ok
 
     # 取出橫向控制啟用的初始狀態
     lat_active = self.sm['selfdriveState'].active or self.alka_active
