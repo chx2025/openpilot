@@ -5,6 +5,8 @@ MODELS_DIR = Path(__file__).resolve().parent / 'models'
 TG_INPUT_DEVICES_PATH = MODELS_DIR / 'tg_input_devices.json'
 USBGPU_VID = 0xADD1
 USBGPU_PID = 0x0001
+# dp - egpu: sunnypilot common/hardware/usb.py CHESTNUT_USB_IDS (both ids of a running chestnut / eGPU)
+USBGPU_IDS = ((USBGPU_VID, USBGPU_PID), (0x3801, 0x0001))
 
 
 def get_tg_input_devices(process_name: str, usbgpu: bool):
@@ -18,8 +20,7 @@ def modeld_pkl_path(usbgpu: bool):
 def usbgpu_present() -> bool:
   for d in Path("/sys/bus/usb/devices").glob("*"):
     try:
-      if int((d / "idVendor").read_text(), 16) == USBGPU_VID and \
-          int((d / "idProduct").read_text(), 16) == USBGPU_PID:
+      if (int((d / "idVendor").read_text(), 16), int((d / "idProduct").read_text(), 16)) in USBGPU_IDS:
         return True
     except Exception:
       pass

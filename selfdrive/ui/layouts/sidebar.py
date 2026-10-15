@@ -10,6 +10,8 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from dragonpilot.selfdrive.ui.dashy_qr import DashyQR
 from dragonpilot.selfdrive.ui import jetlink_ui
+from dragonpilot.selfdrive.ui import egpu_ui
+from openpilot.selfdrive.ui.ui_state import EgpuState
 
 SIDEBAR_WIDTH = 300
 METRIC_HEIGHT = 126
@@ -88,6 +90,8 @@ class Sidebar(Widget):
     # dp - jetlink
     self._jetlink_status = MetricData("JETLINK", "未連線", Colors.GRAY)
     self._jetlink_icons = jetlink_ui.JetlinkIcons(JETLINK_ICON_WIDTH, JETLINK_ICON_HEIGHT)
+    # dp - egpu: sunnypilot's sidebar chestnut icon (same icon files and size as jetlink's) and an eGPU card
+    self._egpu_status = MetricData("eGPU", "未連線", Colors.GRAY)
 
     # QR code for dashy
     self._qr = DashyQR()
@@ -128,6 +132,12 @@ class Sidebar(Widget):
       self._update_connection_status(device_state)
     self._update_panda_status()
     self._update_jetlink_status()
+    self._update_egpu_status()
+
+  def _update_egpu_status(self):
+    # dp - egpu
+    state = ui_state.egpu_state
+    self._egpu_status.update("eGPU", egpu_ui.STATE_TEXT[state], egpu_ui.STATE_COLOR[state])
 
   def _update_jetlink_status(self):
     # dp - jetlink: the card is shown only while there is a link to show (ui_state.jetlink_view)
@@ -196,6 +206,10 @@ class Sidebar(Widget):
       tint = Colors.BUTTON_PRESSED if (ui_state.started and flag_pressed) else Colors.BUTTON_NORMAL
       # dp - jetlink: as zoompilot, the link's icon takes the home/flag button's place while there is a link
       icon, opacity = self._jetlink_icons.for_state(ui_state.jetlink_state)
+      if icon is None:
+        # dp - egpu: as sunnypilot, the chestnut icon takes the home/flag button's place while an eGPU is plugged in
+        # (jetlink is off beside an eGPU, so the two never compete for this slot)
+        icon, opacity = egpu_ui.icon_for(self._jetlink_icons, ui_state.egpu_state)
       if icon is not None:
         pos = rl.Vector2(HOME_BTN.x + (HOME_BTN.width - icon.width) / 2, HOME_BTN.y + (HOME_BTN.height - icon.height) / 2)
         tint = jetlink_ui.tint(opacity * (0.65 if (ui_state.started and flag_pressed) else 1.0))
@@ -238,8 +252,11 @@ class Sidebar(Widget):
       metrics.append((self._connect_status, 654))
 
     # dp - jetlink: a JETLINK card while there is a link; the cards share the space above the home button
-    if ui_state.jetlink_view is not None:
-      cards = [m for m, _ in metrics] + [self._jetlink_status]
+    # dp - egpu: likewise an eGPU card while an eGPU is plugged in
+    extra = ([self._jetlink_status] if ui_state.jetlink_view is not None else []) + \
+            ([self._egpu_status] if ui_state.egpu_state != EgpuState.DISCONNECTED else [])
+    if extra:
+      cards = [m for m, _ in metrics] + extra
       available = max(0, int(HOME_BTN.y) - METRIC_MARGIN - METRIC_HEIGHT - METRIC_START_Y)
       spacing = min(158, available / max(1, len(cards) - 1))
       metrics = [(m, METRIC_START_Y + i * spacing) for i, m in enumerate(cards)]

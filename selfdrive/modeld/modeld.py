@@ -20,7 +20,8 @@ from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_value, get_curvature_from_plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
-from openpilot.selfdrive.modeld.compile_modeld import make_input_queues, WARP_INPUTS, POLICY_INPUTS
+# dp - egpu: compile_modeld is imported inside ModelState, so modeld_egpu (which runs this main loop on the
+# vendored sunnypilot tinygrad) never imports dp's compile helpers
 from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState
 from openpilot.common.file_chunker import read_file_chunked, get_manifest_path
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
@@ -133,6 +134,8 @@ class ModelState:
     self.frame_drop_ratio = 0.0
     self.in_control = True
 
+    from openpilot.selfdrive.modeld.compile_modeld import make_input_queues, WARP_INPUTS, POLICY_INPUTS
+    self._warp_inputs, self._policy_inputs = WARP_INPUTS, POLICY_INPUTS
     self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
     self.input_queues, self.npy = make_input_queues(self.vision_input_shapes, self.policy_input_shapes, self.frame_skip, device=self.QUEUE_DEV)
     self.full_frames : dict[str, Tensor] = {}
@@ -167,13 +170,14 @@ class ModelState:
     self.npy['tfm'][:,:] = transforms['img'][:,:]
     self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
 
-    img, big_img = self.warp_enqueue(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
+    img, big_img = self.warp_enqueue(**{k: self.input_queues[k] for k in self._warp_inputs},
+                                     frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
 
     if prepare_only:
       return None
 
     vision_output, policy_output = self.run_policy(
-      **{k: self.input_queues[k] for k in POLICY_INPUTS}, img=img, big_img=big_img
+      **{k: self.input_queues[k] for k in self._policy_inputs}, img=img, big_img=big_img
     )
     if after_enqueue is not None:
       after_enqueue()
@@ -189,17 +193,25 @@ class ModelState:
     return combined_outputs_dict
 
 
-def main(demo=False):
+def main(demo=False, egpu_loader=None):
+  """dp - egpu: egpu_loader(cam_w, cam_h) -> EgpuModelState runs this loop for a big model compiled on
+  this device for the eGPU (dragonpilot/egpu/modeld_egpu.py). It replaces the small model outright: no jetlink,
+  no prepare_only path; a failure raises out and manager restarts the stock modeld (dp_egpu_failed)."""
   cloudlog.warning("modeld init")
+  EGPU = egpu_loader is not None
 
   _present = usbgpu_present()
-  _compiled = os.path.isfile(get_manifest_path(modeld_pkl_path(usbgpu=True)))
+  _compiled = EGPU or os.path.isfile(get_manifest_path(modeld_pkl_path(usbgpu=True)))
   USBGPU = _present and _compiled
   params = Params()
   params.put_bool("UsbGpuPresent", _present)
   params.put_bool("UsbGpuCompiled", _compiled)
 
-  if not USBGPU:
+  if EGPU:
+    # dp - egpu: as sunnypilot modeld_v2 / upstream's newer modeld, realtime beside the USB GPU too. dp's
+    # "USB GPU saturates a core" note predates the newer tinygrad this process runs on
+    config_realtime_process(7, 54)
+  elif not USBGPU:
     # dp - jetlink: before going realtime: prepare() starts tinygrad's device thread, which would
     # inherit FIFO 54 on core 7. Never beside a USB GPU, which runs the big model natively
     jetlink_adapter.prepare()
@@ -232,11 +244,16 @@ def main(demo=False):
 
   st = time.monotonic()
   cloudlog.warning("loading model")
-  small_model = ModelState(vipc_client_main.width, vipc_client_main.height, USBGPU)
-  model = small_model
+  if EGPU:
+    # dp - egpu: the eGPU bundle is the only model in this process (see main's docstring)
+    small_model = None
+    model = egpu_loader(vipc_client_main.width, vipc_client_main.height)
+  else:
+    small_model = ModelState(vipc_client_main.width, vipc_client_main.height, USBGPU)
+    model = small_model
   # dp - jetlink: the small model drives until the attached device has joined, then it is swapped
   # in underneath (only while nothing is in control) and handed back on a lost or lagging link
-  if not USBGPU and (joined := jetlink_adapter.attach(small_model, vipc_client_main.width, vipc_client_main.height)) is not None:
+  if not EGPU and not USBGPU and (joined := jetlink_adapter.attach(small_model, vipc_client_main.width, vipc_client_main.height)) is not None:
     model = joined
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
@@ -270,7 +287,7 @@ def main(demo=False):
 
   # TODO this needs more thought, use .2s extra for now to estimate other delays
   # TODO Move smooth seconds to action function
-  long_delay = CP.longitudinalActuatorDelay + LONG_SMOOTH_SECONDS
+  long_delay = CP.longitudinalActuatorDelay + (model.LONG_SMOOTH_SECONDS if EGPU else LONG_SMOOTH_SECONDS)
   prev_action = log.ModelDataV2.Action()
 
   dp_lat_lca_speed = int(params.get("dp_lat_lca_speed"))
@@ -320,7 +337,7 @@ def main(demo=False):
     is_rhd = dp_dev_is_rhd if LITE else sm["driverMonitoringState"].isRHD
     frame_id = sm["roadCameraState"].frameId
     v_ego = max(sm["carState"].vEgo, 0.)
-    lat_delay = sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
+    lat_delay = sm["liveDelay"].lateralDelay + (model.LAT_SMOOTH_SECONDS if EGPU else LAT_SMOOTH_SECONDS)
     model.lat_delay = lat_delay
     if sm.updated["liveCalibration"] and sm.seen['roadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
@@ -371,7 +388,10 @@ def main(demo=False):
     handovers = getattr(model, 'handovers', 0)
     big_driving = model is not small_model and getattr(model, 'chestnut', False)
     mt1 = time.perf_counter()
-    if prepare_only and not big_driving:
+    if EGPU:
+      # dp - egpu: the fused JIT warps, enqueues and runs every frame (sunnypilot modeld_v2 has no prepare_only)
+      model_output = model.run(bufs, transforms, inputs)
+    elif prepare_only and not big_driving:
       # dp's dropped-frame path: keep the small model's queues moving, publish nothing
       model_output = small_model.run(bufs, transforms, inputs, prepare_only=True)
     else:
@@ -392,7 +412,10 @@ def main(demo=False):
 
       # dp - jetlink: a frame the large model drove takes zoompilot's action function (action head
       # when the model has one); the small model keeps dp's, lateral offset included
-      if model is not small_model and getattr(model, 'chestnut', False):
+      if EGPU:
+        # dp - egpu: sunnypilot modeld_v2's action (bundle lat/long smoothing), dp lateral offset kept
+        action = model.get_action(model_output, prev_action, lat_action_t, long_action_t, v_ego, dp_lat_offset_cm)
+      elif model is not small_model and getattr(model, 'chestnut', False):
         action = get_action_from_model_jetlink(model_output, prev_action, lat_action_t, long_action_t, v_ego)
       else:
         action = get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego, dp_lat_offset_cm)

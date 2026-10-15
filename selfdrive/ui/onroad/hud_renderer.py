@@ -14,6 +14,8 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from openpilot.selfdrive.ui.ui_state import JetlinkState
 from dragonpilot.selfdrive.ui import jetlink_ui
+from dragonpilot.selfdrive.ui import egpu_ui
+from openpilot.selfdrive.ui.ui_state import EgpuState
 #from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 
 # Constants
@@ -250,12 +252,37 @@ class HudRenderer(Widget):
 
     # dp - jetlink: the link's state, under the button
     self._draw_jetlink_badge(button_x + UI_CONFIG.button_size / 2, button_y + UI_CONFIG.button_size + 24)
+    if ui_state.jetlink_state == JetlinkState.DISCONNECTED:
+      self._draw_egpu_badge(button_x + UI_CONFIG.button_size / 2, button_y + UI_CONFIG.button_size + 24)
 
     #if ui_state.sm['controlsState'].lateralControlState.which() != 'angleState':
       #self._torque_bar.render(rect)
 
     # Draw performance info at bottom
     self._draw_performance_info(rect)
+
+  def _draw_egpu_badge(self, center_x: float, top_y: float) -> None:
+    """dp - egpu: sunnypilot's onroad chestnut icon, in jetlink's badge slot (jetlink is off beside an
+    eGPU). Pulses while loading, green while the big model drives (label: the model's short name),
+    orange when it is not used or failed this drive. Nothing without an eGPU."""
+    state = ui_state.egpu_state
+    icon, opacity = egpu_ui.icon_for(self._jetlink_icons, state)
+    if icon is None:
+      return
+    bg = rl.Rectangle(center_x - JETLINK_BADGE_W / 2 - 14, top_y - 10, JETLINK_BADGE_W + 28, JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 30)
+    rl.draw_rectangle_rounded(bg, 0.25, 10, COLORS.BLACK_TRANSLUCENT)
+    rl.draw_texture_ex(icon, rl.Vector2(center_x - icon.width / 2, top_y), 0.0, 1.0, jetlink_ui.tint(opacity))
+    label = egpu_ui.badge_text(state)
+    color = egpu_ui.STATE_COLOR[state]
+    if state == EgpuState.LOADING:
+      color = rl.Color(color.r, color.g, color.b, int(255 * max(0.5, opacity)))
+    font_size = JETLINK_LABEL_SIZE
+    size = measure_text_cached(self._font_semi_bold, label, font_size)
+    if size.x > bg.width - 8:  # a long model short name (e.g. TTTTFBRL)
+      font_size = int(JETLINK_LABEL_SIZE * 0.75)
+      size = measure_text_cached(self._font_semi_bold, label, font_size)
+    rl.draw_text_ex(self._font_semi_bold, label, rl.Vector2(center_x - size.x / 2, top_y + JETLINK_BADGE_H + 8),
+                    font_size, 0, color)
 
   def _draw_jetlink_badge(self, center_x: float, top_y: float) -> None:
     """dp - jetlink: the icon (pulsing while it joins, dim green while it waits for a

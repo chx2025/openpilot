@@ -54,6 +54,14 @@ tg_devices = { # which device to put jit inputs to at runtime
 }
 
 USBGPU = usbgpu_present() # or release # TODO always build big model on release
+# dp - egpu: the built-in big model (models/big_driving_{vision,policy}.onnx) may be deleted to save space, the
+# eGPU then runs a downloaded bundle instead (dragonpilot/egpu). Without this guard get_existing_chunks()
+# raises FileNotFoundError and the whole build stops whenever the eGPU is plugged in at build time.
+if USBGPU and not all(os.path.isfile(File(f"models/big_{m}.onnx").abspath) or
+                      os.path.isfile(File(f"models/big_{m}.onnx.chunkmanifest").abspath)
+                      for m in ('driving_vision', 'driving_policy')):
+  print("modeld: big_driving_*.onnx not found, skipping the built-in big model (eGPU uses downloaded bundles)")
+  USBGPU = False
 if USBGPU:
   tg_devices['selfdrive.modeld.modeld']['usbgpu'] = {'WARP_DEV': tg_backend, 'QUEUE_DEV': 'AMD'}
   usbgpu_tg_flags = f'DEBUG=2 DEV=USB+AMD:LLVM WARP_DEV={tg_backend} FLOAT16=1 JIT_BATCH_SIZE=0 GMMU=0'

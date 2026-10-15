@@ -1,0 +1,6 @@
+# mirror of min-feat.dev.egpu.py (param-only; UI is the eGPU settings panel)
+settings:
+  - key: dp_egpu_enabled
+    category: "Device"
+    flags: PERSISTENT
+    param_type: BOOL

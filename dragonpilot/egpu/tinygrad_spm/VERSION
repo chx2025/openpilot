@@ -1,0 +1,4 @@
+sunnypilot/tinygrad @ 9cd40014f651ac2472b3b5fc3b12178ab4bb1c66 (2026-09-16)
+= sunnypilot-master tinygrad_repo (2026-10-14 snapshot, verified identical), = tinygrad_ref of sunnypilot driving_models_chestnut_v27.json
+Vendored: tinygrad/ package + examples/openpilot/{helpers,compile_onnx,compile_warp}.py
+Used ONLY by dragonpilot/egpu (modeld_egpu.py and compile.py), never by dp's own processes.

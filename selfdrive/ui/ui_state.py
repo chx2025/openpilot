@@ -13,6 +13,7 @@ from openpilot.selfdrive.ui.lib.prime_state import PrimeState
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.hardware import HARDWARE, PC
 from dragonpilot import jetlink_adapter
+from dragonpilot.egpu import constants as egpu_const
 
 BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
 PARAM_UPDATE_TIME = 1 / 5.0
@@ -36,6 +37,16 @@ class JetlinkState(Enum):
   FAILED = "failed"
   # onroad: loaded and waiting for a window to switch (nothing in control)
   WAITING = "waiting"
+
+
+class EgpuState(Enum):
+  """dp - egpu: sunnypilot's ChestnutState for a downloaded eGPU bundle."""
+  DISCONNECTED = "disconnected"
+  NO_MODEL = "no_model"    # eGPU plugged in but not used: no bundle / feature off / not chosen for this drive
+  READY = "ready"          # a bundle will drive on the next drive
+  LOADING = "loading"
+  ACTIVE = "active"
+  FAILED = "failed"        # failed this drive, stock modeld drives
 
 
 class UIState:
@@ -125,6 +136,13 @@ class UIState:
     # Jetlink holds the USB port, so ADB is off and its toggle greyed out
     self.adb_blocked: bool = False
     self._accelerator_state_name: str = 'none'
+
+    # dp - egpu: snapshot from the 5 Hz params pass (dragonpilot/egpu)
+    self.egpu_present: bool = False
+    self.egpu_enabled: bool = True
+    self.egpu_bundle: dict | None = None
+    self.egpu_status: dict = {}
+    self.egpu_state = EgpuState.DISCONNECTED
 
 
     # dp
@@ -286,10 +304,41 @@ class UIState:
     self.experimental_mode = self.params.get_bool("ExperimentalMode")
     self.usbgpu = self.params.get_bool("UsbGpuPresent")
     self.usbgpu_compiled = self.params.get_bool("UsbGpuCompiled")
+    self._update_egpu()
 
     # dp - jetlink: on the 5 Hz params pass, not per frame in a layout; a fitted USB GPU owns the big model
     self.jetlink = None if self.usbgpu else jetlink_adapter.status()
     self._enforce_usb_port()
+
+  # dp - egpu --------------------------------------------------------------------
+
+  def _update_egpu(self) -> None:
+    p = self.params
+    self.egpu_present = p.get_bool(egpu_const.P_PRESENT)
+    self.egpu_enabled = p.get_bool(egpu_const.P_ENABLED)
+    bundle = p.get(egpu_const.P_ACTIVE_BUNDLE)
+    self.egpu_bundle = bundle if isinstance(bundle, dict) and bundle.get("ref") else None
+    status = p.get(egpu_const.P_STATUS)
+    self.egpu_status = status if isinstance(status, dict) else {}
+    # an eGPU on USB owns the big model, as dp's own USB GPU does: jetlink stays off beside it
+    # (jetlink_adapter.should_run checks the same USB ids), and mici's home shows its eGPU icon
+    self.usbgpu = self.usbgpu or self.egpu_present
+    self.usbgpu_compiled = self.usbgpu_compiled or (self.egpu_present and self.egpu_enabled and self.egpu_bundle is not None)
+
+    if not self.egpu_present:
+      state = EgpuState.DISCONNECTED
+    elif p.get_bool(egpu_const.P_FAILED):
+      state = EgpuState.FAILED
+    elif p.get_bool(egpu_const.P_LOADING):
+      state = EgpuState.LOADING
+    elif self.started and p.get_bool(egpu_const.P_RUNNING):
+      state = EgpuState.ACTIVE
+    elif not self.egpu_enabled or self.egpu_bundle is None or self.started:
+      # onroad and neither loading nor running: the stock modeld drives this drive (route latched off)
+      state = EgpuState.NO_MODEL
+    else:
+      state = EgpuState.READY
+    self.egpu_state = state
 
   # dp - jetlink -----------------------------------------------------------------
 

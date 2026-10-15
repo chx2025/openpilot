@@ -15,6 +15,7 @@ from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.network import NetworkUI
 from dragonpilot.selfdrive.ui.layouts.settings.dragonpilot import DragonpilotLayout
 from dragonpilot.selfdrive.ui.layouts.settings.jetlink import JetlinkLayout
+from dragonpilot.selfdrive.ui.layouts.settings.egpu import EgpuLayout
 
 # Constants
 SIDEBAR_WIDTH = 500
@@ -41,6 +42,7 @@ class PanelType(IntEnum):
   DEVELOPER = 5
   DRAGONPILOT = 6
   JETLINK = 7  # dp - jetlink
+  EGPU = 8  # dp - egpu
 
 
 @dataclass
@@ -68,6 +70,7 @@ class SettingsLayout(Widget):
       PanelType.DEVELOPER: PanelInfo(tr_noop("Developer"), DeveloperLayout()),
       PanelType.DRAGONPILOT: PanelInfo("dp", DragonpilotLayout()),
       PanelType.JETLINK: PanelInfo("Jetlink", JetlinkLayout()),
+      PanelType.EGPU: PanelInfo("eGPU", EgpuLayout()),
     }
 
     self._font_medium = gui_app.font(FontWeight.MEDIUM)

@@ -1,6 +1,7 @@
 import os
 import operator
 import platform
+import sys
 import time
 
 from cereal import car
@@ -9,6 +10,7 @@ from openpilot.system.hardware import PC, TICI
 from openpilot.system.manager.process import PythonProcess, NativeProcess, DaemonProcess
 from openpilot.common.swaglog import cloudlog
 from dragonpilot import jetlink_adapter
+from dragonpilot.egpu.bundles import EGPU_ROUTE
 
 WEBCAM = os.getenv("USE_WEBCAM") is not None
 LITE = os.getenv("LITE") is not None
@@ -82,6 +84,13 @@ def or_(*fns):
 def and_(*fns):
   return lambda *args: operator.and_(*(fn(*args) for fn in fns))
 
+# dp - egpu: one latched decision per drive (see dragonpilot/egpu/bundles.py EgpuRoute)
+def egpu_big_model(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return EGPU_ROUTE.update(started, params)
+
+def not_egpu_big_model(started: bool, params: Params, CP: car.CarParams) -> bool:
+  return not EGPU_ROUTE.update(started, params)
+
 class RestartingPythonProcess(PythonProcess):
   """dp - jetlink (ported from zoompilot): a PythonProcess that manager starts again
   after it dies; start() would leave a proc that has exited in place for good.
@@ -137,7 +146,11 @@ procs = [
   PythonProcess("micd", "system.micd", iscar, enabled=not LITE),
   PythonProcess("timed", "system.timed", always_run, enabled=not PC),
 
-  PythonProcess("modeld", "selfdrive.modeld.modeld", only_onroad),
+  PythonProcess("modeld", "selfdrive.modeld.modeld", and_(only_onroad, not_egpu_big_model)),
+  # dp - egpu: a downloaded sunnypilot chestnut bundle on the eGPU, in place of modeld. A NativeProcess on
+  # purpose: a fresh interpreter, so it can load the vendored sunnypilot tinygrad (dragonpilot/egpu/modeld_egpu.py)
+  NativeProcess("modeld_egpu", "dragonpilot/egpu", [sys.executable, "./modeld_egpu.py"], and_(only_onroad, egpu_big_model), enabled=not PC),
+  PythonProcess("egpu_manager", "dragonpilot.egpu.manager", always_run, enabled=not PC),
   # dp - jetlink: always_run, jetlinkd holds the USB gadget open for as long as the link is enabled,
   # onroad included. A gadget whose owner exits leaves the bus: an unplug at every ignition edge
   RestartingPythonProcess(jetlink_adapter.OWNER, jetlink_adapter.__name__, and_(always_run, jetlink_adapter.should_run), enabled=not PC),
