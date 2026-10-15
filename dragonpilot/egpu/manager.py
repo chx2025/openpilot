@@ -32,10 +32,10 @@ from dragonpilot.egpu.bundles import (cached_bundles, find_bundle, get_active_bu
                                       warps_present)
 from dragonpilot.egpu.constants import (MANIFEST_CACHE_TIMEOUT_S, CAMERA_CONFIGS, CACHE_TAG, TG_FLAGS_QCOM, TG_FLAGS_AMD, EGPU_DIR,
                                         P_PRESENT, P_ACTIVE_BUNDLE, P_MANIFEST_SYNC, P_POINTERS, P_DOWNLOAD_REF,
-                                        P_STATUS, P_DELETE_REF, P_CLEAR_CACHE, ST_IDLE, ST_RESOLVING, ST_DOWNLOADING,
+                                        P_STATUS, P_DELETE_REF, P_CLEAR_CACHE, P_ENABLED, P_SEEN, P_AUTO_DEFAULT, DEFAULT_REF, AUTO_RETRY_S, ST_IDLE, ST_RESOLVING, ST_DOWNLOADING,
                                         ST_COMPILING_WARP, ST_COMPILING, ST_DONE, ST_FAILED, ST_CANCELLED, ST_WAITING_EGPU,
                                         model_root, onnx_path, model_pkl_name, warp_pkl_name)
-from dragonpilot.egpu.usb import egpu_present
+from dragonpilot.egpu.usb import egpu_present, egpu_rom_present
 
 BASEDIR = EGPU_DIR.parent.parent
 COMPILE_TIMEOUT_S = 3 * 3600
@@ -54,6 +54,8 @@ class EgpuModelManager:
     self._next_fetch = 0.0
     self._last_sync = None
     self._ref: str | None = None
+    self._rom_logged = False
+    self._auto_next = 0.0
     self.compile_python = sys.executable
 
   # ------------------------------------------------------------------ status
@@ -225,6 +227,31 @@ class EgpuModelManager:
       self.prepare(bundle)
     finally:
       self._ref = None
+      self._auto_result(ref)
+
+  # ------------------------------------------------------------------ default model (plan B)
+  def auto_default(self) -> None:
+    """First boot with an eGPU on USB: queue the default big model (CTV3) once. Never for a comma without an eGPU
+    (dp_egpu_enabled defaults on, and 766 MB nobody asked for is not on); never again once it is ready, or once
+    the user picked, declined (不使用大模型) or deleted a model in the eGPU panel (which clears P_AUTO_DEFAULT)."""
+    if not self.params.get_bool(P_AUTO_DEFAULT) or not self.params.get_bool(P_ENABLED):
+      return
+    if get_active_bundle(self.params) is not None:
+      self.params.put_bool(P_AUTO_DEFAULT, False)
+      return
+    if self.params.get(P_DOWNLOAD_REF) is not None or time.monotonic() < self._auto_next or not egpu_present():
+      return
+    cloudlog.warning(f"egpu: eGPU on USB and no big model yet, getting the default {DEFAULT_REF[:10]}")
+    self.params.put(P_DOWNLOAD_REF, DEFAULT_REF)
+
+  def _auto_result(self, ref: str) -> None:
+    if ref != DEFAULT_REF or not self.params.get_bool(P_AUTO_DEFAULT):
+      return
+    state = self._status.get("state")
+    if state == ST_DONE:
+      self.params.put_bool(P_AUTO_DEFAULT, False)
+    elif state == ST_FAILED:
+      self._auto_next = time.monotonic() + AUTO_RETRY_S
 
   # ------------------------------------------------------------------ delete / cache
   def _model_files(self, ref: str) -> tuple[Path | None, Path | None]:
@@ -279,6 +306,14 @@ class EgpuModelManager:
     present = egpu_present()
     if present != self.params.get_bool(P_PRESENT):
       self.params.put_bool(P_PRESENT, present)
+      cloudlog.warning(f"egpu: {'eGPU on USB' if present else 'no eGPU on USB'}")
+    rom = not present and egpu_rom_present()
+    if rom and not self._rom_logged:
+      cloudlog.error("egpu: an ASM2464 with factory/ROM firmware (174C:2464/2463) is on USB; it needs comma or UT3G firmware first")
+    self._rom_logged = rom
+    if (present or rom) and not self.params.get_bool(P_SEEN):
+      # from now on jetlinkd is not started beside the eGPU switch (jetlink_adapter.should_run)
+      self.params.put_bool(P_SEEN, True)
 
     if self.params.get_bool("IsOnroad"):
       return
@@ -293,6 +328,7 @@ class EgpuModelManager:
     if self.params.get_bool(P_CLEAR_CACHE):
       self.clear_cache()
       self.params.remove(P_CLEAR_CACHE)
+    self.auto_default()
     self.process_download_request()
 
 

@@ -14,7 +14,7 @@ import os
 
 from openpilot.common.params import Params
 from dragonpilot.egpu.constants import (P_ENABLED, P_PRESENT, P_ACTIVE_BUNDLE, P_POINTERS, P_FAILED,
-                                        CAMERA_CONFIGS, JETLINK_POINTERS_PARAM, JETLINK_CATALOG_PARAM, model_root, model_pkl_name, warp_pkl_name, onnx_path)
+                                        CAMERA_CONFIGS, DEFAULT_BUNDLE, DEFAULT_REF, JETLINK_POINTERS_PARAM, KNOWN_POINTERS, JETLINK_CATALOG_PARAM, model_root, model_pkl_name, warp_pkl_name, onnx_path)
 
 
 def parse_bundle(b: dict, source: str = "") -> dict | None:
@@ -58,7 +58,10 @@ def cached_bundles(params: Params) -> list[dict]:
 
 
 def find_bundle(bundles: list[dict], ref: str) -> dict | None:
-  return next((b for b in bundles if b["ref"] == ref), None)
+  found = next((b for b in bundles if b["ref"] == ref), None)
+  if found is None and ref == DEFAULT_REF:
+    found = parse_bundle(DEFAULT_BUNDLE, "default")
+  return found
 
 
 def pointer_for(params: Params, ref: str) -> dict | None:
@@ -70,6 +73,8 @@ def pointer_for(params: Params, ref: str) -> dict | None:
       cache = None
     if isinstance(cache, dict) and isinstance(p := cache.get(ref), dict) and p.get("oid") and p.get("size"):
       return {"oid": str(p["oid"]), "size": int(p["size"])}
+  if (p := KNOWN_POINTERS.get(ref)) is not None:
+    return dict(p)
   return None
 
 

@@ -71,6 +71,12 @@ v2 改成**下載模型的 onnx、在車上自己編譯一次**，warp 永遠編
   - 實測（本沙盒）：v27 的 13 個模型都解析到 pointer（766 MB／1757 MB 兩級），CTM `e8d82173…`、CTMV2 `09d080f3…` 與 Amy README 寫的 onnx 一致。CTV3M 需要 github.com 的 commit patch，沙盒被擋所以沒驗；jetlink 在車上就是這樣用的。
   - onnx 存在 **jetlink 的資料夾** `/data/media/0/models/jetlink/<sha256前16碼>.onnx`，jetlink 已下載過的直接重用，兩邊共用一份。pointer 也會先查 jetlink 的 `JetlinkModelPointers` 快取。
 
+- **預設模型 CTV3（v5 起，方案 B）**：CTV3（comma `bf3e3631`）的 commit 只附預編譯 pkl，沒有 onnx；它的 onnx 在 HF `commaai/openpilot_driving_models` 的 `f78ed37d-afad-4dbc-8050-40ea885eedde/12864/big_driving_supercombo.onnx`，oid `404a18cfd86d29637d20c697dfde245bb47c666ae016730ab674c65f4d1e1aa4`、766,354,845 bytes（2026-10-15 以 HF API 查證，與 jetlink `fetch_export_pointer` 的找法相同）。這組 pointer 寫在 `constants.KNOWN_POINTERS`，不必上網解析。
+  - **第一次開機自動下載＋編譯**：熄火、eGPU 開關開、**偵測到 eGPU**、還沒有使用中的模型時，`egpu_manager` 自動排入 CTV3，等於使用者自己點選它。完成後清除 `dp_egpu_auto_default`，之後不再自動做。
+  - **不會自動下載的情況**：沒接 eGPU 的 comma（開關預設是開的，不能讓每台都多下 766 MB）；使用者在 eGPU 頁選過任何模型、選「不使用大模型」、按「取消」或刪除模型（都會清除 `dp_egpu_auto_default`）。
+  - 下載失敗（網路）10 分鐘後重試；上路中斷、熄火後續傳。
+  - **不用 git LFS 的原因**：dp 的內建大模型路徑（`SConscript`）要的是分開的 `big_driving_vision/policy.onnx`，CTV3 是單一 supercombo，只能交給 egpu 的 `compile.py`；而且用 zip 覆蓋安裝時，LFS 檔只是文字指標，不會下載。
+
 ---
 
 ## 4. 使用流程
@@ -139,6 +145,8 @@ v2 改成**下載模型的 onnx、在車上自己編譯一次**，warp 永遠編
 | `dp_egpu_delete_ref` | STRING CLEAR_ON_MANAGER_START | 要刪除的模型 |
 | `dp_egpu_status` | JSON CLEAR_ON_MANAGER_START | `{state, name, ref, progress, elapsed, error}` |
 | `dp_egpu_clear_cache` | BOOL CLEAR_ON_MANAGER_START | 清快取 |
+| `dp_egpu_auto_default` | BOOL PERSISTENT 預設 1 | 有 eGPU 時自動下載＋編譯預設模型 CTV3（只做一次；使用者選擇／取消／刪除後清除） |
+| `dp_egpu_seen` | BOOL PERSISTENT 預設 0 | 曾在 USB 上看到 eGPU（含 ROM 狀態的 ASM2464）；與 `dp_egpu_enabled` 同時為真時 jetlinkd 不啟動 |
 | `dp_egpu_loading` / `running` / `failed` | BOOL CLEAR_ON_MANAGER_START＋CLEAR_ON_OFFROAD_TRANSITION | 本趟大模型狀態 |
 
 磁碟配置（`/data/media/0/models/`）：
@@ -162,6 +170,9 @@ v2 改成**下載模型的 onnx、在車上自己編譯一次**，warp 永遠編
 9. **未移植**：`chestnutState` 遙測（溫度、功耗，需 cereal）、chestnut 韌體燒錄、eGPU 安全退出。
 10. **模型清單與 Jetlink 共用、沒有資料夾**：sunnypilot 用 TreeOptionDialog 依 bundle 的 `folder` 分組，並各自抓清單；這裡直接讀 jetlink 的 `JetlinkCatalog`，一層清單（新到舊），點選即使用；刪除改成獨立的「刪除模型」列。
 11. **UI 文字直接寫繁中**（同 jetlink 面板），所有字元已確認在 `app_zh-CHT.po` 內（字型只含翻譯檔內的字，否則顯示「?」）。
+12. **eGPU 辨識加入 UT3G V1.6 Dual（`ADD1:0002`，v5）**：同 sunnypilot dev-sp-egpu 的 `UT3G_DUAL_USB_IDS`。改了四處：`dragonpilot/egpu/constants.py`（`EGPU_USB_IDS`）、`selfdrive/modeld/helpers.py`（`USBGPU_IDS`）、`dragonpilot/jetlink_adapter`（`CHESTNUT_IDS`，jetlink 才不會把插 UT3G 的埠鎖成裝置端），以及**隨附 tinygrad 的 `tinygrad/runtime/ops_amd.py`**（`USBIface` 列舉 USB 裝置時多列 `ADD1:0002`；這是對 sunnypilot/tinygrad@9cd40014 唯一的修改）。沒有任何地方會對 UT3G 寫韌體。ASM2464 原廠／ROM 韌體（`174C:2464/2463`）只會記錄錯誤，不算 eGPU。
+13. **預設模型自動下載（v5，方案 B）**：見 §3。sunnypilot 沒有這個功能（要使用者自己選）。
+14. **有 eGPU 的機器不啟動 jetlinkd（v5.1）**：jetlink 原本的規則是「開關開著、而且沒看到 chestnut」才跑（`jetlink/openpilot/parts.py` `enabled()`）。但 jetlink 要先看到 eGPU 列舉出來才會讓開；它的 USB-C 埠邏輯（`jetlink/comma/port.py`）在 comma 當主機 3 秒（`SWAP_AFTER`）後還沒看到 chestnut 時，會把埠鎖成裝置端（comma 供電時），或對外發 DR_Swap 甚至 USB PD hard reset（對方供電時，例如外接電源的 UT3G）。UT3G 因此一直出不來，log 就顯示埠被 jetlink 佔用。v5.1 改成：eGPU 開關開，而且曾看過 eGPU（`dp_egpu_seen`，由 `egpu_manager` 寫入），`jetlink_adapter.should_run` 就回傳 False，jetlinkd 不跑；jetlinkd 停止時會先 `port.off()` 放開鎖住的埠。想改用 jetlink，關掉 eGPU 開關即可。
 
 ---
 

@@ -12,10 +12,6 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
-from openpilot.selfdrive.ui.ui_state import JetlinkState
-from dragonpilot.selfdrive.ui import jetlink_ui
-from dragonpilot.selfdrive.ui import egpu_ui
-from openpilot.selfdrive.ui.ui_state import EgpuState
 #from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 
 # Constants
@@ -25,21 +21,21 @@ CRUISE_DISABLED_CHAR = '–'
 Congestion = custom.Tdx.Congestion
 TRAFFIC_STOP_IDX = int(custom.LongitudinalPlanDP.LongitudinalPlanSource.trafficStop)
 
-# dp - 紅綠燈減速中 banner（基準尺寸 x1.5）：佔用 TDX「前方車速」的位置（中央車速正下方），顯示期間 TDX 全部讓位
+# dp - 紅綠燈減速中 banner（基準尺寸 x1.5 再縮 25%）：中央車速下方的高度、靠左對齊；TDX 照常顯示，
+# 與 TDX「前方車速」重疊時橫幅自動下移到其下方
 TS_HOLD_TIME = 0.5          # 秒；braking 訊號短暫掉落時維持顯示，避免閃爍
-TS_FONT_SIZE = 144
-TS_BANNER_HEIGHT = 225
+TS_FONT_SIZE = 108
+TS_BANNER_HEIGHT = 169
 TS_TOP_OFFSET = 5           # 相對 header_height 的位移（km/h 單位文字底緣約在 header 內）
-TS_PADDING_X = 60
-TS_ICON_TEXT_GAP = 36
-TS_LIGHT_RADIUS = 36
-TS_LIGHT_GAP = 18
-TS_BORDER = 9
-
-# dp - jetlink: onroad badge under the experimental-mode button
-JETLINK_BADGE_W = 120
-JETLINK_BADGE_H = 89
-JETLINK_LABEL_SIZE = 40
+TS_PADDING_X = 45
+TS_ICON_TEXT_GAP = 27
+TS_LIGHT_RADIUS = 27
+TS_LIGHT_GAP = 14
+TS_BORDER = 7
+# 左緣：content rect 左側即 30px 寬的方向燈 / 盲區邊條（augmented_road_view UI_BORDER_SIZE），
+# 再留 20px（>= 10px 間隔）→ 距螢幕左緣 50px
+TS_LEFT_MARGIN = 20
+TS_TDX_GAP_Y = 10           # 與 TDX 前方車速框的垂直間隔
 
 # DP Perf Constants (字體恢復為 50)
 PERF_FONT_SIZE = 50
@@ -123,9 +119,6 @@ class HudRenderer(Widget):
     self._font_medium: rl.Font = gui_app.font(FontWeight.MEDIUM)
 
     self._exp_button: ExpButton = ExpButton(UI_CONFIG.button_size, UI_CONFIG.wheel_icon_size)
-
-    # dp - jetlink
-    self._jetlink_icons = jetlink_ui.JetlinkIcons(JETLINK_BADGE_W, JETLINK_BADGE_H)
 
     #self._torque_bar = TorqueBar(scale=4.0)
 
@@ -239,69 +232,22 @@ class HudRenderer(Widget):
 
     self._draw_current_speed(rect)
 
-    # --- 紅綠燈減速中（優先）/ TDX 雙行顯示資訊 ---
-    # 紅綠燈減速期間 TDX（前方車速 + 底部事件）全部讓位，避免搶注意力
+    # --- TDX 雙行顯示資訊 ---
+    self._draw_tdx_info(rect)
+
+    # --- 紅綠燈減速中（靠左；與 TDX 前方車速重疊時自動下移，畫在 TDX 之後）---
     if self.ts_braking:
       self._draw_traffic_stop(rect)
-    else:
-      self._draw_tdx_info(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
     self._exp_button.render(rl.Rectangle(button_x, button_y, UI_CONFIG.button_size, UI_CONFIG.button_size))
-
-    # dp - jetlink: the link's state, under the button
-    self._draw_jetlink_badge(button_x + UI_CONFIG.button_size / 2, button_y + UI_CONFIG.button_size + 24)
-    if ui_state.jetlink_state == JetlinkState.DISCONNECTED:
-      self._draw_egpu_badge(button_x + UI_CONFIG.button_size / 2, button_y + UI_CONFIG.button_size + 24)
 
     #if ui_state.sm['controlsState'].lateralControlState.which() != 'angleState':
       #self._torque_bar.render(rect)
 
     # Draw performance info at bottom
     self._draw_performance_info(rect)
-
-  def _draw_egpu_badge(self, center_x: float, top_y: float) -> None:
-    """dp - egpu: sunnypilot's onroad chestnut icon, in jetlink's badge slot (jetlink is off beside an
-    eGPU). Pulses while loading, green while the big model drives (label: the model's short name),
-    orange when it is not used or failed this drive. Nothing without an eGPU."""
-    state = ui_state.egpu_state
-    icon, opacity = egpu_ui.icon_for(self._jetlink_icons, state)
-    if icon is None:
-      return
-    bg = rl.Rectangle(center_x - JETLINK_BADGE_W / 2 - 14, top_y - 10, JETLINK_BADGE_W + 28, JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 30)
-    rl.draw_rectangle_rounded(bg, 0.25, 10, COLORS.BLACK_TRANSLUCENT)
-    rl.draw_texture_ex(icon, rl.Vector2(center_x - icon.width / 2, top_y), 0.0, 1.0, jetlink_ui.tint(opacity))
-    label = egpu_ui.badge_text(state)
-    color = egpu_ui.STATE_COLOR[state]
-    if state == EgpuState.LOADING:
-      color = rl.Color(color.r, color.g, color.b, int(255 * max(0.5, opacity)))
-    font_size = JETLINK_LABEL_SIZE
-    size = measure_text_cached(self._font_semi_bold, label, font_size)
-    if size.x > bg.width - 8:  # a long model short name (e.g. TTTTFBRL)
-      font_size = int(JETLINK_LABEL_SIZE * 0.75)
-      size = measure_text_cached(self._font_semi_bold, label, font_size)
-    rl.draw_text_ex(self._font_semi_bold, label, rl.Vector2(center_x - size.x / 2, top_y + JETLINK_BADGE_H + 8),
-                    font_size, 0, color)
-
-  def _draw_jetlink_badge(self, center_x: float, top_y: float) -> None:
-    """dp - jetlink: the icon (pulsing while it joins, dim green while it waits for a
-    window to switch, solid green while the big model drives, orange when it cannot)
-    and one word under it. Nothing without a link."""
-    state = ui_state.jetlink_state
-    icon, opacity = self._jetlink_icons.for_state(state)
-    if icon is None:
-      return
-    bg = rl.Rectangle(center_x - JETLINK_BADGE_W / 2 - 14, top_y - 10, JETLINK_BADGE_W + 28, JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 30)
-    rl.draw_rectangle_rounded(bg, 0.25, 10, COLORS.BLACK_TRANSLUCENT)
-    rl.draw_texture_ex(icon, rl.Vector2(center_x - icon.width / 2, top_y), 0.0, 1.0, jetlink_ui.tint(opacity))
-    label = jetlink_ui.STATE_TEXT[state]
-    color = jetlink_ui.STATE_COLOR[state]
-    if state == JetlinkState.LOADING:
-      color = rl.Color(color.r, color.g, color.b, int(255 * max(0.5, opacity)))
-    size = measure_text_cached(self._font_semi_bold, label, JETLINK_LABEL_SIZE)
-    rl.draw_text_ex(self._font_semi_bold, label, rl.Vector2(center_x - size.x / 2, top_y + JETLINK_BADGE_H + 8),
-                    JETLINK_LABEL_SIZE, 0, color)
 
   def user_interacting(self) -> bool:
     return self._exp_button.is_pressed
@@ -407,16 +353,31 @@ class HudRenderer(Widget):
         # 文字沒超長 -> 直接單行置中顯示
         rl.draw_text_ex(self._font_semi_bold, text, rl.Vector2(event_x, draw_y), tdx_event_font_size, 0, rl.WHITE)
 
+  def _tdx_speed_rect(self, rect: rl.Rectangle):
+    """TDX「前方車速」背景框位置；計算方式與 _draw_tdx_info 第一行相同（字 90、padding 45/20）。未顯示時回傳 None"""
+    if not (0 < self.tdx_next_speed <= 150):
+      return None
+    speed_text = f"前方車速: {self.tdx_next_speed} km/h"
+    size = measure_text_cached(self._font_semi_bold, speed_text, 90)
+    top_y = rect.y + UI_CONFIG.header_height + 25
+    speed_x = rect.x + rect.width / 2 - size.x / 2
+    return rl.Rectangle(speed_x - 45, top_y - 20, size.x + 45 * 2, size.y + 20 * 2)
+
   def _draw_traffic_stop(self, rect: rl.Rectangle) -> None:
-    """中央車速正下方（TDX 前方車速的位置）：大型紅綠燈圖示 + 「紅綠燈減速中」"""
+    """中央車速下方的高度、靠左（讓開左側方向燈邊條）：紅綠燈圖示 + 「紅綠燈減速中」
+    與 TDX「前方車速」框重疊時，下移到該框下方 TS_TDX_GAP_Y"""
     text = "紅綠燈減速中"
     text_size = measure_text_cached(self._font_bold, text, TS_FONT_SIZE)
     icon_w = TS_LIGHT_RADIUS * 6 + TS_LIGHT_GAP * 4
     icon_h = TS_LIGHT_RADIUS * 2 + TS_LIGHT_GAP * 2
     banner_w = TS_PADDING_X * 2 + icon_w + TS_ICON_TEXT_GAP + text_size.x
 
-    x = rect.x + rect.width / 2 - banner_w / 2
+    x = rect.x + TS_LEFT_MARGIN
     y = rect.y + UI_CONFIG.header_height + TS_TOP_OFFSET
+
+    tdx_rect = self._tdx_speed_rect(rect)
+    if tdx_rect is not None and rl.check_collision_recs(rl.Rectangle(x, y, banner_w, TS_BANNER_HEIGHT), tdx_rect):
+      y = tdx_rect.y + tdx_rect.height + TS_TDX_GAP_Y
 
     banner = rl.Rectangle(x, y, banner_w, TS_BANNER_HEIGHT)
     rl.draw_rectangle_rounded(banner, 0.3, 10, rl.Color(0, 0, 0, 190))

@@ -71,7 +71,8 @@ _DEFAULT_CATALOG = {'bundles': [{'ref': 'bf3e3631b3f91d92a1020a5e0dd4298b93ff424
 
 # comma's chestnut (USB GPU), running and in its ROM. The comma's USB-C port
 # hosts one and is never held as a jetlink device beside it
-CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0x174C, 0x2464), (0x174C, 0x2463)})
+# dp - egpu: + (0xADD1, 0x0002), the UT3G V1.6 Dual adapter
+CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0xADD1, 0x0002), (0x174C, 0x2464), (0x174C, 0x2463)})
 
 # where the build puts the warp for each camera (SConscript) and modeld loads
 # it from: in the fork's tree, never in jetlink_repo
@@ -505,7 +506,12 @@ def _guarded(default):
 @_guarded(False)
 def should_run(started: bool, params, CP) -> bool:
   """manager's rule for jetlinkd: the link is on and no chestnut is fitted.
-  jetlinkd runs onroad too: a gadget whose owner exits leaves the bus."""
+  jetlinkd runs onroad too: a gadget whose owner exits leaves the bus.
+  dp - egpu: and not on a comma that uses an eGPU (big model switch on, an eGPU seen on USB once). jetlink's
+  own test (chestnut_fitted) needs the eGPU enumerated, and an eGPU that is slow to enumerate, or a UT3G
+  that powers the port, gets the port held / role-swapped by jetlink's port logic first, so it never shows."""
+  if params.get_bool("dp_egpu_enabled") and params.get_bool("dp_egpu_seen"):
+    return False
   return _api().enabled()
 
 

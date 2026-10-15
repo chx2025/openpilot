@@ -6,7 +6,7 @@ TG_INPUT_DEVICES_PATH = MODELS_DIR / 'tg_input_devices.json'
 USBGPU_VID = 0xADD1
 USBGPU_PID = 0x0001
 # dp - egpu: sunnypilot common/hardware/usb.py CHESTNUT_USB_IDS (both ids of a running chestnut / eGPU)
-USBGPU_IDS = ((USBGPU_VID, USBGPU_PID), (0x3801, 0x0001))
+USBGPU_IDS = ((USBGPU_VID, USBGPU_PID), (0x3801, 0x0001), (0xADD1, 0x0002))  # dp - egpu: + UT3G V1.6 Dual
 
 
 def get_tg_input_devices(process_name: str, usbgpu: bool):

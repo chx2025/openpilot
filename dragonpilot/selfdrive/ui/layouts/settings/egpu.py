@@ -24,7 +24,7 @@ from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
 from openpilot.system.ui.widgets.scroller_tici import Scroller
 from dragonpilot.egpu.bundles import cached_bundles, pointer_for
 from dragonpilot.egpu.constants import (MODEL_SOURCE_LABEL, P_ENABLED, P_DOWNLOAD_REF, P_MANIFEST_SYNC, P_CLEAR_CACHE,
-                                        P_ACTIVE_BUNDLE, P_DELETE_REF, P_POINTERS, model_root, onnx_path)
+                                        P_ACTIVE_BUNDLE, P_DELETE_REF, P_POINTERS, P_AUTO_DEFAULT, model_root, onnx_path)
 from dragonpilot import jetlink_adapter
 from dragonpilot.selfdrive.ui import egpu_ui
 
@@ -100,6 +100,7 @@ class EgpuLayout(Widget):
     ui_state.params.put_bool(P_ENABLED, state)
 
   def _cancel(self):
+    ui_state.params.put_bool(P_AUTO_DEFAULT, False)  # a cancelled default download is not started again by itself
     ui_state.params.remove(P_DOWNLOAD_REF)
 
   def _refresh_note(self) -> str:
@@ -154,6 +155,7 @@ class EgpuLayout(Widget):
     current = next((label for label, b in by_label.items() if active and b["ref"] == active["ref"]), NO_BIG_MODEL)
 
     def on_pick(selection):
+      ui_state.params.put_bool(P_AUTO_DEFAULT, False)  # the user chose: no automatic default download any more
       if selection == NO_BIG_MODEL:
         ui_state.params.remove(P_ACTIVE_BUNDLE)
         ui_state.params.remove(P_DOWNLOAD_REF)
@@ -179,6 +181,7 @@ class EgpuLayout(Widget):
 
     def _callback(result):
       if result == DialogResult.CONFIRM:
+        ui_state.params.put_bool(P_AUTO_DEFAULT, False)  # a deleted default is not downloaded again by itself
         ui_state.params.put(P_DELETE_REF, bundle["ref"])
         self._cache_at = 0.0
     gui_app.push_widget(ConfirmDialog(msg, "刪除", callback=_callback))

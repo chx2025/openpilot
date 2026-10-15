@@ -204,4 +204,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_egpu_failed", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
     {"dp_egpu_pointers", {PERSISTENT, JSON}},
     {"dp_egpu_delete_ref", {CLEAR_ON_MANAGER_START, STRING}},
+    {"dp_egpu_auto_default", {PERSISTENT, BOOL, "1"}},
+    {"dp_egpu_seen", {PERSISTENT, BOOL, "0"}},
 };

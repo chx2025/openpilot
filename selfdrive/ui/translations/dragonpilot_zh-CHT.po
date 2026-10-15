@@ -598,8 +598,8 @@ msgstr ""
 
 #: dragonpilot/settings/min-feat.lon.traffic-stop.py:8
 #, python-format
-msgid "Traffic Light / Stop Sign Stopping"
-msgstr "紅綠燈／停止標誌自動停車"
+msgid "Traffic Light / Stop Sign Stopping Beta"
+msgstr "紅綠燈／停止標誌自動停車 Beta版"
 
 #: dragonpilot/settings/min-feat.lon.traffic-stop.py:22
 #, python-format
@@ -729,7 +729,7 @@ msgstr "掃描以存取"
 msgid "sec"
 msgstr "秒"
 
-#: dragonpilot/settings/min-feat.lat.lane_centering.py:30
+#: dragonpilot/settings/min-feat.lat.lane_centering.py:33
 #, python-format
 msgid "%"
 msgstr "%"
@@ -769,12 +769,12 @@ msgstr ""
 "100% 代表這些條件都達標時由模型完全主導；0% 代表無論其他條件為何，"
 "覆蓋機制永遠停用。"
 
-#: dragonpilot/settings/min-feat.lat.lane_centering.py:37
+#: dragonpilot/settings/min-feat.lat.lane_centering.py:40
 #, python-format
 msgid "Pause Lane Centering on Turn Signal"
 msgstr "打方向燈時暫停車道線置中輔助"
 
-#: dragonpilot/settings/min-feat.lat.lane_centering.py:38
+#: dragonpilot/settings/min-feat.lat.lane_centering.py:41
 #, python-format
 msgid ""
 "Fade the lane-centering correction out while a turn signal is active so it "
@@ -928,22 +928,6 @@ msgstr "警告：這會授予您 GitHub 設定中所有公開金鑰 SSH 存取�
 msgid "<b>WARNING: openpilot longitudinal control is in alpha for this car and may disable Automatic Emergency Braking (AEB).</b><br><br>On this car, openpilot defaults to the car's built-in ACC instead of openpilot's longitudinal control. Enable this to switch to openpilot longitudinal control. Enabling Experimental mode is recommended when enabling openpilot longitudinal control alpha. Changing this setting will restart openpilot if the car is powered on."
 msgstr "<b>警告：此車款的 openpilot 縱向控制仍為 Alpha 版本，可能會停用自動緊急煞車（AEB）。</b><br><br>此車款的 openpilot 預設使用原廠內建的 ACC，而非 openpilot 縱向控制。啟用此選項即改由 openpilot 進行縱向控制。啟用 openpilot 縱向控制 Alpha 時，建議同時開啟實驗模式。若車輛通電，變更此設定將重新啟動 openpilot。"
 
-#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:8
-#, python-format
-msgid "Auto Brake Hold (TSS2)"
-msgstr "自動煞車維持 (TSS2)"
-
-#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:9
-#, python-format
-msgid "<b>Hybrid models only (not supported on gasoline models).</b><br>For vehicles without a factory Auto Hold. Holds the car at a standstill using the PCS brake once stopped for 2 seconds with cruise disengaged. Press the gas to release; press the brake again to release and restart the timer.<br>Off: Disabled.<br>On: Active whenever in Drive (D).<br>Speed: Active in Drive (D) only after exceeding 18 km/h (5 m/s) since shifting into D.<br>Requires a TSS2 camera-ACC vehicle with openpilot longitudinal control. Takes effect after the car is restarted."
-msgstr "<b>限油電車型（汽油版不支援）。</b><br>適用於沒有原廠 Auto Hold 的車輛。停車且巡航未啟用時，靜止滿 2 秒後借用 PCS 煞車將車輛保持在原地。踩油門即解除；再次踩下煞車會解除並重新計時。<br>關閉：停用。<br>開啟：在 D 檔即可作動。<br>速度：進入 D 檔後車速曾超過 18 公里/時 (5 m/s) 才作動。<br>需為 TSS2 相機 ACC 車型並使用 openpilot 縱向控制，重新發動車輛後生效。"
-
-#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:10
-#, python-format
-msgid "On"
-msgstr "開啟"
-
-#: dragonpilot/settings/brand.toyota.auto-brake-hold.py:10
-#, python-format
-msgid "Speed"
-msgstr "速度"
+# dp - beta 標示
+msgid "Auto Brake Hold (TSS2, Hybrid Only) Beta"
+msgstr "自動煞車維持（TSS2限油電）Beta版"

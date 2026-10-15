@@ -27,6 +27,23 @@ MANIFEST_CACHE_TIMEOUT_S = 3600
 # where jetlink keeps it, /data/media/0/models/jetlink/<sha256[:16]>.onnx, so the two share one copy.
 # ---------------------------------------------------------------------------------------------
 JETLINK_POINTERS_PARAM = "JetlinkModelPointers"   # jetlink's own {ref: {oid, size}} cache, read only
+# Known pointers, used when neither cache has the ref and before asking the network. Verified 2026-10-15:
+#   CTV3 (Cinque Terre V3, comma bf3e3631 "Use f78ed37d for the precompiled eGPU driving model") ships a pkl, no
+#   ONNX; its ONNX is huggingface.co/commaai/openpilot_driving_models
+#   f78ed37d-afad-4dbc-8050-40ea885eedde/12864/big_driving_supercombo.onnx (jetlink lfs.fetch_export_pointer).
+KNOWN_POINTERS = {
+  "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244": {"oid": "404a18cfd86d29637d20c697dfde245bb47c666ae016730ab674c65f4d1e1aa4",
+                                               "size": 766354845},
+}
+
+# The default big model (plan B, 2026-10-15): CTV3. With an eGPU on USB, the first boot (offroad) downloads and
+# compiles it on its own, once, unless the user has already picked, declined or deleted a model in the eGPU panel
+# (P_AUTO_DEFAULT). Its catalog entry is jetlink's default (jetlink_adapter._DEFAULT_CATALOG); kept here too so it is
+# found even when JetlinkCatalog holds a list without it.
+DEFAULT_BUNDLE = {"ref": "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244", "display_name": "Cinque Terre V3 Model",
+                  "short_name": "CTV3", "index": 0, "is_big": True}
+DEFAULT_REF = DEFAULT_BUNDLE["ref"]
+AUTO_RETRY_S = 600  # a failed automatic download (network) is retried this long after
 
 # ---------------------------------------------------------------------------------------------
 # On-device compile. The vendored tinygrad is sunnypilot/tinygrad@9cd40014 (= sunnypilot-master's
@@ -52,8 +69,15 @@ CAMERA_CONFIGS = ((1928, 1208), (1344, 760))
 # eGPU USB identity
 #   0xADD1:0x0001  comma chestnut / ASM2464 with comma firmware (dp0111pre selfdrive/modeld/helpers.py)
 #   0x3801:0x0001  second id listed in sunnypilot common/hardware/usb.py CHESTNUT_USB_IDS
+#   0xADD1:0x0002  UT3G V1.6 Dual adapter (manufacturer "tiny", product "custom <8hex>-UT3G-DUAL"), sunnypilot
+#                  dev-sp-egpu UT3G_DUAL_USB_IDS. Deliberately outside comma's flasher domain: nothing here ever
+#                  writes firmware to any of these, so the dual's own firmware is left as it is.
 # ---------------------------------------------------------------------------------------------
-EGPU_USB_IDS = ((0xADD1, 0x0001), (0x3801, 0x0001))
+EGPU_OFFICIAL_USB_IDS = ((0xADD1, 0x0001), (0x3801, 0x0001))
+UT3G_DUAL_USB_IDS = ((0xADD1, 0x0002),)
+EGPU_USB_IDS = EGPU_OFFICIAL_USB_IDS + UT3G_DUAL_USB_IDS
+# an ASM2464 still in its ROM / with its factory firmware: on the bus, but not usable until flashed
+EGPU_ROM_USB_IDS = ((0x174C, 0x2464), (0x174C, 0x2463))
 
 # ---------------------------------------------------------------------------------------------
 # Paths
@@ -97,6 +121,7 @@ def warp_pkl_name(cam_w: int, cam_h: int) -> str:
 # Params (declared in dragonpilot/settings/min-feat.dev.egpu.py)
 # ---------------------------------------------------------------------------------------------
 P_ENABLED = "dp_egpu_enabled"                # BOOL  PERSISTENT   master switch for the big model
+P_SEEN = "dp_egpu_seen"                      # BOOL  PERSISTENT   an eGPU (or an ASM2464 in ROM) was seen on USB once: jetlinkd stays off
 P_PRESENT = "dp_egpu_present"                # BOOL  manager start  eGPU seen on USB (written by egpu_manager)
 P_ACTIVE_BUNDLE = "dp_egpu_bundle"           # JSON  PERSISTENT   selected model, compiled and ready
 P_MANIFEST_SYNC = "dp_egpu_manifest_sync"    # INT   manager start  monotonic ns of the last catalog refresh, 0 = refresh now
@@ -107,6 +132,7 @@ P_DELETE_REF = "dp_egpu_delete_ref"          # STRING manager start  request: de
 P_CLEAR_CACHE = "dp_egpu_clear_cache"        # BOOL  manager start  request: delete all but the active model
 P_LOADING = "dp_egpu_loading"                # BOOL  manager start | offroad  modeld_egpu is loading the model
 P_RUNNING = "dp_egpu_running"                # BOOL  manager start | offroad  big model is driving
+P_AUTO_DEFAULT = "dp_egpu_auto_default"     # BOOL  PERSISTENT   download + compile DEFAULT_BUNDLE by itself once (plan B)
 P_FAILED = "dp_egpu_failed"                  # BOOL  manager start | offroad  big model failed this drive -> stock modeld
 
 # pipeline states (P_STATUS["state"])
