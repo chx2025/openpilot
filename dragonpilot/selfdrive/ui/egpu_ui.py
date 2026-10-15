@@ -59,7 +59,7 @@ def badge_text(state: EgpuState) -> str:
 
 def model_name() -> str:
   b = ui_state.egpu_bundle
-  return b["display_name"] if b else "未選擇（使用內建模型）"
+  return b["display_name"] if b else "未選擇（由內建小模型駕駛）"
 
 
 def model_state(ref: str) -> str:
