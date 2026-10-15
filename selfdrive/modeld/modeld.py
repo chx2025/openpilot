@@ -208,9 +208,10 @@ def main(demo=False, egpu_loader=None):
   params.put_bool("UsbGpuCompiled", _compiled)
 
   if EGPU:
-    # dp - egpu: as sunnypilot modeld_v2 / upstream's newer modeld, realtime beside the USB GPU too. dp's
-    # "USB GPU saturates a core" note predates the newer tinygrad this process runs on
-    config_realtime_process(7, 54)
+    # dp - egpu (v5.2): realtime only once the model is loaded, below. tinygrad's host waits for the eGPU
+    # (support/hcq2.py hcq_fence, "TODO: timeout?") spin with no timeout and no sleep; on SCHED_FIFO 54 / core 7
+    # a GPU that never answers starves the loader's own timeout on the same core: "loading" forever, no error
+    pass
   elif not USBGPU:
     # dp - jetlink: before going realtime: prepare() starts tinygrad's device thread, which would
     # inherit FIFO 54 on core 7. Never beside a USB GPU, which runs the big model natively
@@ -248,6 +249,7 @@ def main(demo=False, egpu_loader=None):
     # dp - egpu: the eGPU bundle is the only model in this process (see main's docstring)
     small_model = None
     model = egpu_loader(vipc_client_main.width, vipc_client_main.height)
+    config_realtime_process(7, 54)  # dp - egpu: after the load (see above); sunnypilot sets it before
   else:
     small_model = ModelState(vipc_client_main.width, vipc_client_main.height, USBGPU)
     model = small_model

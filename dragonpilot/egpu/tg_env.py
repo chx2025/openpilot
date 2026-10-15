@@ -23,6 +23,11 @@ if str(BASEDIR) not in sys.path:
   sys.path.insert(1, str(BASEDIR))
 
 os.environ.setdefault('GMMU', '0')  # chestnut fast loading (sunnypilot modeld)
+if os.path.isfile('/TICI'):
+  # UT3G author's sp branch (egpu_loader.py): "/home is an ephemeral overlay on C3XL. Keep AMD firmware and
+  # compiler caches across reboots so model startup never depends on a live download." tinygrad's fetch_fw falls
+  # back to downloading AMD firmware when /lib/firmware has none; without this the copy is lost on every reboot
+  os.environ.setdefault('XDG_CACHE_HOME', '/data/cache')
 
 
 def check() -> None:

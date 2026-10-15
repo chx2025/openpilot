@@ -18,7 +18,10 @@ import threading
 import time
 
 tg_env.check()
-os.environ.setdefault('HCQDEV_WAIT_TIMEOUT_MS', '3000')  # sunnypilot modeld with a chestnut present
+os.environ.setdefault('HCQDEV_WAIT_TIMEOUT_MS', '3000')  # sunnypilot modeld with a chestnut present (no-op on this tinygrad)
+# UT3G author's sp branch (sunnypilot/modeld_v2/egpu_loader.py configure_default_device): keep tinygrad's
+# default-device scan off the USB AMD GPU; every tensor here names its device anyway
+os.environ.setdefault('DEV', 'QCOM')
 # openpilot #38992: a 100 W power limit for the chestnut, set by tinygrad when it boots the device, which then
 # leaves the clocks to the SMU (~1.2 GHz / ~31 W / ~5 A for the big model). dp: AmyJeanes/openpilot-upstream@e9fa764
 # (pin the top clocks under that limit: ~37 ms instead of ~42 ms, but ~12 A bursts at the chestnut's input) is
@@ -33,7 +36,10 @@ from dragonpilot.egpu.bundles import get_active_bundle, active_ready
 from dragonpilot.egpu.constants import P_LOADING, P_RUNNING, P_FAILED, model_root, model_pkl_name, warp_pkl_name
 
 PROCESS_NAME = "dragonpilot.egpu.modeld_egpu"
-BIG_MODEL_TIMEOUT = 60  # s, sunnypilot modeld BIG_MODEL_TIMEOUT
+# s. sunnypilot: 60. The UT3G author measured 71.5-75.6 s on a C3XL with a UT3G (sp egpu_loader.py
+# C3XL_MODEL_LOAD_TIMEOUT = 120, "bounded 44.42 s margin for cold starts and USB scheduling variance")
+BIG_MODEL_TIMEOUT = 120
+PCIE_WAIT = 15  # s, before tinygrad opens the eGPU (zoompilot waits 10 s before a chestnut build)
 
 
 def _fail(params: Params, why: str) -> None:
@@ -54,6 +60,10 @@ def make_loader(params: Params):
     tg_env.patch_fetch_fw()
 
     params.put_bool(P_LOADING, True)
+    from dragonpilot.egpu.usb import wait_pcie_link
+    up, ltssm = wait_pcie_link(PCIE_WAIT)
+    if not up:
+      raise RuntimeError(f"eGPU PCIe link not up after {PCIE_WAIT}s (LTSSM=0x{ltssm:02X})")
     result: dict = {}
 
     def load():

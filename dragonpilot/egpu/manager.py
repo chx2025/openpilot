@@ -35,7 +35,7 @@ from dragonpilot.egpu.constants import (MANIFEST_CACHE_TIMEOUT_S, CAMERA_CONFIGS
                                         P_STATUS, P_DELETE_REF, P_CLEAR_CACHE, P_ENABLED, P_SEEN, P_AUTO_DEFAULT, DEFAULT_REF, AUTO_RETRY_S, ST_IDLE, ST_RESOLVING, ST_DOWNLOADING,
                                         ST_COMPILING_WARP, ST_COMPILING, ST_DONE, ST_FAILED, ST_CANCELLED, ST_WAITING_EGPU,
                                         model_root, onnx_path, model_pkl_name, warp_pkl_name)
-from dragonpilot.egpu.usb import egpu_present, egpu_rom_present
+from dragonpilot.egpu.usb import egpu_present, egpu_rom_present, wait_pcie_link
 
 BASEDIR = EGPU_DIR.parent.parent
 COMPILE_TIMEOUT_S = 3 * 3600
@@ -196,6 +196,13 @@ class EgpuModelManager:
           return
         self.compile_warps()
         self._check()
+        if not model_compiled(pointer["oid"]):
+          up, ltssm = wait_pcie_link(15.0, should_stop=self._interrupted)
+          self._check()
+          if not up:
+            # the bridge is on USB but the GPU behind it is not (12 V / its own supply): wait, as for no eGPU
+            self._set_status(force=True, state=ST_WAITING_EGPU, error=f"PCIe LTSSM=0x{ltssm:02X}")
+            return
         self.compile_model(pointer, onnx)
         self._check()
       self.params.put(P_ACTIVE_BUNDLE, {**bundle, "sha256": pointer["oid"]}, block=True)

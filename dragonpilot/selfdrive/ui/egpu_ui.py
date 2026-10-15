@@ -120,6 +120,8 @@ def download_text() -> str:
   if state == ST_COMPILING:
     return f"{name} 編譯中 {_mmss(st.get('elapsed'))}"
   if state == ST_WAITING_EGPU:
+    if st.get("error", "").startswith("PCIe"):
+      return f"{name} 等待 eGPU 顯示卡連線（{st['error']}）"
     return f"{name} 等待 eGPU 接上以編譯"
   if state == ST_DONE:
     return f"{name} 已完成"

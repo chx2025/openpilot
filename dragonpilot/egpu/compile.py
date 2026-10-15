@@ -188,6 +188,13 @@ def main(argv=None):
 
   tg_env.check()
   tg_env.patch_fetch_fw()
+  if os.path.isfile('/TICI') and (os.cpu_count() or 0) >= 8:
+    # zoompilot SConscript: "CPU 7 is isolated with isolcpus on AGNOS, so explicitly pin the compiler to it"
+    # (taskset -c 7): a compile of many minutes then leaves cores 0-6 to the UI, wifi and the rest
+    try:
+      os.sched_setaffinity(0, {7})
+    except OSError:
+      pass
   if args.cmd == 'warp':
     cam_w, cam_h = (int(x) for x in args.cam.lower().split('x'))
     ms = tuple(int(x) for x in args.model_size.lower().split('x')) if args.model_size else None

@@ -173,6 +173,14 @@ v2 改成**下載模型的 onnx、在車上自己編譯一次**，warp 永遠編
 12. **eGPU 辨識加入 UT3G V1.6 Dual（`ADD1:0002`，v5）**：同 sunnypilot dev-sp-egpu 的 `UT3G_DUAL_USB_IDS`。改了四處：`dragonpilot/egpu/constants.py`（`EGPU_USB_IDS`）、`selfdrive/modeld/helpers.py`（`USBGPU_IDS`）、`dragonpilot/jetlink_adapter`（`CHESTNUT_IDS`，jetlink 才不會把插 UT3G 的埠鎖成裝置端），以及**隨附 tinygrad 的 `tinygrad/runtime/ops_amd.py`**（`USBIface` 列舉 USB 裝置時多列 `ADD1:0002`；這是對 sunnypilot/tinygrad@9cd40014 唯一的修改）。沒有任何地方會對 UT3G 寫韌體。ASM2464 原廠／ROM 韌體（`174C:2464/2463`）只會記錄錯誤，不算 eGPU。
 13. **預設模型自動下載（v5，方案 B）**：見 §3。sunnypilot 沒有這個功能（要使用者自己選）。
 14. **有 eGPU 的機器不啟動 jetlinkd（v5.1）**：jetlink 原本的規則是「開關開著、而且沒看到 chestnut」才跑（`jetlink/openpilot/parts.py` `enabled()`）。但 jetlink 要先看到 eGPU 列舉出來才會讓開；它的 USB-C 埠邏輯（`jetlink/comma/port.py`）在 comma 當主機 3 秒（`SWAP_AFTER`）後還沒看到 chestnut 時，會把埠鎖成裝置端（comma 供電時），或對外發 DR_Swap 甚至 USB PD hard reset（對方供電時，例如外接電源的 UT3G）。UT3G 因此一直出不來，log 就顯示埠被 jetlink 佔用。v5.1 改成：eGPU 開關開，而且曾看過 eGPU（`dp_egpu_seen`，由 `egpu_manager` 寫入），`jetlink_adapter.should_run` 就回傳 False，jetlinkd 不跑；jetlinkd 停止時會先 `port.off()` 放開鎖住的埠。想改用 jetlink，關掉 eGPU 開關即可。
+15. **載入／編譯的穩定性（v5.2，參考 UT3G 作者的 sp 分支與 zoompilot）**：
+    - **即時排程改到載入完成後**：sunnypilot／zoompilot 都是先 `config_realtime_process(7, 54)` 再載入大模型。但隨附 tinygrad 等待 GPU 的地方（`support/hcq2.py` 的 `hcq_fence`，註解寫著「TODO: timeout?」）沒有逾時、也不讓出 CPU。GPU 不回應時，它會以 FIFO 54 在第 7 核空轉，載入逾時的檢查排不到 CPU，畫面就一直停在「載入中」也不報錯。v5.2 改成載入完才設即時排程。
+    - **載入逾時 60→120 秒**：UT3G 作者在 C3XL＋UT3G 上實測載入 71.5～75.6 秒（`sunnypilot/modeld_v2/egpu_loader.py` 的 `C3XL_MODEL_LOAD_TIMEOUT = 120`）。60 秒在 UT3G 上一定會逾時。
+    - **先等 PCIe 連上 L0**：比照 zoompilot `chestnut/flash.py` 的 `link_up`。橋接晶片在 USB 上出現時，後面的顯示卡不一定已經可用（各車 12 V 不同）。編譯前與載入前最多等 15 秒；送出的請求和 tinygrad 每次開啟裝置時送的完全一樣（0xF3=1、讀 0xB450），都不會寫入永久設定。
+    - **`DEV=QCOM`**：同 UT3G 作者的 `configure_default_device`，讓 tinygrad 的預設裝置掃描不去碰 USB 上的 AMD GPU。
+    - **`XDG_CACHE_HOME=/data/cache`**：同 UT3G 作者。C3XL 的 /home 是重開就清空的 overlay；tinygrad 在 /lib/firmware 找不到 AMD 韌體時會上網下載並快取在那裡，不改的話每次開機都要重新下載（沒網路就卡住）。
+    - **編譯固定在第 7 核**：比照 zoompilot 的 `taskset -c 7`。AGNOS 把第 7 核用 isolcpus 隔離，長時間編譯時不會拖慢 UI、WiFi。
+    - **對照發現**：UT3G 作者分支內附的 tinygrad，`ops_amd.py` 也只列 `ADD1:0001`／`3801:0001`，沒有 `ADD1:0002`；它的 tinygrad 也比我們的舊（有 `AMD_USB_POLL_US` 輪詢睡眠，我們這版沒有）。所以他實際能跑 UT3G 的 tinygrad，跟壓縮檔裡這份可能不同，這點無法從原始碼確認。
 
 ---
 
