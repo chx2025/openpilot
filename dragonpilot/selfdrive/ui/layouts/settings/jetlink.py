@@ -30,8 +30,6 @@ DESCRIPTION = ("在連接於 comma USB-C 埠的外部裝置（Jetson / Linux PC 
 
 # dp: the iPhone charging toggle, sealed. The param stays declared so an older value can be cleared
 CHARGE_PARAM = "JetlinkChargePhone"
-CHARGE_SEALED_NOTE = ("comma 不會對手機供電，此功能已永久封印：曾有 comma 3（C3）因 comma 經 USB-C 為手機供電而主板燒毀，"
-                      "復刻機也出現三顆鏡頭失效、畫面凍結。iPhone 請改用車充、MagSafe 或帶 PD 輸入的 USB-C Hub 充電。")
 
 PROGRESS_STAGES = {"connect": "連線", "fetch": "下載", "upload": "上傳", "build": "建置", "failed": "失敗"}
 
@@ -64,10 +62,7 @@ class JetlinkLayout(Widget):
     self._reason_item = text_item("無法使用原因", lambda: (ui_state.jetlink.reason if ui_state.jetlink and ui_state.jetlink.reason else NONE_TEXT))
     self._adb_item = text_item("ADB", lambda: "已由 Jetlink 關閉" if ui_state.adb_blocked else ("開啟" if ui_state.params.get_bool("AdbEnabled") else "關閉"))
 
-    # dp: phone charging is sealed (jetlink.comma.port.PHONE_CHARGING_SEALED); the toggle is gone and the
-    # panel says why. A value an earlier build stored is cleared, so nothing reads as on
-    self._charge_item = text_item("iPhone 由 comma 供電", "已封印",
-                                  description=CHARGE_SEALED_NOTE)
+    # Clear legacy charging settings; no charging item is shown.
     try:
       if ui_state.params.get_bool(CHARGE_PARAM):
         ui_state.params.put_bool(CHARGE_PARAM, False)
@@ -87,7 +82,7 @@ class JetlinkLayout(Widget):
 
     self._items = [self._link_item, self._state_item, self._transport_item, self._present_item, self._port_item,
                    self._source_item, self._far_end_item, self._model_item, self._ready_item, self._progress_item,
-                   self._refresh_item, self._reason_item, self._charge_item, self._adb_item]
+                   self._refresh_item, self._reason_item, self._adb_item]
     self._scroller = Scroller(self._items, line_separator=True, spacing=0)
 
   # -- values -------------------------------------------------------------------
@@ -222,7 +217,6 @@ class JetlinkLayout(Widget):
       item.set_visible(on or (j is not None and j.present))
     self._source_item.action_item.set_enabled(ui_state.is_offroad())
     self._reason_item.set_visible(bool(j is not None and j.reason))
-    self._charge_item.set_visible(mode == "ios")
 
     status = jetlink_ui.link_status()
     description = f"{DESCRIPTION} {status}".strip()
