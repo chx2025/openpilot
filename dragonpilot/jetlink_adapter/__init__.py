@@ -26,8 +26,11 @@ dp0111pre divergences from zoompilot (search "dp:" below):
     sysfs for the same USB ids zoompilot lists.
   - model root: dp's Paths has no model_root(); /data/media/0/models on AGNOS.
   - modeld is dp's two-JIT modeld (warp_enqueue + run_policy), which has no
-    standalone stateless warp: make_warp() builds zoompilot's stateless warp
-    graph from dp's own make_frame_prepare.
+    standalone driving_warp_*_tinygrad.pkl as openpilot's modeld has: build_warp.py
+    compiles one in that exact format ({'run', 'input_specs'}, M_inv + input_frame,
+    two frames) from dp's own make_frame_prepare, for jetlink 0.8.7's Warp.
+  - in_control() reads modeld's own SubMaster (use_submaster) where zoompilot's
+    adapter keeps a SubMaster of its own: the same messages, polled once.
   - in_control(): MADS does not exist; dp's ALKA takes its place, matched to
     MADS one for one: dp's lkasOn is ACC main on every brand (opendbc carstate,
     safety toyota.h), as MADS is enabled by main and disabled by main off.
@@ -42,8 +45,11 @@ from collections import namedtuple
 from pathlib import Path
 
 # the version of jetlink.openpilot's API this adapter is written to; any other
-# is treated as jetlink being absent, with the reason as the offroad alert
-API = 2
+# is treated as jetlink being absent, with the reason as the offroad alert.
+# 3 (jetlink 0.8.7): the joining model asks Adapter.in_control() before every
+# frame; modeld no longer writes it. The warp is a driving-warp pickle dict
+# ({'run', 'input_specs'}), built by build_warp.py, not by jetlink
+API = 3
 
 # the gadget owner, as manager names the process and selfdrived lists it
 OWNER = 'jetlinkd'
@@ -69,9 +75,18 @@ _DEFAULT_CATALOG = {'bundles': [{'ref': 'bf3e3631b3f91d92a1020a5e0dd4298b93ff424
                                  'short_name': 'CTV3', 'index': 0, 'is_big': True,
                                  'minimum_selector_version': str(CATALOG_SELECTOR)}]}
 
+# jetlink 0.8.7: the pins zoompilot's extra list (jetlink_repo/catalog/extra_big_models.json)
+# carries, {ref: {'oid', 'size'}}: the ONNX jetlink runs for that commit whatever a lookup said.
+# Mountain Dew Model (6f4c0faf) runs the retrained model comma shipped, not the earlier one. dp has
+# no model manager to fetch them on its own, so they are written over the kept pointers on every
+# read (get) as well as by refresh_catalog, which takes the live list's
+_PINNED_POINTERS = {
+  '6f4c0faf1f85132734e94aa39c67143f823b9324': {
+    'oid': '87fe86ca0813c099efddf9173ba503be2e40ea4c5362c36812a44141f4cb07d4', 'size': 792430559},
+}
+
 # comma's chestnut (USB GPU), running and in its ROM. The comma's USB-C port
 # hosts one and is never held as a jetlink device beside it
-# dp - egpu: + (0xADD1, 0x0002), the UT3G V1.6 Dual adapter
 CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0xADD1, 0x0002), (0x174C, 0x2464), (0x174C, 0x2463)})
 
 # where the build puts the warp for each camera (SConscript) and modeld loads
@@ -106,8 +121,10 @@ def _model_root() -> Path:
 
 
 def warp_path(cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
-  """The warp for one geometry: the build's target and what modeld opens."""
-  return WARP_DIR / f'warp_{cam_w}x{cam_h}_{model_w}x{model_h}_tinygrad.pkl'
+  """The warp for one geometry: the build's target and what modeld opens. jetlink
+  0.8.7's format (openpilot's driving warp dict, build_warp.py) under a new name,
+  so a 0.8.5-format pickle (a bare TinyJit) left by an older build is never opened."""
+  return WARP_DIR / f'driving_warp_{cam_w}x{cam_h}_{model_w}x{model_h}_tinygrad.pkl'
 
 
 def chestnut_present() -> bool:
@@ -191,6 +208,8 @@ class Adapter:
       value = None
     if key == KEYS.catalog and not (isinstance(value, dict) and value.get('bundles')):
       return _DEFAULT_CATALOG
+    if key == KEYS.pointers:
+      return {**(value if isinstance(value, dict) else {}), **_PINNED_POINTERS}
     return value
 
   def follow_far_end(self) -> bool:
@@ -246,34 +265,23 @@ class Adapter:
   def event(self, name: str, **fields) -> None:
     self.log.event(name, **fields)
 
-  # -- the build --------------------------------------------------------------
+  # -- control ----------------------------------------------------------------
 
-  def make_warp(self, cam_w: int, cam_h: int, model_w: int, model_h: int):
-    """The stateless warp jetlink runs on the comma: both camera frames warped
-    and stacked, (2, 6, H/2, W/2) uint8, under the names call_warp passes.
-
-    dp: dp's compile_modeld.make_warp() is the queueing warp_enqueue of its
-    two-JIT modeld, so the graph is built here from dp's make_frame_prepare,
-    as zoompilot's compile_modeld.make_warp() does it. compile_modeld first:
-    it patches tinygrad's firmware fetch as it loads."""
-    from openpilot.selfdrive.modeld.compile_modeld import NV12Frame, make_frame_prepare
-    from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
-    from tinygrad.device import Device
-    from tinygrad.tensor import Tensor
-    nv12 = NV12Frame(cam_w, cam_h, *get_nv12_info(cam_w, cam_h))
-    frame_prepare = make_frame_prepare(nv12, model_w, model_h)
-
-    def warp(tfm, big_tfm, frame, big_frame):
-      tfm = tfm.to(Device.DEFAULT)
-      big_tfm = big_tfm.to(Device.DEFAULT)
-      frame = frame.to(Device.DEFAULT)
-      big_frame = big_frame.to(Device.DEFAULT)
-      Tensor.realize(tfm, big_tfm, frame, big_frame)
-      warped_frame = frame_prepare(frame, tfm).unsqueeze(0)
-      warped_big_frame = frame_prepare(big_frame, big_tfm).unsqueeze(0)
-      return Tensor.cat(warped_frame, warped_big_frame)
-
-    return warp, nv12.size
+  def in_control(self) -> bool:
+    """Is openpilot or ALKA in control? jetlink API 3: the joining model asks on
+    modeld's frame thread before every frame and swaps the large model in only
+    while not. True when it cannot tell; never raises (module in_control is
+    guarded). dp: off modeld's SubMaster (use_submaster), updated just before
+    run(); a SubMaster of the adapter's when modeld has not handed one over."""
+    sm = _submaster
+    if sm is None:
+      try:
+        sm = _own_submaster()
+        sm.update(0)
+      except Exception as e:
+        _log_failure("in_control(): no SubMaster", e)
+        return True
+    return in_control(sm)
 
 
 # -- dp: the model menu ---------------------------------------------------------
@@ -314,7 +322,7 @@ def model_menu(params=None) -> list[dict]:
   catalog = params.get(KEYS.catalog)
   bundles = catalog.get('bundles') if isinstance(catalog, dict) and catalog.get('bundles') else _DEFAULT_CATALOG['bundles']
   pointers = params.get(KEYS.pointers)
-  pointers = pointers if isinstance(pointers, dict) else {}
+  pointers = {**(pointers if isinstance(pointers, dict) else {}), **_PINNED_POINTERS}
   loaded, built = far_end_models()
   root = _model_root() / 'jetlink'
   rows = []
@@ -361,14 +369,26 @@ def refresh_catalog(params=None, resolve: bool = True) -> int:
   from openpilot.common.params import Params
   params = params or Params()
   merged = fetch_catalogs()
+  # jetlink 0.8.7: zoompilot's extra list pins some commits to the ONNX jetlink runs for them
+  # (catalog.pinned_pointers), written over whatever a lookup found, as models.keep_pins does
+  pins = {**_PINNED_POINTERS, **(merged.pop('pointers', None) or {})}
   bundles = [b for b in merged.get('bundles', []) if isinstance(b, dict) and b.get('is_big')
              and str(b.get('minimum_selector_version')) == str(REQUIRED_SELECTOR_VERSION)]
   if not bundles:
     raise RuntimeError("the catalog lists no big model")
   params.put(KEYS.catalog, {'bundles': bundles})
+  # jetlink 0.8.7: a model the catalog withdrew (Mountain Dew V2 Preview) is no longer a pick; the
+  # comma follows the far end again, whose 0.8.7 app switches it to Cinque Terre V3
+  slot = params.get(KEYS.big_model)
+  if not follows_far_end(slot) and slot['ref'] not in {b['ref'] for b in bundles}:
+    params.remove(KEYS.big_model)
+    _log_failure(f"the picked model {slot['ref'][:10]} is no longer listed; following the far end", None)
+  pointers = params.get(KEYS.pointers)
+  pointers = dict(pointers) if isinstance(pointers, dict) else {}
+  if pins:
+    pointers.update(pins)
+    params.put(KEYS.pointers, pointers, block=True)
   if resolve:
-    pointers = params.get(KEYS.pointers)
-    pointers = dict(pointers) if isinstance(pointers, dict) else {}
     for b in bundles:
       if b['ref'] in pointers:
         continue
@@ -506,10 +526,8 @@ def _guarded(default):
 @_guarded(False)
 def should_run(started: bool, params, CP) -> bool:
   """manager's rule for jetlinkd: the link is on and no chestnut is fitted.
-  jetlinkd runs onroad too: a gadget whose owner exits leaves the bus.
-  dp - egpu: and not on a comma that uses an eGPU (big model switch on, an eGPU seen on USB once). jetlink's
-  own test (chestnut_fitted) needs the eGPU enumerated, and an eGPU that is slow to enumerate, or a UT3G
-  that powers the port, gets the port held / role-swapped by jetlink's port logic first, so it never shows."""
+  jetlinkd runs onroad too: a gadget whose owner exits leaves the bus."""
+  # Reserve the USB port for an enabled eGPU even while it is enumerating.
   if params.get_bool("dp_egpu_enabled") and params.get_bool("dp_egpu_seen"):
     return False
   return _api().enabled()
@@ -562,6 +580,25 @@ PARKED_GEARS = frozenset({'park', 'neutral', 'reverse'})
 def parked(car_state) -> bool:
   """The gear lets the large model swap in with ALKA on and ACC main on (SWAP_WHILE_PARKED)."""
   return SWAP_WHILE_PARKED and str(car_state.gearShifter) in PARKED_GEARS
+
+
+_submaster = None
+_own = None
+
+
+def use_submaster(sm) -> None:
+  """modeld, once: the SubMaster it updates before every frame, which subscribes
+  to IN_CONTROL. Adapter.in_control() reads it."""
+  global _submaster
+  _submaster = sm
+
+
+def _own_submaster():
+  global _own
+  if _own is None:
+    from cereal import messaging
+    _own = messaging.SubMaster(list(IN_CONTROL))
+  return _own
 
 
 @_guarded(True)

@@ -1,6 +1,6 @@
 # Jetlink 移植說明：zoompilot → openpilot-dp0111pre
 
-> 來源：`zoompilot-develop__261008__7`（jetlink 套件 `jetlink_repo` v0.8.5，API 2）
+> 來源：`zoompilot-develop`（2026-10-15；jetlink 套件 `jetlink_repo` **v0.8.7，API 3**）。v12 由 0.8.5（API 2）更新而來，所有 dp 修改（D10–D17，含 **iPhone 供電封印**）全數保留，0.8.7 帶來的架構變化見 D18–D21
 > 目標：`openpilot-dp0111pre`（dragonpilot，upstream base `c0ab3550`，tinygrad pin `eecd4706`）。v11 已改套到 2026-10-14 的 dp0111pre 新分支（含 Toyota 自動煞車維持、TDX 改版、紅綠燈 HUD）
 > 參考：`Zoompilot-modeld.zip`（`openpilot-dpjetlink/selfdrive/modeld`）
 > 日期：2026-10-09
@@ -25,7 +25,8 @@ Jetlink 讓接在 comma USB-C 埠上的外部裝置（Jetson Orin Nano Super / L
 | `jetlink_repo/LICENSE`、`README.md`、`pyproject.toml` | 上游授權（MIT）與版本 |
 | `jetlink` → `jetlink_repo/jetlink` | 相對 symlink，讓 `import jetlink` 從樹根可用（`launch_chffrplus.sh` 每次開機也會重建） |
 | `dragonpilot/jetlink_adapter/__init__.py` | **轉接層**：實作 `jetlink.openpilot.interface.Openpilot`，並提供所有 hook（`should_run/status/reason/prepare/attach/in_control/request_shutdown/shutdown_pending`）。頂層只 import stdlib（jetlinkd 常駐約 10 MB） |
-| `dragonpilot/jetlink_adapter/SConscript` | 建置期編譯 comma 端 warp JIT：`dragonpilot/jetlink_adapter/models/warp_<cam>_512x256_tinygrad.pkl`（tici 1928x1208、mici 1344x760 兩種都建） |
+| `dragonpilot/jetlink_adapter/SConscript` | 建置期編譯 comma 端 warp JIT：`dragonpilot/jetlink_adapter/models/driving_warp_<cam>_512x256_tinygrad.pkl`（tici 1928x1208、mici 1344x760 兩種都建） |
+| `dragonpilot/jetlink_adapter/build_warp.py` | （v12）以 openpilot `driving_warp_*_tinygrad.pkl` 的格式（`{'run': TinyJit, 'input_specs'}`，輸入 `M_inv`(2,3,3)＋`input_frame`(2, Y+UV bytes)，輸出 (2,6,128,256)）編譯 warp，graph 用 dp 自己的 `make_frame_prepare`；jetlink 0.8.7 已不再自己建 warp |
 | `dragonpilot/selfdrive/selfdrived/accelerator_events.py` | 行車事件：大模型就緒提示、切換 no-entry、啟用提示、斷線警告；切換時的 settling |
 | `dragonpilot/selfdrive/ui/jetlink_ui.py` | UI 共用：模式讀取、狀態文字/顏色、進度、failover 說明、圖示選擇 |
 | `dragonpilot/selfdrive/ui/layouts/settings/jetlink.py` | tici 設定頁「Jetlink」 |
@@ -62,11 +63,11 @@ Jetlink 讓接在 comma USB-C 埠上的外部裝置（Jetson Orin Nano Super / L
 
 ### 3.1 modeld（`selfdrive/modeld/modeld.py`）
 
-1. `ModelState` 新增 `lat_delay`、`frame_drop_ratio`、`in_control`（joining model 每幀寫入）。
+1. `ModelState` 新增 `lat_delay`、`frame_drop_ratio`、`in_control`（joining model 每幀寫入小模型）。
 2. `run()` 簽名改為 `run(bufs, transforms, inputs, after_enqueue=None, *, prepare_only=False)`：jetlink 的 joining model 以第 4 個位置參數傳 `after_enqueue`；dp 的 `prepare_only` 改成 keyword。
 3. `config_realtime_process(7, 54)` 之前先 `jetlink_adapter.prepare()`：tinygrad 的 device 執行緒必須在變成 SCHED_FIFO 前建立，否則會繼承 core 7 / FIFO 54 搶 frame loop。
 4. 小模型載入後 `jetlink_adapter.attach()`；有 USB GPU（chestnut）時完全不接 jetlink。
-5. 每幀：`inputs['action_t']`（大模型需要；dp 小模型忽略）、`model.in_control`、`model.frame_drop_ratio`；`handovers` 變化時重置掉幀濾波器（切換的停頓不算 lag）。
+5. 每幀：`inputs['action_t']`（大模型需要；dp 小模型忽略）、`model.frame_drop_ratio`；`handovers` 變化時重置掉幀濾波器（切換的停頓不算 lag）。**v12（API 3）**：modeld 不再寫 `model.in_control`，改為建立 SubMaster 後呼叫一次 `jetlink_adapter.use_submaster(sm)`；joining model 在每幀 `run()` 開頭自己問 `Adapter.in_control()`，轉接層讀的就是 modeld 剛 `update()` 過的同一個 SubMaster（判定規則 D5/D15 不變）。
 6. **掉幀路徑（dp 分歧）**：dp 在掉幀時只做 `prepare_only`（推進佇列、不發布）。小模型駕駛時維持原行為；**大模型駕駛時照常推論每一幀**（歷史在外部裝置，與 upstream 新版 modeld 相同）。
 7. `modelExt.acceleratorState` / `modelExt.bigModel` 發布（zoompilot 為 `modelDataV2SP.acceleratorState` / `modelV2.big`）。
 
@@ -93,9 +94,9 @@ Jetlink 讓接在 comma USB-C 埠上的外部裝置（Jetson Orin Nano Super / L
 3. **只能熄火切換模式**：gadget 只在停車時重組；設定頁的 Off/USB/iOS 在行車中變灰。
 4. **sudo**：jetlink 以 `sudo -n bash jetlink_repo/scripts/comma/jetlink-root.sh` 執行 root 動作，AGNOS 的 comma 使用者需免密碼 sudo（原廠即是）。
 5. **ALKA 對應 MADS（v4：與 zoompilot 一對一）**：zoompilot 的「控制中」＝ openpilot 啟用或 MADS 啟用（含暫停：檔位、車門、安全帶、煞車保持、駐車煞車、原廠 LKAS 關），MADS 由 ACC 主開關關閉（或 MADS 按鈕）釋放。dp 的 `lkasOn` 在所有品牌都追蹤 ACC 主開關（opendbc 各 carstate 的 `lkas_on = cruiseState.available`，panda `toyota.h` 亦同），所以一對一對應為：openpilot 啟用、ALKA 轉向中（`latActive`/`alkaActive`），或「ALKA 開啟且 `lkasOn`」（ALKA 暫停也算）。關掉 ACC 主開關即開放切換，與 zoompilot 相同。ALKA 沒有獨立按鈕，主開關是唯一關閉方式（zoompilot 另可按 MADS 按鈕）。`controlsd` 在大模型換上後 1.2 秒內不讓 ALKA 由關轉開，對應 zoompilot 讓 MADS 在 bigModelLoading 期間停在暫停。訊號過期一律視為控制中。
-6. **warp 是建置產物**：`scons` 會在 comma 上編好 warp pickle；沒有 warp 時 Jetlink 開啟會出現離線警示「Jetlink unavailable: no warp built for this camera」，行車只用小模型。
+6. **warp 是建置產物**：`scons` 會在 comma 上編好 warp pickle（v12 起檔名為 `driving_warp_…`，格式同 openpilot；舊版 `warp_…` 檔不會被讀取）；沒有 warp 時 Jetlink 開啟會出現離線警示「Jetlink unavailable: no warp built for this camera」，行車只用小模型。
 7. **大模型選單（v2 新增，從手機取得）**：預設「跟隨外部裝置」——手機（或 Jetson/Mac）App 上選的、目前載入的模型就是行車用的大模型；外部裝置每次 hello 都回報 `loaded`（載入中）與 `cached_models`（已建置）的 sha256，jetlinkd 記錄在 `/dev/shm/jetlink/server.json`。comma 端「更新模型清單」會抓與 App 相同的 sunnypilot chestnut 模型庫（實測 16 個大模型）並解析每個模型的 sha256，用來替手機上的模型命名；也可在 comma 上指定某個模型（外部裝置已建置就直接載入，沒有才由 comma 停車時下載上傳）。跟隨模式下 comma 不會下載任何模型。
-8. **外部裝置版本**：comma 端是 jetlink **0.8.5（API 2）**。Jetson/Linux 的安裝腳本取 jetlink `main`，若協定版本跳號會變成「只有小模型」；請安裝與 0.8.5 相容的 jetlink-server（Mac/iPhone App 同理）。
+8. **外部裝置版本**：comma 端是 jetlink **0.8.7（API 3）**。0.8.5→0.8.7 線路協定未變（仍為 protocol 3），但 zoompilot 要求 comma 與 App 一起更新；請把 Jetson 的 jetlink-server、Mac App、iPhone App 都更新到 0.8.7。
 9. **網路**：provisioning 需要 comma 熄火時有網路（下載 ONNX，約 0.8–1.75 GB，存在 `/data/media/0/models/jetlink/`）。
 
 ## 5. 與 zoompilot 的刻意差異（Intentional divergences）
@@ -117,12 +118,18 @@ Jetlink 讓接在 comma USB-C 埠上的外部裝置（Jetson Orin Nano Super / L
 | D14 | jetlink 套件連線層 | 原版 | `lending.SERVER_FIELDS` 多記 `loaded`/`cached_models`；`link.open_link` 跟隨外部裝置載入的模型；`stand_in` 對無法得知大小的已載入模型以 0 詢問（伺服器以 sha 回答）；`provision` 在外部裝置已有模型時不下載、跟隨模式停車時不 provisioning；provisioning 先 hello 再決定：外部裝置已載入模型就只確認該模型（不換模型、不需網路），有模型但未載入就交給它自己選，完全沒有模型才給預設（v7，修正開機後第一次 provisioning 把手機模型換掉） | 從手機取得模型選單 |
 | D15 | 切換時機（ALKA） | MADS 開著（含暫停）一律算控制中，只有關 ACC 主開關才能切換 | 同左，但排檔在 P／N／R 時 ALKA 暫停、無人控制，允許切換（`jetlink_adapter.SWAP_WHILE_PARKED = True`；controlsd 在切換後 1.2 秒內不讓 ALKA 啟動，打回 D 檔也不會在驗證期接手）。設為 False 即回到與 zoompilot 完全相同 | 2026-10-10 行車紀錄：大模型就緒後停車排 N／R／P 20 秒、無任何控制，卻因主開關開著無法切換 |
 | D16 | 等待切換時的連線檢查 | ping 失敗即重開並計入加倍退避（1、1、1、5、10、20、40、60 秒） | ping 失敗即重開，但不計入退避：連續 3 次以內 1 秒後重開，之後 5 秒（`joining.KEEPALIVE_RETRY_DELAY`） | 2026-10-10 行車紀錄：Mac App 對等待中的連線 ping 不回（only 0 of 32 bytes），每次新連線 hello 正常；加倍退避讓就緒時間只剩約 1/5 |
-| D17 | iPhone 由 comma 供電 | 參數 `JetlinkChargePhone` 開啟時，comma 以 PR_Swap 向 iPhone 要求供電方角色、最多輸出 7.5 W | **永久封印**：① `jetlink/comma/port.py` `PHONE_CHARGING_SEALED = True`，永不要求供電方角色，且發現 comma 正在對手機供電（source＋device）時每次插線交還一次；② `jetlink-root.sh port source` 直接拒絕；③ 轉接層 `KEYS.charge_phone = None`，無任何參數能開啟；④ 設定頁開關改為「已封印」說明並清除舊值 | 使用者回報 C3 因此主板燒毀；tici 復刻機三鏡頭失效、畫面凍結（2026-10-14） |
+| D17 | iPhone 由 comma 供電 | 參數 `JetlinkChargePhone` 開啟時，comma 以 PR_Swap 向 iPhone 要求供電方角色、最多輸出 7.5 W | **永久封印**：① `jetlink/comma/port.py` `PHONE_CHARGING_SEALED = True`，永不要求供電方角色，且發現 comma 正在對手機供電（source＋device）時逐步交還：先 PR_Swap 交還（`port sink`），被拒再做 USB PD 硬重置（`port reset`），仍不行就把供電角色鎖在受電（`port hold`）——10/14 復刻機上 `port sink` 每次都被拒（EPERM／EAGAIN），手機一直從 comma 取電（v11.1）；② `jetlink-root.sh port source` 直接拒絕；③ 轉接層 `KEYS.charge_phone = None`，無任何參數能開啟；④ 設定頁開關改為「已封印」說明並清除舊值 | 使用者回報 C3 因此主板燒毀；tici 復刻機三鏡頭失效、畫面凍結（2026-10-14） |
+| D18 | warp 的來源（0.8.7） | jetlink 讀 openpilot modeld 自己的 `models/driving_warp_{w}x{h}_tinygrad.pkl`（tinygrad `examples/openpilot/compile_warp.py --layout yuv420 --frames 2`） | dp modeld 是 `warp_enqueue` 融合 JIT，沒有這個檔；`build_warp.py` 用 dp 的 `make_frame_prepare` 編出**完全相同格式**的 pickle（輸入名 `['M_inv','input_frame']`、`input_frame` 只含 Y+UV 平面 `stride*(y_height+uv_height)`，與 openpilot 相同），存到 `dragonpilot/jetlink_adapter/models/driving_warp_<cam>_512x256_tinygrad.pkl`。0.8.5 的 `compile_warp`／`BuildSide`／`make_warp` 已移除；D10 的 `_graph_alone`／`no_sync` 相容碼隨之不需要，只保留「無 compile pool 時略過」 | dp 沒有獨立 driving warp；dp 的 tinygrad 版本無 `examples/openpilot` |
+| D19 | in_control 的取得（API 3） | 轉接層自建 SubMaster，每幀 `update(0)` 後判定 | 轉接層讀 modeld 的 SubMaster（`use_submaster`），modeld 沒交出時才自建；判定規則仍是 D5／D15 | 同樣的訊息、只輪詢一次，與 v11（modeld 寫入）時序完全相同 |
+| D20 | 小模型重置（0.8.7 `prepare_reset`） | 讀 `state_pairs`／`packed_input`（upstream #38916 後的 ModelState）或 modeld_v2 adapter | dp 的 ModelState 沒有 `state_pairs` 時，沿用 0.8.5 的作法：清 GPU 佇列（`input_queues` 非 NPY）、`npy` 歸零、`prev_desire` 歸零 | 否則 0.8.7 會在 `state_pairs` 拋錯，連線永遠準備不起來 |
+| D21 | 模型釘選／下架（0.8.7） | model manager 抓 extra 清單的 `pointers` 釘選（`keep_pins`）；MDV2 Preview 下架由 App 切到 Cinque Terre V3 | 轉接層內建同一筆釘選（`_PINNED_POINTERS`：Mountain Dew Model `6f4c0faf` → 重訓版 `87fe86ca…`，792 MB），每次讀指標都覆蓋上去；「重新整理模型清單」時再套用線上清單的釘選。comma 上選的模型若已從清單下架，清除選擇、改回跟隨外部裝置（App 0.8.7 會切到 Cinque Terre V3） | dp 無 model manager |
 | D13 | 參考 modeld 的手機前車融合 | — | **未移植** `apply_phone_leads`、`LeadPriorityGuard`、`jetlink.vision`、`jetlink_context` | 這些不在 zoompilot 原始碼中（屬自製手機前車方案），無法依原始碼移植 |
 
 ## 6. 驗證
 
-離線（雲端容器，dp 釘選的 tinygrad `eecd4706`，CPU 後端）50 項全數通過；另以實網路抓取模型庫成功（16 個大模型，並解析出 Lebowski 的 sha256 與 1675 MB）：
+**v12（jetlink 0.8.7）**：離線測試 92 項全數通過；另以 jetlink 0.8.7 原廠測試套件（992 項）跑 dp 版套件：973 通過，19 項失敗全部是刻意差異——iPhone 供電封印（`test_comma_port` 充電類 13 項、`test_comma_root` 3 項）、跟隨模式多回報 `loaded/cached_models`（2 項）、`stand_in` 以 0 詢問（1 項）——以及容器未附 CHANGELOG（1 項）。新增項目：API 3 = 3、版本 0.8.7；`build_warp` 產出的 pickle 通過 0.8.7 `Warps.load` 全部檢查、兩路輸出與 dp `frame_prepare` 逐位元相同（max diff 0）、舊格式 pickle 被拒；joining model 每幀先問 `in_control()`；`Adapter.in_control()` 讀 modeld SubMaster、過期/例外一律回 True；`prepare_reset` 清空 dp 佇列；釘選與下架處理。
+
+（以下為 v1–v11 的驗證紀錄）離線（雲端容器，dp 釘選的 tinygrad `eecd4706`，CPU 後端）50 項全數通過；另以實網路抓取模型庫成功（16 個大模型，並解析出 Lebowski 的 sha256 與 1675 MB）：
 
 - 轉接層對 `jetlink.openpilot.interface` 的 `StatusSide/WorkerSide/ModelSide/BuildSide/Openpilot` conformance：0 問題；API 版本 2 = 2。
 - hook：link off 時 `should_run=False`、`prepare=False`、`attach=None`；link=usb 時 `enabled=True`，`reason()` 正確回報「no warp built for this camera」；預設模型名稱 Cinque Terre V3 Model。
@@ -136,7 +143,7 @@ Jetlink 讓接在 comma USB-C 埠上的外部裝置（Jetson Orin Nano Super / L
 ## 7. 安裝與測試步驟
 
 1. 覆蓋檔案（保留路徑），確認 `jetlink` symlink 存在。
-2. 重開機讓 scons 建置（會看到 `[JETLINK WARP] .../warp_1928x1208_512x256_tinygrad.pkl`）。
+2. 重開機讓 scons 建置（會看到 `[JETLINK WARP] .../driving_warp_1928x1208_512x256_tinygrad.pkl`）。
 3. 外部裝置依 jetlink 文件安裝（Jetson：`docs/jetson.md`；Mac App；iPhone TestFlight）。
 4. 熄火狀態：設定 → Jetlink → USB（iPhone 選 iOS）。ADB 會自動關閉。
 5. 看側欄圖示：閃爍＝下載/建置中；綠＝就緒；橘＝看離線警示。
@@ -146,7 +153,8 @@ Jetlink 讓接在 comma USB-C 埠上的外部裝置（Jetson Orin Nano Super / L
 
 ## 8. 已知風險
 
-- **QCOM 路徑未實機驗證**：若 warp 在 comma 上失敗，log 有「jetlink load failed」，modeld 安全地維持小模型。
+- **QCOM 路徑未實機驗證**：若 warp 在 comma 上失敗，log 有「jetlink load failed」，modeld 安全地維持小模型。v12 的 warp 每幀多一次 CPU 複製（兩個相機 buffer 的 Y+UV 平面 memmove 進 `input_frame`，與 openpilot modeld 相同作法），0.8.5 時是直接讀相機 buffer。
+- **iPhone 由 comma 供電維持封印**（D17）：0.8.7 的 `port.py`／`jetlink-root.sh` 沒有改動，v11.1 的封印與逐步交還原封保留。
 - 跟隨模式依賴外部裝置回報的 `loaded`；手機若完全沒有任何模型，才回到預設模型（Cinque Terre V3），由 comma 停車時下載上傳。手機有模型但當下未載入（切換中）時 comma 不介入，下一輪再看。
 - 大模型幀不套 dp 車道偏移（`dp_lat_offset_cm`）；切回小模型時偏移恢復，橫向位置可能在切換瞬間略有差異。
 - `log.capnp` 的 EventName 新增序號 @101–@104（新分支的 @100 是 `autoBrakeHold`）；之後與 upstream 合併若 upstream 也新增事件，需再調整序號。

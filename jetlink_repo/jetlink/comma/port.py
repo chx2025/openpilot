@@ -130,6 +130,11 @@ ATTACHED = ('source', 'sink')
 # screen the same way (iPhone 18 Pro Max). Up to 7.5 W through the comma's boost converter is not
 # a load to put on it from the car. Do not lift this without a hardware reason it is safe
 PHONE_CHARGING_SEALED = True
+# dp: what a phone found charging from the comma is handed back with, one a cycle, RETRY_AFTER apart:
+# the PR_Swap back (jetlink-root.sh port sink), which a replica refused with EPERM and EAGAIN every
+# time on 2026-10-14 and left the phone charging; a USB PD hard reset (port reset); the voter held at
+# sink (port hold), the one role lever that does not ask the far end
+SEAL_STEPS = ('sink', 'reset', 'hold')
 
 
 def power_role() -> str | None:
@@ -237,8 +242,10 @@ class Port:
     self.charge_since = 0.0
     self.said_hot = False
     self.temp: float | None = None
-    # dp: a phone found charging from the comma has been handed the source role back this plug
-    self.seal_handed_back = False
+    # dp: how far the hand-back of a phone found charging from the comma has got this plug
+    # (SEAL_STEPS), and when the next step may run
+    self.seal_step = 0
+    self.seal_next = 0.0
 
   def update(self, now: float | None = None, configured: bool = False, charge: bool = False) -> None:
     """configured: a host had the gadget configured at the last cycle, so the
@@ -283,9 +290,9 @@ class Port:
         self._charge_the_phone(now)
     if self.charging and not configured and role == 'source':
       self._stop_charging(now)
-    if PHONE_CHARGING_SEALED and role == 'source' and data == 'ufp' and not self.seal_handed_back \
-       and now - self.roles_since >= SWAP_AFTER:
-      self._hand_back_sealed()
+    if PHONE_CHARGING_SEALED and role == 'source' and data == 'ufp' and self.seal_step < len(SEAL_STEPS) \
+       and now - self.roles_since >= SWAP_AFTER and now >= self.seal_next:
+      self._hand_back_sealed(now)
     if self.held:
       if role == 'sink':
         self.settled = False   # a host came back
@@ -318,7 +325,7 @@ class Port:
     self.plugged = False
     self.asks = 0            # the next plug is asked afresh
     self.charge_asked = self.charging = self.said_hot = False
-    self.seal_handed_back = False
+    self.seal_step, self.seal_next = 0, 0.0
     self.temp = None
     # the policy engine turns off only a device side it turned on itself, so
     # one turned on here, by this owner or one before it, is turned off here
@@ -338,18 +345,26 @@ class Port:
     self.next_start = now + RESTART_AFTER
     run_udc('start')
 
-  def _hand_back_sealed(self) -> None:
+  def _hand_back_sealed(self, now: float) -> None:
     """dp: the comma sources a host that is its far end, which only a swap makes: a phone
     charging from it. Charging is sealed (PHONE_CHARGING_SEALED), so the phone gets the source
-    role back, once a plug."""
-    self.seal_handed_back = True
+    role back, a step a cycle (SEAL_STEPS) until the comma is no longer the source: the PR_Swap
+    back first, then a USB PD hard reset, which returns both ends to the roles their attach gave
+    them, then the voter held at sink."""
+    step = SEAL_STEPS[self.seal_step]
+    self.seal_step += 1
+    self.seal_next = now + RETRY_AFTER
     self.charging = False
-    gadget.log.warning("jetlink: the comma is powering the phone, and phone charging is sealed; "
-                       "giving the phone the source role back")
-    if run_script('sink'):
-      gadget.log.warning("jetlink: the phone powers the comma again")
-    else:
-      gadget.log.warning("jetlink: the phone kept charging from the comma; unplug the cable")
+    gadget.log.warning("jetlink: the comma is powering the phone, and phone charging is sealed; %s (%d of %d)",
+                       {'sink': 'giving the phone the source role back', 'reset': 'resetting USB PD',
+                        'hold': 'holding the port at sink'}[step], self.seal_step, len(SEAL_STEPS))
+    if step == 'hold' and self.held:
+      return
+    ok = run_script(step)
+    if step == 'hold' and ok:
+      self.held = True   # let go by the usual release once the port is empty (RELEASE_AFTER)
+    if not ok and self.seal_step == len(SEAL_STEPS):
+      gadget.log.warning("jetlink: the phone still charges from the comma; unplug the cable now")
 
   def _charge_the_phone(self, now: float) -> None:
     """The phone powers the comma and hosts it over a USB PD contract: ask it

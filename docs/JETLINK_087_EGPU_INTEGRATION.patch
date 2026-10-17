@@ -1,0 +1,1622 @@
+--- a/docs/JETLINK_PORT_zh-TW.md
++++ b/docs/JETLINK_PORT_zh-TW.md
+@@ -1,6 +1,6 @@
+ # Jetlink 移植說明：zoompilot → openpilot-dp0111pre
+ 
+-> 來源：`zoompilot-develop__261008__7`（jetlink 套件 `jetlink_repo` v0.8.5，API 2）
++> 來源：`zoompilot-develop`（2026-10-15；jetlink 套件 `jetlink_repo` **v0.8.7，API 3**）。v12 由 0.8.5（API 2）更新而來，所有 dp 修改（D10–D17，含 **iPhone 供電封印**）全數保留，0.8.7 帶來的架構變化見 D18–D21
+ > 目標：`openpilot-dp0111pre`（dragonpilot，upstream base `c0ab3550`，tinygrad pin `eecd4706`）。v11 已改套到 2026-10-14 的 dp0111pre 新分支（含 Toyota 自動煞車維持、TDX 改版、紅綠燈 HUD）
+ > 參考：`Zoompilot-modeld.zip`（`openpilot-dpjetlink/selfdrive/modeld`）
+ > 日期：2026-10-09
+@@ -25,7 +25,8 @@
+ | `jetlink_repo/LICENSE`、`README.md`、`pyproject.toml` | 上游授權（MIT）與版本 |
+ | `jetlink` → `jetlink_repo/jetlink` | 相對 symlink，讓 `import jetlink` 從樹根可用（`launch_chffrplus.sh` 每次開機也會重建） |
+ | `dragonpilot/jetlink_adapter/__init__.py` | **轉接層**：實作 `jetlink.openpilot.interface.Openpilot`，並提供所有 hook（`should_run/status/reason/prepare/attach/in_control/request_shutdown/shutdown_pending`）。頂層只 import stdlib（jetlinkd 常駐約 10 MB） |
+-| `dragonpilot/jetlink_adapter/SConscript` | 建置期編譯 comma 端 warp JIT：`dragonpilot/jetlink_adapter/models/warp_<cam>_512x256_tinygrad.pkl`（tici 1928x1208、mici 1344x760 兩種都建） |
++| `dragonpilot/jetlink_adapter/SConscript` | 建置期編譯 comma 端 warp JIT：`dragonpilot/jetlink_adapter/models/driving_warp_<cam>_512x256_tinygrad.pkl`（tici 1928x1208、mici 1344x760 兩種都建） |
++| `dragonpilot/jetlink_adapter/build_warp.py` | （v12）以 openpilot `driving_warp_*_tinygrad.pkl` 的格式（`{'run': TinyJit, 'input_specs'}`，輸入 `M_inv`(2,3,3)＋`input_frame`(2, Y+UV bytes)，輸出 (2,6,128,256)）編譯 warp，graph 用 dp 自己的 `make_frame_prepare`；jetlink 0.8.7 已不再自己建 warp |
+ | `dragonpilot/selfdrive/selfdrived/accelerator_events.py` | 行車事件：大模型就緒提示、切換 no-entry、啟用提示、斷線警告；切換時的 settling |
+ | `dragonpilot/selfdrive/ui/jetlink_ui.py` | UI 共用：模式讀取、狀態文字/顏色、進度、failover 說明、圖示選擇 |
+ | `dragonpilot/selfdrive/ui/layouts/settings/jetlink.py` | tici 設定頁「Jetlink」 |
+@@ -62,11 +63,11 @@
+ 
+ ### 3.1 modeld（`selfdrive/modeld/modeld.py`）
+ 
+-1. `ModelState` 新增 `lat_delay`、`frame_drop_ratio`、`in_control`（joining model 每幀寫入）。
++1. `ModelState` 新增 `lat_delay`、`frame_drop_ratio`、`in_control`（joining model 每幀寫入小模型）。
+ 2. `run()` 簽名改為 `run(bufs, transforms, inputs, after_enqueue=None, *, prepare_only=False)`：jetlink 的 joining model 以第 4 個位置參數傳 `after_enqueue`；dp 的 `prepare_only` 改成 keyword。
+ 3. `config_realtime_process(7, 54)` 之前先 `jetlink_adapter.prepare()`：tinygrad 的 device 執行緒必須在變成 SCHED_FIFO 前建立，否則會繼承 core 7 / FIFO 54 搶 frame loop。
+ 4. 小模型載入後 `jetlink_adapter.attach()`；有 USB GPU（chestnut）時完全不接 jetlink。
+-5. 每幀：`inputs['action_t']`（大模型需要；dp 小模型忽略）、`model.in_control`、`model.frame_drop_ratio`；`handovers` 變化時重置掉幀濾波器（切換的停頓不算 lag）。
++5. 每幀：`inputs['action_t']`（大模型需要；dp 小模型忽略）、`model.frame_drop_ratio`；`handovers` 變化時重置掉幀濾波器（切換的停頓不算 lag）。**v12（API 3）**：modeld 不再寫 `model.in_control`，改為建立 SubMaster 後呼叫一次 `jetlink_adapter.use_submaster(sm)`；joining model 在每幀 `run()` 開頭自己問 `Adapter.in_control()`，轉接層讀的就是 modeld 剛 `update()` 過的同一個 SubMaster（判定規則 D5/D15 不變）。
+ 6. **掉幀路徑（dp 分歧）**：dp 在掉幀時只做 `prepare_only`（推進佇列、不發布）。小模型駕駛時維持原行為；**大模型駕駛時照常推論每一幀**（歷史在外部裝置，與 upstream 新版 modeld 相同）。
+ 7. `modelExt.acceleratorState` / `modelExt.bigModel` 發布（zoompilot 為 `modelDataV2SP.acceleratorState` / `modelV2.big`）。
+ 
+@@ -93,9 +94,9 @@
+ 3. **只能熄火切換模式**：gadget 只在停車時重組；設定頁的 Off/USB/iOS 在行車中變灰。
+ 4. **sudo**：jetlink 以 `sudo -n bash jetlink_repo/scripts/comma/jetlink-root.sh` 執行 root 動作，AGNOS 的 comma 使用者需免密碼 sudo（原廠即是）。
+ 5. **ALKA 對應 MADS（v4：與 zoompilot 一對一）**：zoompilot 的「控制中」＝ openpilot 啟用或 MADS 啟用（含暫停：檔位、車門、安全帶、煞車保持、駐車煞車、原廠 LKAS 關），MADS 由 ACC 主開關關閉（或 MADS 按鈕）釋放。dp 的 `lkasOn` 在所有品牌都追蹤 ACC 主開關（opendbc 各 carstate 的 `lkas_on = cruiseState.available`，panda `toyota.h` 亦同），所以一對一對應為：openpilot 啟用、ALKA 轉向中（`latActive`/`alkaActive`），或「ALKA 開啟且 `lkasOn`」（ALKA 暫停也算）。關掉 ACC 主開關即開放切換，與 zoompilot 相同。ALKA 沒有獨立按鈕，主開關是唯一關閉方式（zoompilot 另可按 MADS 按鈕）。`controlsd` 在大模型換上後 1.2 秒內不讓 ALKA 由關轉開，對應 zoompilot 讓 MADS 在 bigModelLoading 期間停在暫停。訊號過期一律視為控制中。
+-6. **warp 是建置產物**：`scons` 會在 comma 上編好 warp pickle；沒有 warp 時 Jetlink 開啟會出現離線警示「Jetlink unavailable: no warp built for this camera」，行車只用小模型。
++6. **warp 是建置產物**：`scons` 會在 comma 上編好 warp pickle（v12 起檔名為 `driving_warp_…`，格式同 openpilot；舊版 `warp_…` 檔不會被讀取）；沒有 warp 時 Jetlink 開啟會出現離線警示「Jetlink unavailable: no warp built for this camera」，行車只用小模型。
+ 7. **大模型選單（v2 新增，從手機取得）**：預設「跟隨外部裝置」——手機（或 Jetson/Mac）App 上選的、目前載入的模型就是行車用的大模型；外部裝置每次 hello 都回報 `loaded`（載入中）與 `cached_models`（已建置）的 sha256，jetlinkd 記錄在 `/dev/shm/jetlink/server.json`。comma 端「更新模型清單」會抓與 App 相同的 sunnypilot chestnut 模型庫（實測 16 個大模型）並解析每個模型的 sha256，用來替手機上的模型命名；也可在 comma 上指定某個模型（外部裝置已建置就直接載入，沒有才由 comma 停車時下載上傳）。跟隨模式下 comma 不會下載任何模型。
+-8. **外部裝置版本**：comma 端是 jetlink **0.8.5（API 2）**。Jetson/Linux 的安裝腳本取 jetlink `main`，若協定版本跳號會變成「只有小模型」；請安裝與 0.8.5 相容的 jetlink-server（Mac/iPhone App 同理）。
++8. **外部裝置版本**：comma 端是 jetlink **0.8.7（API 3）**。0.8.5→0.8.7 線路協定未變（仍為 protocol 3），但 zoompilot 要求 comma 與 App 一起更新；請把 Jetson 的 jetlink-server、Mac App、iPhone App 都更新到 0.8.7。
+ 9. **網路**：provisioning 需要 comma 熄火時有網路（下載 ONNX，約 0.8–1.75 GB，存在 `/data/media/0/models/jetlink/`）。
+ 
+ ## 5. 與 zoompilot 的刻意差異（Intentional divergences）
+@@ -117,12 +118,18 @@
+ | D14 | jetlink 套件連線層 | 原版 | `lending.SERVER_FIELDS` 多記 `loaded`/`cached_models`；`link.open_link` 跟隨外部裝置載入的模型；`stand_in` 對無法得知大小的已載入模型以 0 詢問（伺服器以 sha 回答）；`provision` 在外部裝置已有模型時不下載、跟隨模式停車時不 provisioning；provisioning 先 hello 再決定：外部裝置已載入模型就只確認該模型（不換模型、不需網路），有模型但未載入就交給它自己選，完全沒有模型才給預設（v7，修正開機後第一次 provisioning 把手機模型換掉） | 從手機取得模型選單 |
+ | D15 | 切換時機（ALKA） | MADS 開著（含暫停）一律算控制中，只有關 ACC 主開關才能切換 | 同左，但排檔在 P／N／R 時 ALKA 暫停、無人控制，允許切換（`jetlink_adapter.SWAP_WHILE_PARKED = True`；controlsd 在切換後 1.2 秒內不讓 ALKA 啟動，打回 D 檔也不會在驗證期接手）。設為 False 即回到與 zoompilot 完全相同 | 2026-10-10 行車紀錄：大模型就緒後停車排 N／R／P 20 秒、無任何控制，卻因主開關開著無法切換 |
+ | D16 | 等待切換時的連線檢查 | ping 失敗即重開並計入加倍退避（1、1、1、5、10、20、40、60 秒） | ping 失敗即重開，但不計入退避：連續 3 次以內 1 秒後重開，之後 5 秒（`joining.KEEPALIVE_RETRY_DELAY`） | 2026-10-10 行車紀錄：Mac App 對等待中的連線 ping 不回（only 0 of 32 bytes），每次新連線 hello 正常；加倍退避讓就緒時間只剩約 1/5 |
+-| D17 | iPhone 由 comma 供電 | 參數 `JetlinkChargePhone` 開啟時，comma 以 PR_Swap 向 iPhone 要求供電方角色、最多輸出 7.5 W | **永久封印**：① `jetlink/comma/port.py` `PHONE_CHARGING_SEALED = True`，永不要求供電方角色，且發現 comma 正在對手機供電（source＋device）時每次插線交還一次；② `jetlink-root.sh port source` 直接拒絕；③ 轉接層 `KEYS.charge_phone = None`，無任何參數能開啟；④ 設定頁開關改為「已封印」說明並清除舊值 | 使用者回報 C3 因此主板燒毀；tici 復刻機三鏡頭失效、畫面凍結（2026-10-14） |
++| D17 | iPhone 由 comma 供電 | 參數 `JetlinkChargePhone` 開啟時，comma 以 PR_Swap 向 iPhone 要求供電方角色、最多輸出 7.5 W | **永久封印**：① `jetlink/comma/port.py` `PHONE_CHARGING_SEALED = True`，永不要求供電方角色，且發現 comma 正在對手機供電（source＋device）時逐步交還：先 PR_Swap 交還（`port sink`），被拒再做 USB PD 硬重置（`port reset`），仍不行就把供電角色鎖在受電（`port hold`）——10/14 復刻機上 `port sink` 每次都被拒（EPERM／EAGAIN），手機一直從 comma 取電（v11.1）；② `jetlink-root.sh port source` 直接拒絕；③ 轉接層 `KEYS.charge_phone = None`，無任何參數能開啟；④ 設定頁開關改為「已封印」說明並清除舊值 | 使用者回報 C3 因此主板燒毀；tici 復刻機三鏡頭失效、畫面凍結（2026-10-14） |
++| D18 | warp 的來源（0.8.7） | jetlink 讀 openpilot modeld 自己的 `models/driving_warp_{w}x{h}_tinygrad.pkl`（tinygrad `examples/openpilot/compile_warp.py --layout yuv420 --frames 2`） | dp modeld 是 `warp_enqueue` 融合 JIT，沒有這個檔；`build_warp.py` 用 dp 的 `make_frame_prepare` 編出**完全相同格式**的 pickle（輸入名 `['M_inv','input_frame']`、`input_frame` 只含 Y+UV 平面 `stride*(y_height+uv_height)`，與 openpilot 相同），存到 `dragonpilot/jetlink_adapter/models/driving_warp_<cam>_512x256_tinygrad.pkl`。0.8.5 的 `compile_warp`／`BuildSide`／`make_warp` 已移除；D10 的 `_graph_alone`／`no_sync` 相容碼隨之不需要，只保留「無 compile pool 時略過」 | dp 沒有獨立 driving warp；dp 的 tinygrad 版本無 `examples/openpilot` |
++| D19 | in_control 的取得（API 3） | 轉接層自建 SubMaster，每幀 `update(0)` 後判定 | 轉接層讀 modeld 的 SubMaster（`use_submaster`），modeld 沒交出時才自建；判定規則仍是 D5／D15 | 同樣的訊息、只輪詢一次，與 v11（modeld 寫入）時序完全相同 |
++| D20 | 小模型重置（0.8.7 `prepare_reset`） | 讀 `state_pairs`／`packed_input`（upstream #38916 後的 ModelState）或 modeld_v2 adapter | dp 的 ModelState 沒有 `state_pairs` 時，沿用 0.8.5 的作法：清 GPU 佇列（`input_queues` 非 NPY）、`npy` 歸零、`prev_desire` 歸零 | 否則 0.8.7 會在 `state_pairs` 拋錯，連線永遠準備不起來 |
++| D21 | 模型釘選／下架（0.8.7） | model manager 抓 extra 清單的 `pointers` 釘選（`keep_pins`）；MDV2 Preview 下架由 App 切到 Cinque Terre V3 | 轉接層內建同一筆釘選（`_PINNED_POINTERS`：Mountain Dew Model `6f4c0faf` → 重訓版 `87fe86ca…`，792 MB），每次讀指標都覆蓋上去；「重新整理模型清單」時再套用線上清單的釘選。comma 上選的模型若已從清單下架，清除選擇、改回跟隨外部裝置（App 0.8.7 會切到 Cinque Terre V3） | dp 無 model manager |
+ | D13 | 參考 modeld 的手機前車融合 | — | **未移植** `apply_phone_leads`、`LeadPriorityGuard`、`jetlink.vision`、`jetlink_context` | 這些不在 zoompilot 原始碼中（屬自製手機前車方案），無法依原始碼移植 |
+ 
+ ## 6. 驗證
+ 
+-離線（雲端容器，dp 釘選的 tinygrad `eecd4706`，CPU 後端）50 項全數通過；另以實網路抓取模型庫成功（16 個大模型，並解析出 Lebowski 的 sha256 與 1675 MB）：
++**v12（jetlink 0.8.7）**：離線測試 92 項全數通過；另以 jetlink 0.8.7 原廠測試套件（992 項）跑 dp 版套件：973 通過，19 項失敗全部是刻意差異——iPhone 供電封印（`test_comma_port` 充電類 13 項、`test_comma_root` 3 項）、跟隨模式多回報 `loaded/cached_models`（2 項）、`stand_in` 以 0 詢問（1 項）——以及容器未附 CHANGELOG（1 項）。新增項目：API 3 = 3、版本 0.8.7；`build_warp` 產出的 pickle 通過 0.8.7 `Warps.load` 全部檢查、兩路輸出與 dp `frame_prepare` 逐位元相同（max diff 0）、舊格式 pickle 被拒；joining model 每幀先問 `in_control()`；`Adapter.in_control()` 讀 modeld SubMaster、過期/例外一律回 True；`prepare_reset` 清空 dp 佇列；釘選與下架處理。
++
++（以下為 v1–v11 的驗證紀錄）離線（雲端容器，dp 釘選的 tinygrad `eecd4706`，CPU 後端）50 項全數通過；另以實網路抓取模型庫成功（16 個大模型，並解析出 Lebowski 的 sha256 與 1675 MB）：
+ 
+ - 轉接層對 `jetlink.openpilot.interface` 的 `StatusSide/WorkerSide/ModelSide/BuildSide/Openpilot` conformance：0 問題；API 版本 2 = 2。
+ - hook：link off 時 `should_run=False`、`prepare=False`、`attach=None`；link=usb 時 `enabled=True`，`reason()` 正確回報「no warp built for this camera」；預設模型名稱 Cinque Terre V3 Model。
+@@ -136,7 +143,7 @@
+ ## 7. 安裝與測試步驟
+ 
+ 1. 覆蓋檔案（保留路徑），確認 `jetlink` symlink 存在。
+-2. 重開機讓 scons 建置（會看到 `[JETLINK WARP] .../warp_1928x1208_512x256_tinygrad.pkl`）。
++2. 重開機讓 scons 建置（會看到 `[JETLINK WARP] .../driving_warp_1928x1208_512x256_tinygrad.pkl`）。
+ 3. 外部裝置依 jetlink 文件安裝（Jetson：`docs/jetson.md`；Mac App；iPhone TestFlight）。
+ 4. 熄火狀態：設定 → Jetlink → USB（iPhone 選 iOS）。ADB 會自動關閉。
+ 5. 看側欄圖示：閃爍＝下載/建置中；綠＝就緒；橘＝看離線警示。
+@@ -146,7 +153,8 @@
+ 
+ ## 8. 已知風險
+ 
+-- **QCOM 路徑未實機驗證**：若 warp 在 comma 上失敗，log 有「jetlink load failed」，modeld 安全地維持小模型。
++- **QCOM 路徑未實機驗證**：若 warp 在 comma 上失敗，log 有「jetlink load failed」，modeld 安全地維持小模型。v12 的 warp 每幀多一次 CPU 複製（兩個相機 buffer 的 Y+UV 平面 memmove 進 `input_frame`，與 openpilot modeld 相同作法），0.8.5 時是直接讀相機 buffer。
++- **iPhone 由 comma 供電維持封印**（D17）：0.8.7 的 `port.py`／`jetlink-root.sh` 沒有改動，v11.1 的封印與逐步交還原封保留。
+ - 跟隨模式依賴外部裝置回報的 `loaded`；手機若完全沒有任何模型，才回到預設模型（Cinque Terre V3），由 comma 停車時下載上傳。手機有模型但當下未載入（切換中）時 comma 不介入，下一輪再看。
+ - 大模型幀不套 dp 車道偏移（`dp_lat_offset_cm`）；切回小模型時偏移恢復，橫向位置可能在切換瞬間略有差異。
+ - `log.capnp` 的 EventName 新增序號 @101–@104（新分支的 @100 是 `autoBrakeHold`）；之後與 upstream 合併若 upstream 也新增事件，需再調整序號。
+--- a/dragonpilot/jetlink_adapter/SConscript
++++ b/dragonpilot/jetlink_adapter/SConscript
+@@ -1,10 +1,12 @@
+ # The comma-side warp JIT jetlink's large model runs, as a build product.
+ #
+-# Ported from zoompilot's openpilot/sunnypilot/jetlink_adapter/SConscript.
+-# jetlink runs `warp` on the comma and `run_policy` on the far end. dp's modeld
+-# fuses the warp into its own queueing warp_enqueue JIT, so a standalone warp is
+-# compiled here like dm_warp_*.pkl in selfdrive/modeld/SConscript. Nothing
+-# compiles one at runtime; a device without a warp runs the small model.
++# Ported from zoompilot. jetlink 0.8.7 runs openpilot's own driving warp
++# pickle (models/driving_warp_{w}x{h}_tinygrad.pkl: {'run', 'input_specs'},
++# M_inv + input_frame, two frames). dp's modeld fuses its warp into the queueing
++# warp_enqueue JIT and has no such pickle, so build_warp.py compiles one in that
++# format from dp's make_frame_prepare, like dm_warp_*.pkl in
++# selfdrive/modeld/SConscript. Nothing compiles one at runtime; a device without
++# a warp runs the small model.
+ import glob
+ import os
+ 
+@@ -14,17 +16,14 @@
+ 
+ basedir = env.Dir("#").abspath
+ jetlink_repo = env.Dir("#jetlink_repo").abspath
+-capture = os.path.join(jetlink_repo, 'jetlink', 'openpilot', 'warp.py')
++loader = os.path.join(jetlink_repo, 'jetlink', 'openpilot', 'warp.py')
+ 
+ # comma GPU only (dp names the comma's arch larch64): the pickle is captured
+ # against Device.DEFAULT and only modeld on the device loads one. And only with
+ # jetlink present: a tree without it builds nothing here
+-if arch == 'larch64' and os.path.isfile(capture):
++if arch == 'larch64' and os.path.isfile(loader):
+   from openpilot.common.transformations.model import MEDMODEL_INPUT_SIZE
+   from dragonpilot import jetlink_adapter
+-
+-  # jetlink on the build's path by its checkout, last, so nothing in it shadows the tree's own modules
+-  lenv = env.Clone(ENV={**env['ENV'], 'PYTHONPATH': os.pathsep.join([env['ENV']['PYTHONPATH'], jetlink_repo])})
+ 
+   model_w, model_h = MEDMODEL_INPUT_SIZE
+ 
+@@ -32,8 +31,8 @@
+                                                recursive=True, root_dir=basedir)
+                     if 'pycache' not in x and os.path.isfile(os.path.join(basedir, x))]
+   script_files = [
+-    File(capture),                                         # the capture, and call_warp, which names the inputs
+-    File("#dragonpilot/jetlink_adapter/__init__.py"),      # make_warp, and where the warp goes
++    File("#dragonpilot/jetlink_adapter/build_warp.py"),    # the capture, in openpilot's driving warp format
++    File(loader),                                          # Warps.load, which checks that format
+     File("#selfdrive/modeld/compile_modeld.py"),           # dp's frame_prepare graph
+     File("#system/camerad/cameras/nv12_info.py"),          # the frame layout the graph indexes
+   ]
+@@ -46,6 +45,6 @@
+     # every device builds this, link on or not, so a failed compile must not fail
+     # the build. It leaves no pickle, modeld stays on the small model and the
+     # offroad alert says why ("no warp built for this camera")
+-    cmd = (f'-python3 -m jetlink.openpilot.warp --adapter {jetlink_adapter.__name__} '
++    cmd = (f'-python3 -m dragonpilot.jetlink_adapter.build_warp '
+            f'--camera {cam_w}x{cam_h} --model {model_w}x{model_h} --output {pkl}')
+-    lenv.Command(pkl, tinygrad_files + script_files, Action(cmd, "  [JETLINK WARP] $TARGET"))
++    env.Command(pkl, tinygrad_files + script_files, Action(cmd, "  [JETLINK WARP] $TARGET"))
+--- a/dragonpilot/jetlink_adapter/__init__.py
++++ b/dragonpilot/jetlink_adapter/__init__.py
+@@ -26,8 +26,11 @@
+     sysfs for the same USB ids zoompilot lists.
+   - model root: dp's Paths has no model_root(); /data/media/0/models on AGNOS.
+   - modeld is dp's two-JIT modeld (warp_enqueue + run_policy), which has no
+-    standalone stateless warp: make_warp() builds zoompilot's stateless warp
+-    graph from dp's own make_frame_prepare.
++    standalone driving_warp_*_tinygrad.pkl as openpilot's modeld has: build_warp.py
++    compiles one in that exact format ({'run', 'input_specs'}, M_inv + input_frame,
++    two frames) from dp's own make_frame_prepare, for jetlink 0.8.7's Warp.
++  - in_control() reads modeld's own SubMaster (use_submaster) where zoompilot's
++    adapter keeps a SubMaster of its own: the same messages, polled once.
+   - in_control(): MADS does not exist; dp's ALKA takes its place, matched to
+     MADS one for one: dp's lkasOn is ACC main on every brand (opendbc carstate,
+     safety toyota.h), as MADS is enabled by main and disabled by main off.
+@@ -42,8 +45,11 @@
+ from pathlib import Path
+ 
+ # the version of jetlink.openpilot's API this adapter is written to; any other
+-# is treated as jetlink being absent, with the reason as the offroad alert
+-API = 2
++# is treated as jetlink being absent, with the reason as the offroad alert.
++# 3 (jetlink 0.8.7): the joining model asks Adapter.in_control() before every
++# frame; modeld no longer writes it. The warp is a driving-warp pickle dict
++# ({'run', 'input_specs'}), built by build_warp.py, not by jetlink
++API = 3
+ 
+ # the gadget owner, as manager names the process and selfdrived lists it
+ OWNER = 'jetlinkd'
+@@ -69,9 +75,18 @@
+                                  'short_name': 'CTV3', 'index': 0, 'is_big': True,
+                                  'minimum_selector_version': str(CATALOG_SELECTOR)}]}
+ 
++# jetlink 0.8.7: the pins zoompilot's extra list (jetlink_repo/catalog/extra_big_models.json)
++# carries, {ref: {'oid', 'size'}}: the ONNX jetlink runs for that commit whatever a lookup said.
++# Mountain Dew Model (6f4c0faf) runs the retrained model comma shipped, not the earlier one. dp has
++# no model manager to fetch them on its own, so they are written over the kept pointers on every
++# read (get) as well as by refresh_catalog, which takes the live list's
++_PINNED_POINTERS = {
++  '6f4c0faf1f85132734e94aa39c67143f823b9324': {
++    'oid': '87fe86ca0813c099efddf9173ba503be2e40ea4c5362c36812a44141f4cb07d4', 'size': 792430559},
++}
++
+ # comma's chestnut (USB GPU), running and in its ROM. The comma's USB-C port
+ # hosts one and is never held as a jetlink device beside it
+-# dp - egpu: + (0xADD1, 0x0002), the UT3G V1.6 Dual adapter
+ CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0xADD1, 0x0002), (0x174C, 0x2464), (0x174C, 0x2463)})
+ 
+ # where the build puts the warp for each camera (SConscript) and modeld loads
+@@ -106,8 +121,10 @@
+ 
+ 
+ def warp_path(cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
+-  """The warp for one geometry: the build's target and what modeld opens."""
+-  return WARP_DIR / f'warp_{cam_w}x{cam_h}_{model_w}x{model_h}_tinygrad.pkl'
++  """The warp for one geometry: the build's target and what modeld opens. jetlink
++  0.8.7's format (openpilot's driving warp dict, build_warp.py) under a new name,
++  so a 0.8.5-format pickle (a bare TinyJit) left by an older build is never opened."""
++  return WARP_DIR / f'driving_warp_{cam_w}x{cam_h}_{model_w}x{model_h}_tinygrad.pkl'
+ 
+ 
+ def chestnut_present() -> bool:
+@@ -191,6 +208,8 @@
+       value = None
+     if key == KEYS.catalog and not (isinstance(value, dict) and value.get('bundles')):
+       return _DEFAULT_CATALOG
++    if key == KEYS.pointers:
++      return {**(value if isinstance(value, dict) else {}), **_PINNED_POINTERS}
+     return value
+ 
+   def follow_far_end(self) -> bool:
+@@ -246,34 +265,23 @@
+   def event(self, name: str, **fields) -> None:
+     self.log.event(name, **fields)
+ 
+-  # -- the build --------------------------------------------------------------
+-
+-  def make_warp(self, cam_w: int, cam_h: int, model_w: int, model_h: int):
+-    """The stateless warp jetlink runs on the comma: both camera frames warped
+-    and stacked, (2, 6, H/2, W/2) uint8, under the names call_warp passes.
+-
+-    dp: dp's compile_modeld.make_warp() is the queueing warp_enqueue of its
+-    two-JIT modeld, so the graph is built here from dp's make_frame_prepare,
+-    as zoompilot's compile_modeld.make_warp() does it. compile_modeld first:
+-    it patches tinygrad's firmware fetch as it loads."""
+-    from openpilot.selfdrive.modeld.compile_modeld import NV12Frame, make_frame_prepare
+-    from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
+-    from tinygrad.device import Device
+-    from tinygrad.tensor import Tensor
+-    nv12 = NV12Frame(cam_w, cam_h, *get_nv12_info(cam_w, cam_h))
+-    frame_prepare = make_frame_prepare(nv12, model_w, model_h)
+-
+-    def warp(tfm, big_tfm, frame, big_frame):
+-      tfm = tfm.to(Device.DEFAULT)
+-      big_tfm = big_tfm.to(Device.DEFAULT)
+-      frame = frame.to(Device.DEFAULT)
+-      big_frame = big_frame.to(Device.DEFAULT)
+-      Tensor.realize(tfm, big_tfm, frame, big_frame)
+-      warped_frame = frame_prepare(frame, tfm).unsqueeze(0)
+-      warped_big_frame = frame_prepare(big_frame, big_tfm).unsqueeze(0)
+-      return Tensor.cat(warped_frame, warped_big_frame)
+-
+-    return warp, nv12.size
++  # -- control ----------------------------------------------------------------
++
++  def in_control(self) -> bool:
++    """Is openpilot or ALKA in control? jetlink API 3: the joining model asks on
++    modeld's frame thread before every frame and swaps the large model in only
++    while not. True when it cannot tell; never raises (module in_control is
++    guarded). dp: off modeld's SubMaster (use_submaster), updated just before
++    run(); a SubMaster of the adapter's when modeld has not handed one over."""
++    sm = _submaster
++    if sm is None:
++      try:
++        sm = _own_submaster()
++        sm.update(0)
++      except Exception as e:
++        _log_failure("in_control(): no SubMaster", e)
++        return True
++    return in_control(sm)
+ 
+ 
+ # -- dp: the model menu ---------------------------------------------------------
+@@ -314,7 +322,7 @@
+   catalog = params.get(KEYS.catalog)
+   bundles = catalog.get('bundles') if isinstance(catalog, dict) and catalog.get('bundles') else _DEFAULT_CATALOG['bundles']
+   pointers = params.get(KEYS.pointers)
+-  pointers = pointers if isinstance(pointers, dict) else {}
++  pointers = {**(pointers if isinstance(pointers, dict) else {}), **_PINNED_POINTERS}
+   loaded, built = far_end_models()
+   root = _model_root() / 'jetlink'
+   rows = []
+@@ -361,14 +369,26 @@
+   from openpilot.common.params import Params
+   params = params or Params()
+   merged = fetch_catalogs()
++  # jetlink 0.8.7: zoompilot's extra list pins some commits to the ONNX jetlink runs for them
++  # (catalog.pinned_pointers), written over whatever a lookup found, as models.keep_pins does
++  pins = {**_PINNED_POINTERS, **(merged.pop('pointers', None) or {})}
+   bundles = [b for b in merged.get('bundles', []) if isinstance(b, dict) and b.get('is_big')
+              and str(b.get('minimum_selector_version')) == str(REQUIRED_SELECTOR_VERSION)]
+   if not bundles:
+     raise RuntimeError("the catalog lists no big model")
+   params.put(KEYS.catalog, {'bundles': bundles})
++  # jetlink 0.8.7: a model the catalog withdrew (Mountain Dew V2 Preview) is no longer a pick; the
++  # comma follows the far end again, whose 0.8.7 app switches it to Cinque Terre V3
++  slot = params.get(KEYS.big_model)
++  if not follows_far_end(slot) and slot['ref'] not in {b['ref'] for b in bundles}:
++    params.remove(KEYS.big_model)
++    _log_failure(f"the picked model {slot['ref'][:10]} is no longer listed; following the far end", None)
++  pointers = params.get(KEYS.pointers)
++  pointers = dict(pointers) if isinstance(pointers, dict) else {}
++  if pins:
++    pointers.update(pins)
++    params.put(KEYS.pointers, pointers, block=True)
+   if resolve:
+-    pointers = params.get(KEYS.pointers)
+-    pointers = dict(pointers) if isinstance(pointers, dict) else {}
+     for b in bundles:
+       if b['ref'] in pointers:
+         continue
+@@ -506,10 +526,8 @@
+ @_guarded(False)
+ def should_run(started: bool, params, CP) -> bool:
+   """manager's rule for jetlinkd: the link is on and no chestnut is fitted.
+-  jetlinkd runs onroad too: a gadget whose owner exits leaves the bus.
+-  dp - egpu: and not on a comma that uses an eGPU (big model switch on, an eGPU seen on USB once). jetlink's
+-  own test (chestnut_fitted) needs the eGPU enumerated, and an eGPU that is slow to enumerate, or a UT3G
+-  that powers the port, gets the port held / role-swapped by jetlink's port logic first, so it never shows."""
++  jetlinkd runs onroad too: a gadget whose owner exits leaves the bus."""
++  # Reserve the USB port for an enabled eGPU even while it is enumerating.
+   if params.get_bool("dp_egpu_enabled") and params.get_bool("dp_egpu_seen"):
+     return False
+   return _api().enabled()
+@@ -562,6 +580,25 @@
+ def parked(car_state) -> bool:
+   """The gear lets the large model swap in with ALKA on and ACC main on (SWAP_WHILE_PARKED)."""
+   return SWAP_WHILE_PARKED and str(car_state.gearShifter) in PARKED_GEARS
++
++
++_submaster = None
++_own = None
++
++
++def use_submaster(sm) -> None:
++  """modeld, once: the SubMaster it updates before every frame, which subscribes
++  to IN_CONTROL. Adapter.in_control() reads it."""
++  global _submaster
++  _submaster = sm
++
++
++def _own_submaster():
++  global _own
++  if _own is None:
++    from cereal import messaging
++    _own = messaging.SubMaster(list(IN_CONTROL))
++  return _own
+ 
+ 
+ @_guarded(True)
+--- /dev/null
++++ b/dragonpilot/jetlink_adapter/build_warp.py
+@@ -0,0 +1,101 @@
++#!/usr/bin/env python3
++"""
++The comma-side warp jetlink 0.8.7 runs, as openpilot's modeld pickles its own.
++
++dp: jetlink 0.8.7 no longer builds a warp. It loads openpilot's
++models/driving_warp_{w}x{h}_tinygrad.pkl, a dict {'run': TinyJit,
++'input_specs': {name: (shape, dtype, device)}} whose JIT takes both camera
++frames as one (2, frame bytes) uint8 `input_frame` and their transforms as one
++(2, 3, 3) float32 `M_inv`, and makes the (2, 6, H/2, W/2) uint8 frame the link
++sends (jetlink.openpilot.warp.Warps.load checks every one of those).
++dp0111pre's modeld fuses its warp into the queueing warp_enqueue JIT and has no
++such pickle, so this compiles one in exactly that format from dp's own
++make_frame_prepare, the graph warp_enqueue runs: what jetlink warps is what dp's
++small model would have warped.
++
++Run by dragonpilot/jetlink_adapter/SConscript on the comma (larch64):
++  python3 -m dragonpilot.jetlink_adapter.build_warp --camera 1928x1208 --model 512x256 --output PATH
++"""
++import argparse
++import os
++import pickle
++import sys
++from pathlib import Path
++
++
++def size(text: str) -> tuple[int, int]:
++  w, sep, h = text.lower().partition('x')
++  if not sep:
++    raise argparse.ArgumentTypeError(f"expected WxH, not {text!r}")
++  return int(w), int(h)
++
++
++def frame_bytes(cam_w: int, cam_h: int) -> int:
++  """What the warp reads of a camera buffer: the Y and UV planes, as openpilot's
++  SConscript sizes its driving warp (stride * (y_height + uv_height)), short of
++  the VisionIPC buffer's padded size. jetlink's Warp memmoves this much a frame."""
++  from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
++  stride, y_height, uv_height, _ = get_nv12_info(cam_w, cam_h)
++  return stride * (y_height + uv_height)
++
++
++def compile_warp(cam_w: int, cam_h: int, model_w: int, model_h: int, runs: int = 3) -> dict:
++  # compile_modeld first: it patches tinygrad's firmware fetch as it loads
++  from openpilot.selfdrive.modeld.compile_modeld import NV12Frame, make_frame_prepare
++  from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
++  import numpy as np
++  from tinygrad.device import Device
++  from tinygrad.engine.jit import TinyJit
++  from tinygrad.tensor import Tensor
++
++  stride, y_height, uv_height, _ = get_nv12_info(cam_w, cam_h)
++  size = frame_bytes(cam_w, cam_h)
++  frame_prepare = make_frame_prepare(NV12Frame(cam_w, cam_h, stride, y_height, uv_height, size), model_w, model_h)
++
++  specs = {'input_frame': ((2, size), np.dtype(np.uint8).str, Device.DEFAULT),
++           'M_inv': ((2, 3, 3), np.dtype(np.float32).str, Device.DEFAULT)}
++
++  def run(input_frame, M_inv):
++    M_inv = M_inv.to(Device.DEFAULT).realize()
++    return Tensor.stack(*(frame_prepare(input_frame[i], M_inv[i]) for i in range(2)))
++
++  jit = TinyJit(run, prune=True)
++  # one set of inputs: TinyJit captures against the buffers it is first handed, on
++  # the second call; a pickle taken earlier is an empty jit that computes nothing.
++  # Random, so nothing constant-folds
++  rng = np.random.default_rng(42)
++  frames = Tensor(rng.integers(0, 256, (2, size), dtype=np.uint8), device=Device.DEFAULT).realize()
++  tfm = Tensor(np.zeros((2, 3, 3), dtype=np.float32), device=Device.DEFAULT).realize()
++  for _ in range(max(runs, 3)):
++    tfm.assign(Tensor((rng.standard_normal((2, 3, 3)) * 8).astype(np.float32), device=Device.DEFAULT)).realize()
++    jit(input_frame=frames, M_inv=tfm).realize()
++  Device[Device.DEFAULT].synchronize()
++
++  made = tuple(jit.captured.ret.shape)
++  if made != (2, 6, model_h // 2, model_w // 2):
++    raise RuntimeError(f"the warp makes {made}, not a {model_w}x{model_h} model's input")
++  return {'metadata': {'builder': 'dragonpilot.jetlink_adapter.build_warp'}, 'run': jit, 'input_specs': specs}
++
++
++def main(argv=None) -> int:
++  p = argparse.ArgumentParser(prog='python3 -m dragonpilot.jetlink_adapter.build_warp', description=__doc__.split('\n\n')[0])
++  p.add_argument('--camera', type=size, required=True, help='camera resolution, WxH')
++  p.add_argument('--model', type=size, required=True, help='model input, WxH')
++  p.add_argument('--output', type=Path, required=True)
++  args = p.parse_args(argv)
++  (cam_w, cam_h), (model_w, model_h) = args.camera, args.model
++  print(f"Compiling jetlink driving warp for {cam_w}x{cam_h} -> {model_w}x{model_h}...")
++  warp = compile_warp(cam_w, cam_h, model_w, model_h)
++  out = args.output
++  out.parent.mkdir(parents=True, exist_ok=True)
++  # through a temporary: a compile killed mid-write leaves nothing under the name load() opens
++  tmp = out.with_suffix('.pkl.tmp')
++  with open(tmp, 'wb') as f:
++    pickle.dump(warp, f)
++  os.replace(tmp, out)
++  print(f"  Saved to {out}")
++  return 0
++
++
++if __name__ == "__main__":
++  sys.exit(main())
+--- a/jetlink_repo/jetlink/__init__.py
++++ b/jetlink_repo/jetlink/__init__.py
+@@ -10,4 +10,4 @@
+ # so does the release check (macos/scripts/check-version.sh). The comma runs
+ # jetlink from a checkout, not an install, so this is also all it has. The Swift
+ # reads it from Pinned.swift: run JetlinkKit/Scripts/make_pins.py after a bump.
+-__version__ = '0.8.5'
++__version__ = '0.8.7'
+--- a/jetlink_repo/jetlink/comma/port.py
++++ b/jetlink_repo/jetlink/comma/port.py
+@@ -130,6 +130,11 @@
+ # screen the same way (iPhone 18 Pro Max). Up to 7.5 W through the comma's boost converter is not
+ # a load to put on it from the car. Do not lift this without a hardware reason it is safe
+ PHONE_CHARGING_SEALED = True
++# dp: what a phone found charging from the comma is handed back with, one a cycle, RETRY_AFTER apart:
++# the PR_Swap back (jetlink-root.sh port sink), which a replica refused with EPERM and EAGAIN every
++# time on 2026-10-14 and left the phone charging; a USB PD hard reset (port reset); the voter held at
++# sink (port hold), the one role lever that does not ask the far end
++SEAL_STEPS = ('sink', 'reset', 'hold')
+ 
+ 
+ def power_role() -> str | None:
+@@ -237,8 +242,10 @@
+     self.charge_since = 0.0
+     self.said_hot = False
+     self.temp: float | None = None
+-    # dp: a phone found charging from the comma has been handed the source role back this plug
+-    self.seal_handed_back = False
++    # dp: how far the hand-back of a phone found charging from the comma has got this plug
++    # (SEAL_STEPS), and when the next step may run
++    self.seal_step = 0
++    self.seal_next = 0.0
+ 
+   def update(self, now: float | None = None, configured: bool = False, charge: bool = False) -> None:
+     """configured: a host had the gadget configured at the last cycle, so the
+@@ -283,9 +290,9 @@
+         self._charge_the_phone(now)
+     if self.charging and not configured and role == 'source':
+       self._stop_charging(now)
+-    if PHONE_CHARGING_SEALED and role == 'source' and data == 'ufp' and not self.seal_handed_back \
+-       and now - self.roles_since >= SWAP_AFTER:
+-      self._hand_back_sealed()
++    if PHONE_CHARGING_SEALED and role == 'source' and data == 'ufp' and self.seal_step < len(SEAL_STEPS) \
++       and now - self.roles_since >= SWAP_AFTER and now >= self.seal_next:
++      self._hand_back_sealed(now)
+     if self.held:
+       if role == 'sink':
+         self.settled = False   # a host came back
+@@ -318,7 +325,7 @@
+     self.plugged = False
+     self.asks = 0            # the next plug is asked afresh
+     self.charge_asked = self.charging = self.said_hot = False
+-    self.seal_handed_back = False
++    self.seal_step, self.seal_next = 0, 0.0
+     self.temp = None
+     # the policy engine turns off only a device side it turned on itself, so
+     # one turned on here, by this owner or one before it, is turned off here
+@@ -338,18 +345,26 @@
+     self.next_start = now + RESTART_AFTER
+     run_udc('start')
+ 
+-  def _hand_back_sealed(self) -> None:
++  def _hand_back_sealed(self, now: float) -> None:
+     """dp: the comma sources a host that is its far end, which only a swap makes: a phone
+     charging from it. Charging is sealed (PHONE_CHARGING_SEALED), so the phone gets the source
+-    role back, once a plug."""
+-    self.seal_handed_back = True
++    role back, a step a cycle (SEAL_STEPS) until the comma is no longer the source: the PR_Swap
++    back first, then a USB PD hard reset, which returns both ends to the roles their attach gave
++    them, then the voter held at sink."""
++    step = SEAL_STEPS[self.seal_step]
++    self.seal_step += 1
++    self.seal_next = now + RETRY_AFTER
+     self.charging = False
+-    gadget.log.warning("jetlink: the comma is powering the phone, and phone charging is sealed; "
+-                       "giving the phone the source role back")
+-    if run_script('sink'):
+-      gadget.log.warning("jetlink: the phone powers the comma again")
+-    else:
+-      gadget.log.warning("jetlink: the phone kept charging from the comma; unplug the cable")
++    gadget.log.warning("jetlink: the comma is powering the phone, and phone charging is sealed; %s (%d of %d)",
++                       {'sink': 'giving the phone the source role back', 'reset': 'resetting USB PD',
++                        'hold': 'holding the port at sink'}[step], self.seal_step, len(SEAL_STEPS))
++    if step == 'hold' and self.held:
++      return
++    ok = run_script(step)
++    if step == 'hold' and ok:
++      self.held = True   # let go by the usual release once the port is empty (RELEASE_AFTER)
++    if not ok and self.seal_step == len(SEAL_STEPS):
++      gadget.log.warning("jetlink: the phone still charges from the comma; unplug the cable now")
+ 
+   def _charge_the_phone(self, now: float) -> None:
+     """The phone powers the comma and hosts it over a USB PD contract: ask it
+--- a/jetlink_repo/jetlink/openpilot/__init__.py
++++ b/jetlink_repo/jetlink/openpilot/__init__.py
+@@ -34,8 +34,10 @@
+ 
+ # 2: modeld writes in_control onto the joining model before every frame, where
+ # jetlink polled the adapter's engagement() (2026-10-05). An adapter of API 1
+-# never writes it, and its large model would wait for a window forever
+-API = 2
++# never writes it, and its large model would wait for a window forever.
++# 3: the joining model asks the adapter's in_control() before every frame
++# instead (2026-10-10), so modeld keeps one write; an adapter of API 2 has none
++API = 3
+ 
+ __all__ = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
+            'conformance']
+@@ -145,9 +147,10 @@
+   def attach(self, small, cam_w: int, cam_h: int):
+     """Join the link to modeld, once the camera is up and `small` is built:
+     the joining model, which drives as `small` until the Jetson is there.
+-    Before every run() modeld writes onto it `in_control` (is openpilot or
+-    MADS in control? it swaps only while not) and `frame_drop_ratio` (its
+-    share of dropped camera frames, which hands a lagging large model back).
++    Before every run() it asks the adapter's in_control() (is openpilot or
++    MADS in control? it swaps only while not), and modeld writes onto it
++    `frame_drop_ratio` (its share of dropped camera frames, which hands a
++    lagging large model back).
+ 
+     None unless prepare() said yes in this process: without it the GPU's
+     thread would start on modeld's realtime core. If the joining model cannot
+--- a/jetlink_repo/jetlink/openpilot/interface.py
++++ b/jetlink_repo/jetlink/openpilot/interface.py
+@@ -17,7 +17,7 @@
+ (OwnerConfig), no callbacks, so it stays at the standard library and about
+ 10 MB. The heavy processes get the adapter object and each uses its side:
+ StatusSide in manager, the UI, hardwared and the model manager, WorkerSide in
+-the provisioning run, ModelSide in modeld, BuildSide in the warp build.
++the provisioning run, ModelSide in modeld.
+ 
+ The standard library only: the owner imports this module.
+ """
+@@ -103,10 +103,11 @@
+     """Is comma's chestnut fitted? A USB walk; jetlink caches the answer."""
+ 
+   def camera(self) -> tuple[int, int, int, int]:
+-    """This device's (cam_w, cam_h, model_w, model_h): the warp modeld asks for."""
++    """This device's (cam_w, cam_h, model_w, model_h): the warp modeld loads."""
+ 
+   def warp_path(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
+-    """Where the build puts the warp for this geometry."""
++    """Where modeld's warp for this geometry is: openpilot's driving warp
++    pickle, which warp.Warps.load reads."""
+ 
+ 
+ class WorkerSide(StatusSide, Protocol):
+@@ -127,26 +128,23 @@
+ 
+ 
+ class ModelSide(WorkerSide, Protocol):
+-  """modeld: comma's model face, and the structured log line the link's
+-  telemetry goes to. What modeld writes onto the model every frame is
+-  Jetlink.attach's."""
++  """modeld: comma's model face, whether anything is in control, and the
++  structured log line the link's telemetry goes to. What modeld writes onto
++  the model every frame is Jetlink.attach's."""
+ 
+   def model_face(self) -> ModelFace:
+     """What a ModelState for comma's large model has to carry."""
+ 
++  def in_control(self) -> bool:
++    """Is openpilot or MADS in control? The joining model asks on modeld's
++    frame thread before every frame and swaps the large model in only while
++    not. True when it cannot tell; never raises."""
++
+   def event(self, name: str, **fields: Any) -> None:
+     """A structured log line (cloudlog.event)."""
+ 
+ 
+-class BuildSide(Protocol):
+-  """scons: comma's warp graph."""
+-
+-  def make_warp(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> tuple[Callable[..., Any], int]:
+-    """The warp graph for this geometry, and the size of the NV12 frame it
+-    reads. Imports comma's graph module before anything of tinygrad's."""
+-
+-
+-class Openpilot(ModelSide, BuildSide, Protocol):
++class Openpilot(ModelSide, Protocol):
+   """The whole adapter: one object implements every side."""
+ 
+ 
+@@ -155,7 +153,7 @@
+   module that holds every openpilot import jetlink needs: its top level
+   imports only the standard library, and it has adapter() -> Openpilot and
+   owner_config() -> OwnerConfig. The entry points that run as their own
+-  process (the provisioning run, the warp build) are told its name."""
++  process (the provisioning run) are told its name."""
+   return importlib.import_module(module).adapter()
+ 
+ 
+--- a/jetlink_repo/jetlink/openpilot/joining.py
++++ b/jetlink_repo/jetlink/openpilot/joining.py
+@@ -38,10 +38,10 @@
+   only; building the JetlinkModelState unpickles a TinyJit, and doing that
+   next to the small model running frames on the same device is not safe.
+ - never swap while the plan is steering. The two models disagree by ~195 m of
+-  planned path, and the swap costs a frame or two. modeld says before every
+-  frame whether anything is in control (in_control), from messages it reads
+-  anyway; standstill alone is not enough, longitudinal control may still hold
+-  the brake.
++  planned path, and the swap costs a frame or two. The adapter says before
++  every frame whether anything is in control (in_control), from openpilot's
++  own messages; standstill alone is not enough, longitudinal control may still
++  hold the brake.
+ """
+ from __future__ import annotations
+ 
+@@ -122,10 +122,11 @@
+   """Duck-types openpilot's modeld ModelState, with a second one inside.
+ 
+   `progress` is where the join says what it is waiting on (status.Progress),
+-  and `log` is cloudlog on a comma.
++  `log` is cloudlog on a comma, and `in_control` the adapter's, asked before
++  every frame; without one, the in_control last written stands.
+   """
+ 
+-  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log):
++  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log, in_control=None):
+     self._small = small
+     self._active = small
+     self._connect = connect
+@@ -188,9 +189,10 @@
+     # dp: keepalives lost in a row since the last ping that came back (KEEPALIVE_RETRY_DELAY)
+     self._keepalive_lost = 0
+ 
+-    # in control until modeld says otherwise, so a swap can never happen on no
+-    # information
++    # in control until the adapter says otherwise, so a swap can never happen
++    # on no information
+     self._in_control = True
++    self._ask_in_control = in_control
+     self._stop = threading.Event()
+ 
+     # whether the large model has produced a frame; a first inference that
+@@ -297,11 +299,10 @@
+ 
+   @in_control.setter
+   def in_control(self, value):
+-    # openpilot or MADS in control, by modeld's own messages, written before
+-    # every run() as frame_drop_ratio is: the swap waits for False. A thread
+-    # polling selfdrived for it woke ~300 times a second on a drive and took
+-    # 6 to 11 % of a core inside modeld (2026-10-05). It lands on the small
+-    # model too, as every write does
++    # openpilot or MADS in control, by openpilot's own messages, asked before
++    # every run(): the swap waits for False. A thread polling selfdrived for it
++    # woke ~300 times a second on a drive and took 6 to 11 % of a core inside
++    # modeld (2026-10-05). It lands on the small model too, as every write does
+     self._in_control = value
+     self._small.in_control = value
+ 
+@@ -319,6 +320,8 @@
+   # -- the frame path ---------------------------------------------------------
+ 
+   def run(self, bufs, transforms, inputs, after_enqueue=None):
++    if self._ask_in_control is not None:
++      self.in_control = self._ask_in_control()
+     if self._lagging:
+       # the last frame was the large model's last, published as it came
+       self._lagging = False
+@@ -673,7 +676,7 @@
+       geometry = parts.warps.geometry()[2:]
+     try:
+       ready['reset_small'] = prepare_reset(small)
+-      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h), parts.log)
++      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
+     except Exception:
+       link.close()
+       raise
+@@ -690,4 +693,4 @@
+     return links.open_link(parts, link, should_stop)
+ 
+   return JoiningModelState(small, connect, build, prepare, reset_small=lambda: ready['reset_small'](),
+-                           progress=parts.progress, log=parts.log)
++                           progress=parts.progress, log=parts.log, in_control=op.in_control)
+--- a/jetlink_repo/jetlink/openpilot/model_state.py
++++ b/jetlink_repo/jetlink/openpilot/model_state.py
+@@ -13,8 +13,8 @@
+ The split is at `run_policy`. The warp stays on the comma's GPU: its input is a
+ 2 MB camera buffer already there and its output the 393 KB the link carries
+ anyway. The history queues live on the Jetson, shipping them would cost ~10 MB
+-a frame instead of ~0.5 MB. Upstream fused warp and policy into one JIT, so
+-the fork's build compiles a standalone warp; see warp.
++a frame instead of ~0.5 MB. modeld runs its warp as a JIT of its own, and
++the link runs the same one; see warp.
+ 
+ A model that keeps its own history (openpilot #38916, Cinque Terre V3 on)
+ takes the same warped frame and the same scalars; its hidden state never
+@@ -22,7 +22,7 @@
+ 
+ What openpilot's modeld reads off a ModelState comes from the fork's adapter
+ (ModelFace): comma's constants, parser, smoothing and action function.
+-tinygrad is warp.Warp's to import: only modeld and the build have it.
++tinygrad is warp.Warp's to import: only modeld has it.
+ """
+ from __future__ import annotations
+ 
+@@ -156,9 +156,9 @@
+     # model manager key off this flag
+     self.chestnut = True
+ 
+-    # a warp.Warp, loaded and warmed ahead: its first call costs ~2 s and this
+-    # runs on modeld's frame thread. Frames go out of its output as they are,
+-    # over either transport
++    # a warp.Warp, loaded and warmed ahead: its first call links the JIT, and
++    # this runs on modeld's frame thread. Frames go out of its output as they
++    # are, over either transport
+     self.warp = warp
+ 
+     self.input_shapes = spec.input_shapes
+--- a/jetlink_repo/jetlink/openpilot/models.py
++++ b/jetlink_repo/jetlink/openpilot/models.py
+@@ -82,11 +82,14 @@
+       return known[ref]['oid'], int(known[ref]['size'])
+     oid, size = self.fetch_pointer(ref)
+     known[ref] = {'oid': oid, 'size': size}
++    self._keep_pointers(known)
++    self.op.log.warning("jetlink: %s is %s, %d MB", ref[:10], oid[:16], size >> 20)
++    return oid, size
++
++  def _keep_pointers(self, known: dict[str, dict]) -> None:
+     # blocking: the next lookup reads this back, and a put still in flight would be lost under it
+     self.op.put(self.op.keys.pointers, known, block=True)
+     self._index_cache = None
+-    self.op.log.warning("jetlink: %s is %s, %d MB", ref[:10], oid[:16], size >> 20)
+-    return oid, size
+ 
+   @staticmethod
+   def _row(name: str, ref: str, known: dict[str, dict]) -> dict:
+@@ -266,7 +269,10 @@
+     Never raises: a probe that fails keeps what the last one found."""
+     try:
+       from jetlink.registry.catalog import fetch_catalogs, merge_catalogs
+-      merged = merge_catalogs([catalog, fetch_catalogs()], selector=self.op.catalog_selector)
++      fetched = fetch_catalogs()
++      self.keep_pins(fetched.get('pointers', {}))
++      merged = merge_catalogs([catalog, fetched], selector=self.op.catalog_selector)
++      merged.pop('pointers', None)  # the pins are kept above, never in the model manager's catalog
+       added = len(merged.get('bundles', [])) - len(catalog.get('bundles', []))
+       if added <= 0:
+         return catalog
+@@ -275,6 +281,17 @@
+     except Exception:
+       self.op.log.exception("jetlink: could not check for newer catalogs")
+       return self._found_before(catalog)
++
++  def keep_pins(self, pins: dict[str, dict]) -> None:
++    """Writes the list's pins over the kept pointers (see catalog.pinned_pointers)."""
++    known = self.pointers()
++    changed = {ref: pin for ref, pin in pins.items() if known.get(ref) != pin}
++    if not changed:
++      return
++    known.update(changed)
++    self._keep_pointers(known)
++    for ref, pin in changed.items():
++      self.op.log.warning("jetlink: %s is pinned to %s", ref[:10], pin['oid'][:16])
+ 
+   def _found_before(self, catalog: dict) -> dict:
+     """The catalog with the models the last probe found folded in again, from the
+--- a/jetlink_repo/jetlink/openpilot/status.py
++++ b/jetlink_repo/jetlink/openpilot/status.py
+@@ -168,7 +168,7 @@
+ 
+ # -- whether the link can run --------------------------------------------------
+ 
+-# the offroad alert's text for a device whose build made no warp for its camera
++# the offroad alert's text for a device whose checkout has no warp for its camera
+ NO_WARP = "no warp built for this camera"
+ 
+ 
+--- a/jetlink_repo/jetlink/openpilot/warp.py
++++ b/jetlink_repo/jetlink/openpilot/warp.py
+@@ -4,54 +4,35 @@
+ This file is part of jetlink and is licensed under the MIT License.
+ See the LICENSE file in the root directory for more details.
+ 
+-The comma-side warp JIT: how it is built, where it lives, what loads it, how
+-the frame loop runs it (Warp), and the small model's reset for a fallback.
+-
+-The warp stays on the comma (see model_state), and upstream's fused run_model
+-JIT (openpilot #38684) has no warp to borrow, so comma's make_warp graph is
+-JIT-compiled as a build target: the fork's build runs
+-`python -m jetlink.openpilot.warp` once per camera it builds for. A source
+-build makes the one for its own camera, a prebuilt release one for every
+-camera it installs on. Nothing compiles one at runtime: in modeld the ~9 s
+-compile would hold back the first frame on every ignition, and in a
+-provisioning run, which only runs offroad, it was lost to ignition. A device
+-without one runs the small model.
++The comma-side warp: openpilot's own, where it lives, what loads it, how the
++frame loop runs it (Warp), and the small model's reset for a fallback.
++
++The warp stays on the comma (see model_state). openpilot's modeld runs it as
++a JIT of its own, driving_warp_{w}x{h}_tinygrad.pkl, one per camera, and the
++link runs the same pickle: both camera frames in as one (2, frame size) uint8
++input_frame, their transforms as one (2, 3, 3) M_inv, and out the
++(2, 6, 128, 256) uint8 frame the link sends. The fork's adapter says where it
++is. Nothing compiles one at runtime: a device without one runs the small
++model.
+ 
+ load() is what stands between a bad pickle and the car.
+ 
+-tinygrad is the fork's, and only modeld and the build have it: every import of
+-it here is inside the function that needs it.
++tinygrad is the fork's, and only modeld has it: every import of it here is
++inside the function that needs it.
+ """
+ from __future__ import annotations
+ 
+-import argparse
++import ctypes
+ import pickle
+-import sys
+ from pathlib import Path
+ 
+-# what TinyJit records for the keyword call in call_warp: sorted(kwargs)
+-WARP_INPUT_NAMES = ['big_frame', 'big_tfm', 'frame', 'tfm']
++# what the warp's TinyJit was captured with: sorted(kwargs) of modeld's call
++WARP_INPUT_NAMES = ['M_inv', 'input_frame']
+ # KGSL allocation flags (msm_kgsl.h) for memory the GPU's accesses snoop the
+ # CPU's caches on, mapped write-back: KGSL_MEMFLAGS_IOCOHERENT, which
+ # tinygrad's kgsl bindings lack, and KGSL_CACHEMODE_WRITEBACK (3 << 26). See
+ # Warp
+ COHERENT_WRITEBACK = (1 << 31) | (3 << 26)
+-# camera buffers a Warp holds tensors for past which the log asks why.
+-# camerad hands out a fixed pool of 18 a stream and maps new ones only when
+-# it restarts, which modeld survives; past two generations of both streams
+-# something is rotating addresses under the cache, which otherwise grows
+-# without a bound
+-FRAMES_WARN = 2 * 2 * 18 + 1
+-
+-
+-def call_warp(warp, tfm, big_tfm, frame, big_frame):
+-  """Call a warp JIT. Every caller goes through here, capture included.
+-
+-  TinyJit names inputs from enumerate(args) plus sorted(kwargs) and refuses a
+-  call whose names differ from the capture. A positional compile and a keyword
+-  call raised JitError on the first frame of a drive.
+-  """
+-  return warp(tfm=tfm, big_tfm=big_tfm, frame=frame, big_frame=big_frame)
+ 
+ 
+ def init_device(log) -> None:
+@@ -81,29 +62,27 @@
+ 
+ 
+ class Warps:
+-  """The warps the build made for this device, as the fork's adapter says where."""
++  """The warps this device's checkout has, where the fork's adapter says."""
+ 
+   def __init__(self, op):
+     self.op = op
+-    # nothing compiles a warp at runtime and the build runs before manager, so
+-    # the answer holds for the life of the process; the UI asks at 5 Hz
++    # nothing makes a warp at runtime and the checkout's are there before
++    # manager, so the answer holds for the life of the process; the UI asks
++    # at 5 Hz
+     self._built: bool | None = None
+ 
+   def geometry(self) -> tuple[int, int, int, int]:
+-    """(cam_w, cam_h, model_w, model_h) for this device: the choice modeld's
+-    build makes, so the warp built is the one modeld asks for. If they
+-    disagree, load() raises and the drive is small-model."""
++    """(cam_w, cam_h, model_w, model_h) for this device: the warp modeld
++    loads. If the link's model disagrees, load() raises and the drive is
++    small-model."""
+     return tuple(self.op.camera())
+ 
+   def path(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
+     return Path(self.op.warp_path(cam_w, cam_h, model_w, model_h))
+ 
+   def is_cached(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> bool:
+-    """Is there a warp for this geometry?
+-
+-    Presence only. Staleness is the build's job: the target depends on tinygrad
+-    and the capture sources. A pickle from an incompatible tinygrad raises in load().
+-    """
++    """Is there a warp for this geometry? Presence only: a pickle from an
++    incompatible tinygrad raises in load()."""
+     return self.path(cam_w, cam_h, model_w, model_h).is_file()
+ 
+   def built(self) -> bool:
+@@ -113,145 +92,107 @@
+       self._built = self.is_cached(*self.geometry())
+     return self._built
+ 
+-  def load(self, cam_w: int, cam_h: int, model_w: int, model_h: int):
+-    """The built warp JIT. Raises if it is not there or is stale.
++  def load(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> dict:
++    """The warp as openpilot pickles it: {'run': its TinyJit, 'input_specs':
++    {name: (shape, dtype, device)}}. Raises if it is not there or is not one
++    the frame loop can run.
+ 
+     modeld's big-model load is wrapped in the fallback to the small model, and a
+     warp that cannot be trusted must not reach the car.
+     """
+-    if not self.is_cached(cam_w, cam_h, model_w, model_h):
+-      raise RuntimeError(f"no warp built for {cam_w}x{cam_h} -> {model_w}x{model_h}; "
+-                         "the fork's build makes it (python -m jetlink.openpilot.warp)")
+-    with open(self.path(cam_w, cam_h, model_w, model_h), 'rb') as f:
++    path = self.path(cam_w, cam_h, model_w, model_h)
++    if not path.is_file():
++      raise RuntimeError(f"no warp for {cam_w}x{cam_h} -> {model_w}x{model_h} at {path}")
++    with open(path, 'rb') as f:
+       warp = pickle.load(f)
++    if not isinstance(warp, dict) or not {'run', 'input_specs'} <= warp.keys():
++      raise RuntimeError(f"{path.name} is not a driving warp: {type(warp).__name__}")
+ 
+     # a JIT pickled before TinyJit captured loads fine and computes nothing; one
+-    # captured with a different call convention raises JitError on the first
+-    # frame of a drive. Both have happened
+-    captured = getattr(warp, 'captured', None)
++    # captured under other names raises JitError on the first frame of a drive
++    captured = getattr(warp['run'], 'captured', None)
+     if captured is None:
+-      raise RuntimeError("cached warp was pickled before it captured; it computes nothing")
++      raise RuntimeError("the warp was pickled before it captured; it computes nothing")
+     names = list(getattr(captured, 'expected_names', []))
+     if names != WARP_INPUT_NAMES:
+-      raise RuntimeError(f"cached warp expects {names}, call_warp passes {WARP_INPUT_NAMES}")
++      raise RuntimeError(f"the warp expects {names}, the frame loop passes {WARP_INPUT_NAMES}")
++    specs = warp['input_specs']
++    frames, tfm = tuple(specs['input_frame'][0]), tuple(specs['M_inv'][0])
++    if len(frames) != 2 or frames[0] != 2 or tfm != (2, 3, 3):
++      raise RuntimeError(f"the warp takes frames {frames} and transforms {tfm}, not two of each")
++    made = tuple(getattr(captured.ret, 'shape', ()))
++    if made != (2, 6, model_h // 2, model_w // 2):
++      raise RuntimeError(f"the warp makes {made}, not a {model_w}x{model_h} model's input")
+     return warp
+ 
+ 
+ class Warp:
+-  """The built warp as modeld's frame loop runs it: start() with two camera
+-  buffers and their transforms, wait(), and `output` holds the warped frame,
+-  where the link sends it from.
+-
+-  Three things the JIT alone does not do, each measured on the comma
+-  (2026-10-06):
++  """The warp as modeld's frame loop runs it: start() with two camera buffers
++  and their transforms, wait(), and `output` holds the warped frame, where the
++  link sends it from.
++
++  openpilot's warp takes both frames as one buffer, so start() copies the
++  camera buffers in, as modeld does, and the transforms beside them. Two
++  things the JIT alone does not do, measured on the comma with the warp
++  jetlink once built itself (2026-10-06):
+   - Its output lives in GPU memory the CPU reads through its cache. tinygrad
+     maps a QCOM buffer write-combined, which the CPU reads uncached: copying
+     the 393 KB out took 2.9 ms, the kernel's copy straight from that mapping
+     7.3 ms. The Adreno 630 is IO-coherent, so KGSL memory flagged IOCOHERENT
+     and write-back is right to read once the GPU is done: 0.22 ms for the
+     kernel's copy, the GPU's own time unchanged. It moves before the first
+-    call, which binds the graph to its buffers' addresses.
+-  - A frame replays the capture with its inputs' buffers. TinyJit prepares
+-    and checks every call's inputs, a graph rewrite per input: 0.97 ms of a
+-    1.93 ms call. Every frame's inputs are alike (camera buffers as from_blob
+-    tensors, two transforms), and the buffers are all TinyJit's preparing
+-    hands the capture, so they are checked once, by the warm-up's calls
+-    through TinyJit.
+-  - On the GPU only the capture's graph of warp kernels runs. Replayed whole,
+-    the capture is three steps through tinygrad's dispatch, two of them
+-    copying a transform from an NPY tensor into its QCOM buffer through a
+-    synced memory view: 0.61 ms of a 1.13 ms launch on the frame loop, the
+-    graph's submit the rest (2026-10-07). start() writes the transforms into
+-    those buffers itself, as the copies did; the GPU is idle there, since
+-    every start() is waited for before the next.
+-  - A camera buffer becomes a tensor once, by address.
+-
+-  The warm-up is the first call's 1.9 s and the second's compile, paid here
+-  rather than on modeld's frame loop, where it was ~26 dropped frames and
+-  16 s of modeldLagging after every join.
++    call, which links the JIT to its buffers' addresses.
++  - TinyJit prepares and checks every call's inputs, a graph rewrite per
++    input: 0.97 ms of a 1.93 ms call. Every frame's inputs are the same two
++    buffers, which start() writes into, so they are checked once, by the
++    warm-up's calls through TinyJit, and a frame replays the capture.
++
++  The warm-up, the link of the JIT and its first runs, is paid here rather
++  than on modeld's frame loop.
+   """
+ 
+-  def __init__(self, jit, frame_size: int, log):
++  def __init__(self, warp: dict, frame_size: int):
+     import numpy as np
+     from tinygrad.device import Device
+     from tinygrad.tensor import Tensor
+-    self._frame_size = frame_size
+-    self._log = log
+-    self._tensor = Tensor
++    jit, specs = warp['run'], warp['input_specs']
++    (frames_shape, _, _), (tfm_shape, _, _) = specs['input_frame'], specs['M_inv']
++    # what it reads of each camera buffer: modeld's frame_copy_size, short of
++    # the buffer's end
++    self._frame_size = frames_shape[1]
++    if self._frame_size > frame_size:
++      raise RuntimeError(f"the warp reads {self._frame_size} bytes a frame, past a {frame_size} byte camera buffer")
+     out = jit.captured.ret.uop.base.buffer
+     self._device = out.device
+     if self._device.startswith('QCOM'):
+       _make_coherent(out)
+-    # written in place by start(): the NPY tensors are views of them
+-    self._tfm = np.zeros((3, 3), dtype=np.float32)
+-    self._big_tfm = np.zeros((3, 3), dtype=np.float32)
+-    tfm, big_tfm = (Tensor(a, device='NPY').realize() for a in (self._tfm, self._big_tfm))
+-    self._tfm_buf, self._big_tfm_buf = tfm.uop.base, big_tfm.uop.base
+-    self._frames: dict[int, object] = {}   # camera buffer address -> its tensor
+-    blank = [np.zeros(frame_size, dtype=np.uint8) for _ in range(2)]
+-    blobs = [Tensor.from_blob(b.ctypes.data, (frame_size,), dtype='uint8', device=self._device) for b in blank]
++    # the two buffers every frame passes, written in place by start()
++    self._tensors = {name: Tensor(np.zeros(shape, dtype=dtype), device=device).realize()
++                     for name, (shape, dtype, device) in specs.items()}
+     for _ in range(2):
+-      call_warp(jit, tfm, big_tfm, blobs[0], blobs[1])
++      jit(**self._tensors)
+     self.wait = Device[self._device].synchronize
+     self.wait()
+-    self.output = _zero_copy_view(out)
++    self.output = out.as_memoryview(allow_zero_copy=True)
++    self._frames = np.frombuffer(self._view('input_frame'), dtype=np.uint8).reshape(frames_shape)
++    self._at = [self._frames[i].ctypes.data for i in range(2)]
++    self._tfm = np.frombuffer(self._view('M_inv'), dtype=np.float32).reshape(tfm_shape)
+     self._replay = jit.captured
+-    if self._device.startswith('QCOM'):
+-      inputs = (blobs[1].uop.base, self._big_tfm_buf, blobs[0].uop.base, self._tfm_buf)
+-      # dp: on a tinygrad whose capture is not exactly two copies and a graph, replay the
+-      # whole capture (the CPU path: ~0.6 ms more a frame) rather than refuse the link
+-      try:
+-        self._replay, self._tfm, self._big_tfm = _graph_alone(jit.captured, inputs)
+-      except Exception:
+-        log.exception("jetlink: the warp's graph alone is not available, replaying the whole capture")
++    self._inputs = [self._tensors[name].uop.base for name in WARP_INPUT_NAMES]
++
++  def _view(self, name: str) -> memoryview:
++    """The CPU's view of an input buffer, not a copy of it."""
++    return self._tensors[name].uop.base.buffer.as_memoryview(allow_zero_copy=True)
+ 
+   def start(self, frame: int, big_frame: int, tfm, big_tfm) -> None:
+     """Warp the camera buffers at these addresses under their transforms.
+-    `output` is the frame once wait() returns, until the next start()."""
+-    self._tfm[:, :] = tfm
+-    self._big_tfm[:, :] = big_tfm
+-    # the capture's input order, sorted names (WARP_INPUT_NAMES)
+-    self._replay((self._buffer(big_frame), self._big_tfm_buf, self._buffer(frame), self._tfm_buf), {})
+-
+-  def _buffer(self, address: int):
+-    tensor = self._frames.get(address)
+-    if tensor is None:
+-      tensor = self._frames[address] = self._tensor.from_blob(address, (self._frame_size,), dtype='uint8',
+-                                                              device=self._device)
+-      if len(self._frames) == FRAMES_WARN:
+-        self._log.warning("jetlink: %d camera buffers cached; is the camera stack rotating them?", len(self._frames))
+-    return tensor.uop.base
+-
+-
+-def _graph_alone(captured, inputs):
+-  """The capture's graph of warp kernels, and the QCOM buffers its two copy
+-  steps write the transforms into, as (3, 3) float32 views: tfm's, then
+-  big_tfm's. Raises unless the capture is those three steps."""
+-  import numpy as np
+-  from tinygrad.engine.realize import get_graph_runtime, resolve_params
+-  from tinygrad.uop.ops import Ops
+-  # dp: tinygrad eecd4706 (dp0111pre's pin) names it CapturedJit.linear; newer ones _linear
+-  steps = (captured._linear if hasattr(captured, '_linear') else captured.linear).src
+-  copies = [s for s in steps if s.src[0].op is Ops.COPY]
+-  graphs = [s.src[0] for s in steps if s.src[0].op is Ops.CUSTOM_FUNCTION and s.src[0].arg == 'graph']
+-  if len(steps) != 3 or len(copies) != 2 or len(graphs) != 1:
+-    raise RuntimeError(f"the warp's capture is not two transform copies and a graph: {[s.src[0].op for s in steps]}")
+-  views = {}
+-  for step in copies:
+-    dest, src = resolve_params(step, inputs)
+-    name = WARP_INPUT_NAMES[next(i for i, u in enumerate(inputs) if u is src)]
+-    views[name] = np.frombuffer(dest.buffer.as_memoryview(force_zero_copy=True), dtype=np.float32).reshape(3, 3)
+-  return get_graph_runtime(graphs[0], inputs), views['tfm'], views['big_tfm']
+-
+-
+-def _zero_copy_view(out):
+-  """The output buffer's memory, zero-copy. dp: tinygrad eecd4706 (dp0111pre's
+-  pin) has no as_memoryview(no_sync=); without it the QCOM allocator synchronizes
+-  once here, which costs nothing: this runs once, after the warm-up's wait()."""
+-  try:
+-    return out.as_memoryview(force_zero_copy=True, no_sync=True)
+-  except TypeError:
+-    return out.as_memoryview(force_zero_copy=True)
++    `output` is the frame once wait() returns, until the next start(). The
++    GPU is idle here: every start() is waited for before the next."""
++    ctypes.memmove(self._at[0], frame, self._frame_size)
++    ctypes.memmove(self._at[1], big_frame, self._frame_size)
++    self._tfm[0] = tfm
++    self._tfm[1] = big_tfm
++    self._replay(self._inputs, {})
+ 
+ 
+ def _make_coherent(out) -> None:
+@@ -271,107 +212,47 @@
+ def prepare_reset(model):
+   """Capture the small model's reset before driving, keeping its JIT's buffer identities.
+ 
+-  Its history is stale after the Jetson ran, so a fallback starts from the same
+-  zero history as modeld startup. Nothing is allocated or compiled on the
+-  failure frame.
+-
+-  The small model is whatever bundle the user picked, stock modeld's or a
+-  modeld_v2 one, so the history is whatever GPU queues it has; the NPY tensors
+-  are zeroed through their numpy views. Duck-typed on openpilot's ModelState:
+-  input_queues, numpy_inputs (modeld_v2) or npy (modeld), prev_desire. The
+-  fork's tests pin those names.
++  Its history is stale after the Jetson ran, so a fallback starts from the
++  zero history modeld's warmup leaves it at. Nothing is allocated or compiled
++  on the failure frame.
++
++  The small model is whatever bundle the user picked, on stock modeld or
++  modeld_v2, and each keeps its history its own way. Stock modeld's
++  ModelState, and a modeld_v2 native bundle's adapter: the recurrent state on
++  the GPU (state_pairs) and one packed host buffer (packed_input), as their
++  warmup zeroes them. A modeld_v2 legacy bundle's adapter: history queues on
++  the GPU, and numpy inputs. The fork's tests pin those names.
+   """
+   from tinygrad import Tensor, TinyJit
+ 
+-  queues = tuple(q for q in model.input_queues.values() if q.device != 'NPY')
+-  npy = model.numpy_inputs if hasattr(model, 'numpy_inputs') else model.npy
++  adapter = getattr(model, 'adapter', None)
++  if adapter is None and not hasattr(model, 'state_pairs'):
++    # dp: dp0111pre's two-JIT ModelState (warp_enqueue + run_policy) keeps its history as GPU
++    # queues (input_queues) and numpy inputs (npy), as stock modeld did before #38916: jetlink
++    # 0.8.5's reset. 0.8.7's would raise on state_pairs here, and the link would never prepare
++    queues = tuple(q for q in model.input_queues.values() if q.device != 'NPY')
++    arrays = tuple((model.numpy_inputs if hasattr(model, 'numpy_inputs') else model.npy).values())
++  elif adapter is None or adapter.is_native:
++    keeper = model if adapter is None else adapter
++    queues = tuple(keeper.input_queues[name] for name in keeper.state_pairs)
++    arrays = (keeper.packed_input,)
++  else:
++    queues = tuple(q for q in adapter.input_queues.values() if q.device != 'NPY')
++    arrays = tuple(adapter.numpy_inputs.values())
+ 
+   @TinyJit
+   def clear():
+     Tensor.realize(*(q.assign(0) for q in queues))
+ 
+-  for _ in range(3):
+-    clear()
++  if queues:
++    for _ in range(3):
++      clear()
+ 
+   def reset():
+-    clear()
++    if queues:
++      clear()
+     model.prev_desire.fill(0)
+-    for array in npy.values():
++    for array in arrays:
+       array.fill(0)
+ 
+   return reset
+-
+-
+-# -- the build ------------------------------------------------------------------
+-
+-def compile_warp(graph, frame_size: int, out: Path) -> Path:
+-  """JIT the warp graph and pickle it to `out`. Holds the GPU while it runs.
+-
+-  Three runs before pickling: TinyJit captures on the second call, and a
+-  pickle taken earlier is an empty jit that silently does nothing.
+-  """
+-  import numpy as np
+-  from tinygrad.device import Device
+-  from tinygrad.engine.jit import TinyJit
+-  from tinygrad.tensor import Tensor
+-
+-  warp_jit = TinyJit(graph, prune=True)
+-
+-  # one set of input tensors: TinyJit captures against the buffers it is
+-  # first handed. Random so nothing constant-folds
+-  rng = np.random.default_rng(42)
+-  tfm_npy, big_tfm_npy = np.eye(3, dtype=np.float32), np.eye(3, dtype=np.float32)
+-  tfm = Tensor(tfm_npy, device='NPY')
+-  big_tfm = Tensor(big_tfm_npy, device='NPY')
+-  frame = Tensor.randint(frame_size, low=0, high=256, dtype='uint8', device=Device.DEFAULT).realize()
+-  big_frame = Tensor.randint(frame_size, low=0, high=256, dtype='uint8', device=Device.DEFAULT).realize()
+-  for _ in range(3):
+-    tfm_npy[:] = rng.standard_normal((3, 3)).astype(np.float32)
+-    big_tfm_npy[:] = rng.standard_normal((3, 3)).astype(np.float32)
+-    call_warp(warp_jit, tfm, big_tfm, frame, big_frame).realize()
+-  Device.default.synchronize()
+-
+-  out = Path(out)
+-  out.parent.mkdir(parents=True, exist_ok=True)
+-  # through a temporary: a compile killed mid-write leaves nothing under the
+-  # name load() opens
+-  tmp = out.with_suffix('.pkl.tmp')
+-  with open(tmp, 'wb') as f:
+-    pickle.dump(warp_jit, f)
+-  tmp.replace(out)
+-  return out
+-
+-
+-def size(text: str) -> tuple[int, int]:
+-  """'WxH' as (w, h)."""
+-  w, sep, h = text.lower().partition('x')
+-  if not sep:
+-    raise argparse.ArgumentTypeError(f"expected WxH, not {text!r}")
+-  try:
+-    return int(w), int(h)
+-  except ValueError:
+-    raise argparse.ArgumentTypeError(f"expected WxH, not {text!r}") from None
+-
+-
+-def main(argv: list[str] | None = None) -> None:
+-  """Build the warp for one camera, as the fork's build runs it."""
+-  from jetlink.openpilot.interface import load_adapter
+-  p = argparse.ArgumentParser(prog='python -m jetlink.openpilot.warp', description=main.__doc__)
+-  p.add_argument('--adapter', required=True, help="the fork's adapter module")
+-  p.add_argument('--camera', type=size, required=True, help='camera resolution, WxH')
+-  p.add_argument('--model', type=size, required=True, help='model input, WxH')
+-  p.add_argument('--output', type=Path, required=True)
+-  args = p.parse_args(argv)
+-
+-  (cam_w, cam_h), (model_w, model_h) = args.camera, args.model
+-  op = load_adapter(args.adapter)
+-  print(f"Compiling jetlink warp for {cam_w}x{cam_h} -> {model_w}x{model_h}...")
+-  # before anything of tinygrad's is imported here: comma's graph module
+-  # patches tinygrad's firmware fetch as it loads
+-  graph, frame_size = op.make_warp(cam_w, cam_h, model_w, model_h)
+-  out = compile_warp(graph, frame_size, args.output)
+-  print(f"  Saved to {out}")
+-
+-
+-if __name__ == "__main__":
+-  sys.exit(main())
+--- a/jetlink_repo/jetlink/queues.py
++++ b/jetlink_repo/jetlink/queues.py
+@@ -11,8 +11,8 @@
+ across the link would cost ~10 MB a frame, so the queues live on the server and
+ the comma sends only the newest warped frame and the packed scalars. The hidden
+ state the graph returns stays there too: the next frame pushes it into the
+-features queue, where modeld's prev_feat went. The fork's tests/test_queues.py
+-checks this against the tinygrad original, and the staging conformance fixture
++features queue, where modeld's prev_feat went. tests/test_queues.py holds this
++to openpilot's tinygrad original, and the staging conformance fixture
+ (JetlinkKit/Scripts/make_conformance_fixtures.py) holds the Swift server's
+ queues to this, bit for bit.
+ 
+@@ -59,12 +59,11 @@
+     did. The queues stay until the client resets them."""
+     self.prev_feat[...] = 0
+ 
+-  def after_run(self, outputs: dict[str, np.ndarray], dest=None) -> None:
++  def after_run(self, outputs: dict[str, np.ndarray]) -> None:
+     """Keep this frame's hidden state for the next one.
+ 
+     Only after a frame whose outputs are all finite: modeld fed back only
+     what infer_end returned, and it raises on NOT_FINITE and on a failed run.
+-    `dest` is unused; the fork's test_queues still passes it.
+     """
+     self.prev_feat.reshape(-1)[...] = np.asarray(outputs[DRIVING_OUTPUT], np.float32).reshape(-1)[self._hidden]
+ 
+--- a/jetlink_repo/jetlink/registry/catalog.py
++++ b/jetlink_repo/jetlink/registry/catalog.py
+@@ -154,10 +154,22 @@
+     except NotFound:
+       break
+   try:
+-    found.append(fetch_catalog(EXTRA_CATALOG_URL, opener=opener))
++    extra = fetch_catalog(EXTRA_CATALOG_URL, opener=opener)
+   except NotFound:
+-    pass
+-  return merge_catalogs(found)
++    extra = {}
++  merged, pins = merge_catalogs([*found, extra]), pinned_pointers(extra)
++  return {**merged, 'pointers': pins} if pins else merged
++
++
++def pinned_pointers(data: dict) -> dict[str, dict]:
++  """The extra list's well-formed pins, {ref: {'oid', 'size'}}: the ONNX jetlink
++  runs for that commit whatever a lookup said. See catalog/README.md."""
++  pins = data.get('pointers')
++  if not isinstance(pins, dict):
++    return {}
++  return {ref: {'oid': p['oid'], 'size': p['size']} for ref, p in pins.items()
++          if is_ref(ref) and isinstance(p, dict) and is_sha256(p.get('oid'))
++          and type(p.get('size')) is int and p['size'] > 0}
+ 
+ 
+ def merge_catalogs(catalogs: list[dict], selector: int = REQUIRED_SELECTOR_VERSION) -> dict:
+--- a/jetlink_repo/jetlink/registry/lfs.py
++++ b/jetlink_repo/jetlink/registry/lfs.py
+@@ -67,6 +67,9 @@
+ )
+ # an export folder is a uuid; the subject names its first eight
+ _EXPORT_ID = re.compile(r'\b[0-9a-f]{8}\b')
++# how comma's model commits name an export: the whole uuid, or its first eight
++# and the checkpoint ('8d736683/12864'). A bare eight could be any hex word
++_NAMED_EXPORT = r'\b{}[-/]'
+ LFS_MEDIA_TYPE = 'application/vnd.git-lfs+json'
+ POINTER_TIMEOUT = 10.0
+ CONNECT_TIMEOUT = 30.0
+@@ -180,17 +183,24 @@
+   """The big ONNX a precompiled-pkl commit was built from. In turn: the export
+   its subject names, in comma's model repo; the pointer its own diff deletes;
+   and for a squash merge, the last pointer its pull request carried, or the
+-  export one of that pull request's commits names."""
++  export one of that pull request's commits names.
++
++  The newest export named wins: a pull request's commits are in order, and
++  Mountain Dew's (#39047) named three before the one it shipped. One that is
++  not in the model repo yet stops the search rather than falling back to an
++  older one, a different model."""
+   url = COMMIT_PATCH_URL.format(ref=ref)
+   patch = http_get(url, timeout, opener, PATCH_MAX).decode('utf-8', 'replace')
+   subjects = patch_subjects(patch)
+   if not subjects:
+     raise RegistryError(f"{url} has no subject line")
+   subject = subjects[0]
+-  ids = list(dict.fromkeys(_EXPORT_ID.findall(subject)))
+-  if ids and (pointer := _export_pointer(ref, ids, subject, timeout, opener)) is not None:
++  ids = _newest_first(subject)
++  pointer, missing = _export_pointer(ref, ids, subject, timeout, opener)
++  if pointer is not None:
+     return pointer
+-  tried = [f"no folder in {DRIVING_MODELS_REPO} for {', '.join(ids)}" if ids else 'its subject names no export']
++  tried = [f"its subject {_not_uploaded(missing)}" if missing else f"no folder in {DRIVING_MODELS_REPO} for {', '.join(ids)}" if ids
++           else 'its subject names no export']
+   if (pointer := diff_pointer(patch)) is not None:
+     log.info("%s deletes %s %s", ref[:10], BIG_ONNX, pointer.oid[:16])
+     return pointer
+@@ -201,20 +211,37 @@
+     if (pointer := diff_pointer(pull_patch)) is not None:
+       log.info("%s merged #%s, whose last %s is %s", ref[:10], number, BIG_ONNX, pointer.oid[:16])
+       return pointer
+-    pull_subjects = ' '.join(patch_subjects(pull_patch))
+-    pull_ids = [i for i in dict.fromkeys(_EXPORT_ID.findall(pull_subjects)) if i not in ids]
+-    if pull_ids and (pointer := _export_pointer(ref, pull_ids, pull_subjects, timeout, opener)) is not None:
+-      return pointer
+-    tried.append(f"nor does pull request #{number}")
++    if missing is None:  # an export the subject names and the repo lacks stops the search here too
++      pull_subjects = ' '.join(patch_subjects(pull_patch))
++      pull_ids = [i for i in _newest_first(pull_subjects) if i not in ids]
++      pointer, pull_missing = _export_pointer(ref, pull_ids, pull_subjects, timeout, opener)
++      if pointer is not None:
++        return pointer
++      tried.append(f"pull request #{number} {_not_uploaded(pull_missing)}" if pull_missing else f"nor does pull request #{number}")
+   raise RegistryError(f"{ref[:10]} has no {BIG_ONNX}: {'; '.join(tried)} ({subject!r})")
+ 
+ 
+-def _export_pointer(ref: str, ids: list[str], subject: str, timeout: float, opener) -> Pointer | None:
+-  """The ONNX in the first export folder one of `ids` starts, or None when none does."""
++def _newest_first(text: str) -> list[str]:
++  """The eight-hex ids `text` names, the last mention first."""
++  return list(dict.fromkeys(reversed(_EXPORT_ID.findall(text))))
++
++
++def _not_uploaded(export: str) -> str:
++  return f"names export {export}, which is not in {DRIVING_MODELS_REPO} yet"
++
++
++def _export_pointer(ref: str, ids: list[str], subject: str, timeout: float, opener) -> tuple[Pointer | None, str | None]:
++  """The ONNX in the first export folder one of `ids` starts, and None; or
++  None and the first id `subject` names as an export that has no folder, where
++  the search stops; or None and None when no id has a folder."""
++  if not ids:
++    return None, None
+   folders = [e['path'] for e in _tree('', timeout, opener) if e.get('type') == 'directory']
+   for export in ids:
+     matches = [f for f in folders if f.startswith(export)]
+     if not matches:
++      if re.search(_NAMED_EXPORT.format(export), subject):
++        return None, export
+       continue
+     if len(matches) > 1:
+       raise RegistryError(f"{ref[:10]}: {export} starts {len(matches)} folders in {DRIVING_MODELS_REPO}")
+@@ -230,8 +257,8 @@
+     if not is_sha256(oid) or not isinstance(size, int) or size <= 0:
+       raise RegistryError(f"{files[0]['path']} is not an lfs object")
+     log.info("%s names export %s: %s", ref[:10], export, files[0]['path'])
+-    return Pointer(oid, size)
+-  return None
++    return Pointer(oid, size), None
++  return None, None
+ 
+ 
+ def lfs_resolve(endpoint: str, pointer: Pointer, timeout: float = CONNECT_TIMEOUT, opener=None) -> str | None:
+--- a/selfdrive/modeld/modeld.py
++++ b/selfdrive/modeld/modeld.py
+@@ -267,6 +267,10 @@
+   sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl", "liveDelay",
+                   *[s for s in jetlink_adapter.IN_CONTROL if s not in ("carState", "carControl")]])
+ 
++  # Jetlink API 3 reads the same per-frame control state as modeld.
++  if not EGPU:
++    jetlink_adapter.use_submaster(sm)
++
+   publish_state = PublishState()
+   params = Params()
+ 
+@@ -388,7 +392,6 @@
+     # handovers); the stall of one is not lag, and nor are the drops of the frame it happens on. The
+     # joining model hands a large model back on this share of dropped frames, and swaps one in only
+     # while nothing is in control
+-    model.in_control = jetlink_adapter.in_control(sm)
+     model.frame_drop_ratio = frame_drop_ratio
+     handovers = getattr(model, 'handovers', 0)
+     big_driving = model is not small_model and getattr(model, 'chestnut', False)
+--- /dev/null
++++ b/selfdrive/modeld/tests/test_jetlink_egpu_integration.py
+@@ -0,0 +1,100 @@
++import ast
++import importlib.util
++import sys
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++ROOT = Path(__file__).resolve().parents[3]
++
++
++def load(name, path):
++  spec = importlib.util.spec_from_file_location(name, ROOT / path)
++  module = importlib.util.module_from_spec(spec)
++  sys.modules[name] = module
++  spec.loader.exec_module(module)
++  return module
++
++
++@pytest.fixture
++def adapter():
++  return load('integration_adapter', 'dragonpilot/jetlink_adapter/__init__.py')
++
++
++def test_api3_contract(adapter):
++  interface = load('integration_interface', 'jetlink_repo/jetlink/openpilot/interface.py')
++  obj = adapter.Adapter.__new__(adapter.Adapter)
++  obj.keys = adapter.KEYS
++  obj.log = SimpleNamespace()
++  obj.basedir = ROOT
++  assert adapter.API == 3
++  assert interface.conformance(obj, interface.Openpilot) == []
++
++
++@pytest.mark.parametrize('enabled,seen,link_enabled,expected', [
++  (True, True, True, False), (True, True, False, False),
++  (False, True, True, True), (True, False, True, True),
++  (False, False, False, False),
++])
++def test_usb_reservation(adapter, enabled, seen, link_enabled, expected):
++  calls = []
++  adapter._api = lambda: calls.append(True) or SimpleNamespace(enabled=lambda: link_enabled)
++  params = SimpleNamespace(get_bool=lambda key: {'dp_egpu_enabled': enabled, 'dp_egpu_seen': seen}[key])
++  assert adapter.should_run(False, params, None) is expected
++  assert bool(calls) is not (enabled and seen)
++
++
++@pytest.mark.parametrize('usb_id', [(0xADD1, 1), (0x3801, 1), (0xADD1, 2), (0x174C, 0x2464), (0x174C, 0x2463)])
++def test_host_device_ids_preserved(adapter, usb_id):
++  assert usb_id in adapter.CHESTNUT_IDS
++
++
++@pytest.mark.parametrize('valid,enabled,lat,alka,main,gear,expected', [
++  (True, False, False, False, False, 'drive', False),
++  (True, True, False, False, False, 'drive', True),
++  (True, False, True, False, False, 'drive', True),
++  (True, False, False, True, False, 'drive', True),
++  (True, False, False, False, True, 'drive', True),
++  (True, False, False, False, True, 'park', False),
++  (False, False, False, False, False, 'park', True),
++])
++def test_api3_reads_shared_control_state(adapter, valid, enabled, lat, alka, main, gear, expected):
++  class SM:
++    def all_alive(self, services): return valid
++    def all_valid(self, services): return valid
++    def __getitem__(self, name):
++      return {'carControl': SimpleNamespace(enabled=enabled, latActive=lat),
++              'controlsStateExt': SimpleNamespace(alkaActive=alka),
++              'carStateExt': SimpleNamespace(lkasOn=main),
++              'carState': SimpleNamespace(gearShifter=gear)}[name]
++  adapter._alka = lambda: True
++  adapter.use_submaster(SM())
++  assert adapter.Adapter.__new__(adapter.Adapter).in_control() is expected
++
++
++def test_modeld_wires_shared_submaster_before_inference():
++  tree = ast.parse((ROOT / 'selfdrive/modeld/modeld.py').read_text())
++  main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
++  wire = next(n for n in ast.walk(main) if isinstance(n, ast.Call) and ast.unparse(n.func) == 'jetlink_adapter.use_submaster')
++  loop = [n for n in main.body if isinstance(n, ast.While)][-1]
++  assert wire.lineno < loop.lineno
++  assert 'egpu_loader' in [a.arg for a in main.args.args]
++
++
++def test_new_warp_name_does_not_load_old_jit(adapter):
++  path = adapter.warp_path(1928, 1208, 512, 256)
++  assert path.name == 'driving_warp_1928x1208_512x256_tinygrad.pkl'
++  build = (ROOT / 'dragonpilot/jetlink_adapter/SConscript').read_text()
++  assert 'dragonpilot.jetlink_adapter.build_warp' in build
++
++
++def test_egpu_routes_and_params_preserved():
++  config = (ROOT / 'system/manager/process_config.py').read_text()
++  assert 'NativeProcess("modeld_egpu"' in config
++  assert 'PythonProcess("egpu_manager"' in config
++  assert 'and_(only_onroad, not_egpu_big_model)' in config
++  assert 'cluster_d' not in config
++  params = (ROOT / 'common/params_keys.h').read_text()
++  for key in ['dp_egpu_enabled', 'dp_egpu_failed', 'dp_egpu_running', 'JetlinkLink', 'JetlinkSpec']:
++    assert '"' + key + '"' in params
+--- a/selfdrive/selfdrived/events.py
++++ b/selfdrive/selfdrived/events.py
+@@ -261,6 +261,21 @@
+     f"請保持車速高於 {get_display_speed(MIN_SPEED_FILTER, metric)}",
+     AlertStatus.normal, AlertSize.mid,
+     Priority.LOWEST, VisualAlert.none, AudibleAlert.none, .2)
++
++
++def big_model_available_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
++  # dp - jetlink: what releases control depends on ALKA. With it on, ALKA steers whenever ACC
++  # main is on, so cancelling cruise is not enough: main off, or P/N/R (jetlink_adapter.SWAP_WHILE_PARKED)
++  from opendbc.safety import ALTERNATIVE_EXPERIENCE
++  if CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALKA:
++    text2 = "ALKA 開啟中：關閉巡航主開關或排入 P 檔即切換"
++  else:
++    text2 = "取消巡航即可切換"
++  return Alert(
++    "大模型已就緒",
++    text2,
++    AlertStatus.normal, AlertSize.mid,
++    Priority.LOW, VisualAlert.none, AudibleAlert.prompt, .2)
+ 
+ 
+ def audio_feedback_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
+@@ -1032,6 +1047,39 @@
+ 
+   EventName.audioFeedback: {
+     ET.PERMANENT: audio_feedback_alert,
++  },
++
++  # dp - jetlink (ported from zoompilot): the large model on an attached device.
++  # For a second after a swap nothing engages while the large model builds its
++  # history and proves it keeps up (accelerator_events)
++  EventName.bigModelLoading: {
++    ET.NO_ENTRY: NoEntryAlert("大模型切換中"),
++  },
++
++  # a second after its swap, when the driver can engage
++  EventName.bigModelReady: {
++    ET.PERMANENT: Alert(
++      "大模型已啟用",
++      "",
++      AlertStatus.normal, AlertSize.small,
++      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, 2.),
++  },
++
++  # ready while something is in control: it swaps in only when nothing is,
++  # so the next engagement after a full disengage drives it. Raised for 3 s
++  EventName.bigModelAvailable: {
++    ET.PERMANENT: big_model_available_alert,
++  },
++
++  # lost or too slow while engaged: the small model drives on from a reset
++  # history and nothing disengages. As loud as a soft disable for 5 s, but it
++  # says what happened, not TAKE CONTROL
++  EventName.bigModelLinkLost: {
++    ET.WARNING: Alert(
++      "大模型連線中斷",
++      "改用小模型駕駛",
++      AlertStatus.userPrompt, AlertSize.mid,
++      Priority.MID, VisualAlert.steerRequired, AudibleAlert.warningSoft, .2),
+   },
+ }
+ 
