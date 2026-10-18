@@ -264,7 +264,7 @@ def _build_param_setting_map():
             # action_item entries use `key` as the action name, not a real
             # param — skip so they don't leak into the param read/write
             # allowlist.
-            if setting.get('type') == 'action_item':
+            if setting.get('type') in ('action_item', 'link_item'):
                 continue
             out[key] = setting
     return out
@@ -450,7 +450,7 @@ def _get_setting_value(params, setting):
             if value is None:
                 return ''
             return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else str(value)
-        elif setting_type == 'action_item':
+        elif setting_type in ('action_item', 'link_item'):
             # Pure action buttons have no stored value; return None so the
             # UI treats it as display-only.
             return None
@@ -465,7 +465,7 @@ def _get_setting_value(params, setting):
             return float(default)
         elif setting_type in ('text_input_item', 'text_display_item'):
             return ''
-        elif setting_type == 'action_item':
+        elif setting_type in ('action_item', 'link_item'):
             return None
         return int(default)
 
@@ -817,6 +817,10 @@ def setup_aiohttp_app(host: str, port: int, debug: bool):
     )
 
     app = web.Application(middlewares=[no_cache_middleware])
+
+    from dragonpilot.dashy.accelerators import get_status, post_action
+    app.router.add_get("/api/accelerators", get_status)
+    app.router.add_post("/api/accelerators", post_action)
 
     # API routes
     app.router.add_get("/api/init", init_api)

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>外部模型設定 · Dashy</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#111820;color:#eef3f7}body{max-width:760px;margin:auto;padding:22px 18px 60px}a{color:#9ed3ff}nav{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}h1{font-size:26px}h2{font-size:23px;margin:0}section{background:#1b2530;border:1px solid #354555;border-radius:16px;padding:20px;margin:22px 0;scroll-margin-top:15px}p{line-height:1.6}.muted{color:#b4c4d2}label{display:block;margin:20px 0 8px}select,button{font:inherit;border-radius:9px;border:1px solid #597082;background:#253747;color:inherit;padding:12px;min-height:46px}select{width:100%}button{cursor:pointer}button:disabled,select:disabled{opacity:.45;cursor:default}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.danger{border-color:#c77d7d}output{display:block;white-space:pre-wrap;line-height:1.7;margin:14px 0}#notice{position:sticky;top:8px;background:#283b4a;padding:12px;border-radius:10px;z-index:1}.error{color:#ffb8b8}input[type=checkbox]{width:22px;height:22px;vertical-align:middle;margin-right:10px}small{display:block;margin-top:8px;color:#b4c4d2}
+</style></head><body>
+<a href="/">← 返回 Dashy</a><h1>外部模型設定</h1><nav><a href="#egpu">eGPU</a><a href="#jetlink">Jetlink</a></nav>
+<p id="notice" role="status">正在讀取裝置狀態…</p><p id="message" role="alert"></p>
+<section id="egpu"><h2>eGPU</h2><p class="muted">啟動先使用小模型。eGPU 失敗時回小模型並在背景重試，就緒後等控制解除再切回。</p>
+<label><input id="egpu-enabled" type="checkbox" disabled>啟用 eGPU 大模型</label><output id="egpu-status">讀取中…</output>
+<label for="egpu-model">大模型</label><select id="egpu-model" disabled></select><small>選擇後按套用；需要時會下載並在裝置上編譯，編譯需接上 eGPU。</small>
+<div class="actions"><button data-target="egpu" data-action="select" disabled>套用／下載模型</button><button data-target="egpu" data-action="cancel" disabled>取消下載／編譯</button></div>
+<label for="egpu-delete">已下載／編譯的模型</label><select id="egpu-delete" disabled></select><div class="actions"><button class="danger" data-target="egpu" data-action="delete" disabled>刪除選取模型</button><button class="danger" data-target="egpu" data-action="clear" disabled>清除快取（保留目前模型）</button></div>
+</section>
+<section id="jetlink"><h2>Jetlink</h2><p class="muted">連接手機、Mac 或其他外部運算裝置。開啟 Jetlink 會關閉 ADB；與 eGPU 共用連接埠，請擇一使用。</p>
+<label for="jetlink-mode">連線方式</label><select id="jetlink-mode" disabled><option value="0">關閉</option><option value="1">USB（Jetson／Linux／Mac）</option><option value="2">iOS（iPhone）</option></select>
+<div class="actions"><button data-target="jetlink" data-action="mode" disabled>套用連線方式</button></div><output id="jetlink-status">讀取中…</output>
+<label for="jetlink-model">大模型</label><select id="jetlink-model" disabled></select><small>選擇「跟隨外部裝置」，即可使用手機或外部裝置上選定的模型。</small><div class="actions"><button data-target="jetlink" data-action="select" disabled>套用模型</button></div>
+</section>
+<button data-target="egpu" data-action="refresh" disabled>更新共用模型清單</button><small>eGPU 與 Jetlink 共用清單，由裝置背景更新；狀態每 2 秒刷新。</small>
+<script src="/js/accelerators.js"></script></body></html>
