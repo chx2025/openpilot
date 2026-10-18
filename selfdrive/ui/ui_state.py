@@ -331,10 +331,12 @@ class UIState:
       state = EgpuState.FAILED
     elif p.get_bool(egpu_const.P_LOADING):
       state = EgpuState.LOADING
+    elif self.started and p.get_bool(egpu_const.P_READY):
+      state = EgpuState.READY
     elif self.started and p.get_bool(egpu_const.P_RUNNING):
       state = EgpuState.ACTIVE
     elif not self.egpu_enabled or self.egpu_bundle is None or self.started:
-      # onroad and neither loading nor running: the stock modeld drives this drive (route latched off)
+      # No active or ready worker: the local small model is in use.
       state = EgpuState.NO_MODEL
     else:
       state = EgpuState.READY

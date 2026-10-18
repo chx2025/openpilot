@@ -92,14 +92,16 @@ def status_note() -> str:
   if state == EgpuState.NO_MODEL:
     if ui_state.egpu_bundle is None:
       return "已偵測到 eGPU，但尚未有編譯好的大模型，由內建小模型駕駛。"
-    return "本次行程由內建小模型駕駛（eGPU 於發動後才接上），下次發動時改用大模型。"
+    return "目前由小模型駕駛，等待 eGPU 就緒。若本趟未啟用 eGPU，請停車後重新發動。"
   if state == EgpuState.FAILED:
-    return f"{name} 無法使用，本次行程由內建小模型駕駛，下次發動時再試。"
+    return f"{name} 無法使用，已改用小模型。解除 ACC 與全時置中後可重新嘗試；若失敗時已解除，請再次開啟並關閉巡航主開關。"
   if state == EgpuState.LOADING:
-    return f"{name} 載入中，載入完成前不會發布模型輸出。"
+    return f"{name} 背景載入中，目前由小模型駕駛。"
   if state == EgpuState.ACTIVE:
-    return f"{name} 正在 eGPU 上駕駛；發生錯誤時本次行程改用內建小模型。"
-  return f"下次發動將由 {name} 駕駛；載入失敗或執行錯誤時改用內建小模型。"
+    return f"{name} 正在 eGPU 上駕駛；失敗時改用小模型，解除控制後可重試。"
+  if ui_state.started:
+    return f"{name} 已就緒；解除 ACC 與全時置中後切入，目前仍由小模型駕駛。"
+  return f"發動後先由小模型駕駛，再背景載入 {name}。"
 
 
 def _mmss(seconds) -> str:

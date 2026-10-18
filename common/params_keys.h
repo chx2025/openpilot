@@ -200,6 +200,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_egpu_status", {CLEAR_ON_MANAGER_START, JSON}},
     {"dp_egpu_clear_cache", {CLEAR_ON_MANAGER_START, BOOL, "0"}},
     {"dp_egpu_loading", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
+    {"dp_egpu_ready", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
     {"dp_egpu_running", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
     {"dp_egpu_failed", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
     {"dp_egpu_pointers", {PERSISTENT, JSON}},
