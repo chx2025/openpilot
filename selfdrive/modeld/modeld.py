@@ -269,8 +269,7 @@ def main(demo=False, egpu_loader=None):
     model = JoiningEgpu(small_model, vipc_client_main.width, vipc_client_main.height,
                         get_nv12_info(vipc_client_main.width, vipc_client_main.height)[3], params,
                         lambda: jetlink_adapter.in_control(sm), prepare_reset(small_model), cloudlog,
-                        LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS,
-                        retry_control=lambda: jetlink_adapter.in_control(sm) or bool(sm["carStateExt"].lkasOn))
+                        LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS)
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
   # messaging

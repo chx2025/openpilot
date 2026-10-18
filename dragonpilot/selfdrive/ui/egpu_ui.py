@@ -94,11 +94,11 @@ def status_note() -> str:
       return "已偵測到 eGPU，但尚未有編譯好的大模型，由內建小模型駕駛。"
     return "目前由小模型駕駛，等待 eGPU 就緒。若本趟未啟用 eGPU，請停車後重新發動。"
   if state == EgpuState.FAILED:
-    return f"{name} 無法使用，已改用小模型。解除 ACC 與全時置中後可重新嘗試；若失敗時已解除，請再次開啟並關閉巡航主開關。"
+    return f"{name} 無法使用，已改用小模型。裝置連線後會自動背景重試，就緒後等解除控制再切回。"
   if state == EgpuState.LOADING:
     return f"{name} 背景載入中，目前由小模型駕駛。"
   if state == EgpuState.ACTIVE:
-    return f"{name} 正在 eGPU 上駕駛；失敗時改用小模型，解除控制後可重試。"
+    return f"{name} 正在 eGPU 上駕駛；失敗時改用小模型，背景自動重試，就緒後等解除控制再切回。"
   if ui_state.started:
     return f"{name} 已就緒；解除 ACC 與全時置中後切入，目前仍由小模型駕駛。"
   return f"發動後先由小模型駕駛，再背景載入 {name}。"

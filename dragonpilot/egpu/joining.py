@@ -1,4 +1,4 @@
-"""Small-model-first eGPU routing with control-release retry and isolated inference."""
+"""Small-model-first eGPU routing with background retry and isolated inference."""
 import atexit
 import time
 
@@ -7,7 +7,6 @@ from dragonpilot.egpu.bundles import active_ready, get_active_bundle
 from dragonpilot.egpu.constants import P_ENABLED, P_PRESENT, P_FAILED, P_LOADING, P_RUNNING, P_READY
 from dragonpilot.egpu.ipc import Worker
 
-RELEASE_SECONDS = 0.5
 RETRY_SECONDS = 5.0
 SMALL_WARMUP_FRAMES = 3
 # Same dropped-camera-frame threshold as Jetlink 0.8.7 JoiningModelState.
@@ -15,31 +14,17 @@ DROP_LIMIT = 0.0075
 
 
 class RetryGate:
-  """After failure require a control release, never repeatedly retry while already idle."""
+  """Retry loading after a cooldown, independently of vehicle control."""
   def __init__(self):
     self.failed = False
-    self.seen_control = False
-    self.released_at = None
     self.retry_at = 0.0
 
-  def fail(self, controlling, now):
+  def fail(self, now):
     self.failed = True
-    self.seen_control = controlling
-    self.released_at = None
     self.retry_at = now + RETRY_SECONDS
 
-  def allow(self, controlling, now):
-    if not self.failed:
-      return True
-    if controlling:
-      self.seen_control = True
-      self.released_at = None
-      return False
-    if not self.seen_control:
-      return False
-    if self.released_at is None:
-      self.released_at = now
-    return now >= self.retry_at and now - self.released_at >= RELEASE_SECONDS
+  def allow(self, now):
+    return not self.failed or now >= self.retry_at
 
   def reset(self):
     self.__init__()
@@ -49,13 +34,11 @@ class JoiningEgpu(EgpuAction):
   egpu_joining = True
 
   def __init__(self, small, width, height, frame_size, params, in_control, reset_small, log,
-               small_lat, small_long, worker_factory=Worker, clock=time.monotonic, retry_control=None):
+               small_lat, small_long, worker_factory=Worker, clock=time.monotonic):
     self.small = small
     self.params, self.in_control, self.reset_small, self.log = params, in_control, reset_small, log
     self.geometry = (width, height, frame_size)
     self.factory, self.clock = worker_factory, clock
-    # ACC-main state also observes a manual off/on cycle while parked.
-    self.retry_control = retry_control or in_control
     self.small_lat, self.small_long = small_lat, small_long
     self.worker = None
     self.bundle = None
@@ -93,8 +76,8 @@ class JoiningEgpu(EgpuAction):
           self.params.put_bool(key, value, block=True)
       self._flags_cache = flags
 
-  def _fail(self, reason, controlling, now):
-    self.log.error(f'egpu: returning to small model: {reason}; release control to retry')
+  def _fail(self, reason, now):
+    self.log.error(f'egpu: returning to small model: {reason}; background retry scheduled')
     if self.worker:
       self.worker.close()
     if self.chestnut:
@@ -102,7 +85,7 @@ class JoiningEgpu(EgpuAction):
       self.handovers += 1
     self.chestnut = False
     self.small_frames = 0
-    self.gate.fail(controlling or self.retry_control(), now)
+    self.gate.fail(now)
     self._flags(False, False, False, True)
 
   def close(self):
@@ -116,10 +99,10 @@ class JoiningEgpu(EgpuAction):
     if not self.gate.failed and self.worker and (
         self.worker.error is not None or self.worker.done.is_set() or not enabled or not present or
         self.params.get_bool(P_FAILED) or (self.chestnut and self.frame_drop_ratio > DROP_LIMIT)):
-      self._fail(self.worker.error or 'disconnected, disabled, watchdog or frame lag', controlling, now)
+      self._fail(self.worker.error or 'disconnected, disabled, watchdog or frame lag', now)
 
     if not self.chestnut and (self.worker is None or self.gate.failed) and enabled and present:
-      if self.gate.allow(controlling or self.retry_control(), now) and (self.worker is None or self.worker.done.is_set()):
+      if self.gate.allow(now) and (self.worker is None or self.worker.done.is_set()):
         bundle = get_active_bundle(self.params)
         if active_ready(bundle):
           self.bundle = bundle
@@ -132,7 +115,7 @@ class JoiningEgpu(EgpuAction):
           try:
             self.worker = self.factory(*self.geometry, bundle)
           except Exception as exc:
-            self._fail(exc, controlling, now)
+            self._fail(exc, now)
 
     ready = self.worker is not None and self.worker.ready.is_set() and not self.gate.failed
     if ready and not self.chestnut:
@@ -151,7 +134,7 @@ class JoiningEgpu(EgpuAction):
         self._flags(False, True, False, False)
         return output
       except Exception as exc:
-        self._fail(exc, controlling, now)
+        self._fail(exc, now)
 
     self.small.lat_delay = self.lat_delay
     self.small.frame_drop_ratio = self.frame_drop_ratio
