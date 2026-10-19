@@ -195,9 +195,9 @@ class ModelState:
 
 
 def main(demo=False, egpu_loader=None):
-  """Production starts the local small model and optionally joins an isolated eGPU worker.
-  egpu_loader is retained only for the legacy standalone diagnostic entry point.
-  """
+  """dp - egpu: egpu_loader(cam_w, cam_h) -> EgpuModelState runs this loop for a big model compiled on
+  this device for the eGPU (dragonpilot/egpu/modeld_egpu.py). It replaces the small model outright: no jetlink,
+  no prepare_only path; a failure raises out and manager restarts the stock modeld (dp_egpu_failed)."""
   cloudlog.warning("modeld init")
   EGPU = egpu_loader is not None
 
@@ -205,9 +205,7 @@ def main(demo=False, egpu_loader=None):
   _compiled = EGPU or os.path.isfile(get_manifest_path(modeld_pkl_path(usbgpu=True)))
   params = Params()
   egpu_failed = params.get_bool("dp_egpu_failed")
-  # The small model always starts locally; the downloaded eGPU bundle joins later.
-  EGPU_JOIN = not EGPU and params.get_bool("dp_egpu_enabled") and (_present or params.get_bool("dp_egpu_seen"))
-  USBGPU = EGPU
+  USBGPU = use_builtin_usbgpu(_present, _compiled, egpu_failed)
   params.put_bool("UsbGpuPresent", _present)
   params.put_bool("UsbGpuCompiled", _compiled)
 
@@ -219,8 +217,7 @@ def main(demo=False, egpu_loader=None):
   elif not USBGPU:
     # dp - jetlink: before going realtime: prepare() starts tinygrad's device thread, which would
     # inherit FIFO 54 on core 7. Never beside a USB GPU, which runs the big model natively
-    if not EGPU_JOIN and not _present:
-      jetlink_adapter.prepare()
+    jetlink_adapter.prepare()
     # USB GPU currently saturates a core so can't do this yet,
     # also need to move the aux USB interrupts for good timings
     config_realtime_process(7, 54)
@@ -259,17 +256,10 @@ def main(demo=False, egpu_loader=None):
     model = small_model
   # dp - jetlink: the small model drives until the attached device has joined, then it is swapped
   # in underneath (only while nothing is in control) and handed back on a lost or lagging link
-  if not EGPU and not EGPU_JOIN and not _present and not egpu_failed and (
+  if not EGPU and not USBGPU and not egpu_failed and (
     joined := jetlink_adapter.attach(small_model, vipc_client_main.width, vipc_client_main.height)
   ) is not None:
     model = joined
-  if EGPU_JOIN:
-    from dragonpilot.egpu.joining import JoiningEgpu
-    from jetlink.openpilot.warp import prepare_reset
-    model = JoiningEgpu(small_model, vipc_client_main.width, vipc_client_main.height,
-                        get_nv12_info(vipc_client_main.width, vipc_client_main.height)[3], params,
-                        lambda: jetlink_adapter.in_control(sm, allow_parked=False), prepare_reset(small_model), cloudlog,
-                        LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS)
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
   # messaging
@@ -406,7 +396,7 @@ def main(demo=False, egpu_loader=None):
     handovers = getattr(model, 'handovers', 0)
     big_driving = model is not small_model and getattr(model, 'chestnut', False)
     mt1 = time.perf_counter()
-    if EGPU or EGPU_JOIN:
+    if EGPU:
       # dp - egpu: the fused JIT warps, enqueues and runs every frame (sunnypilot modeld_v2 has no prepare_only)
       model_output = model.run(bufs, transforms, inputs)
     elif prepare_only and not big_driving:
@@ -430,7 +420,7 @@ def main(demo=False, egpu_loader=None):
 
       # dp - jetlink: a frame the large model drove takes zoompilot's action function (action head
       # when the model has one); the small model keeps dp's, lateral offset included
-      if EGPU or (EGPU_JOIN and model.chestnut):
+      if EGPU:
         # dp - egpu: sunnypilot modeld_v2's action (bundle lat/long smoothing), dp lateral offset kept
         action = model.get_action(model_output, prev_action, lat_action_t, long_action_t, v_ego, dp_lat_offset_cm)
       elif model is not small_model and getattr(model, 'chestnut', False):

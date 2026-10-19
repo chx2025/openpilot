@@ -152,6 +152,3 @@ ST_FAILED = "failed"
 ST_CANCELLED = "cancelled"
 ST_WAITING_EGPU = "waiting_egpu"    # downloaded, compile needs the eGPU plugged in
 BUSY_STATES = (ST_RESOLVING, ST_DOWNLOADING, ST_COMPILING_WARP, ST_COMPILING)
-
-# Loaded eGPU worker waiting for the driver to release control.
-P_READY = "dp_egpu_ready"

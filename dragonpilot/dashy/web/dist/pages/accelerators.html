@@ -5,7 +5,7 @@
 </style></head><body>
 <a href="/">← 返回 Dashy</a><h1>外部模型設定</h1><nav><a href="#egpu">eGPU</a><a href="#jetlink">Jetlink</a></nav>
 <p id="notice" role="status">正在讀取裝置狀態…</p><p id="message" role="alert"></p>
-<section id="egpu"><h2>eGPU</h2><p class="muted">啟動先使用小模型。eGPU 失敗時回小模型，解除巡航與全時置中後才開始載入；載入途中重新啟用控制會中止載入。載入成功、未啟用控制時，裝置上的綠色 eGPU 圖示會閃動。</p>
+<section id="egpu"><h2>eGPU</h2><p class="muted">進入 onroad 時選擇模型路徑。eGPU 符合條件時直接載入大模型，完成前尚無模型輸出；失敗後本趟改用小模型，下次 offroad／onroad 再嘗試。已成功運作且未啟用控制時，裝置上的綠色 eGPU 圖示會閃動。</p>
 <label><input id="egpu-enabled" type="checkbox" disabled>啟用 eGPU 大模型</label><output id="egpu-status">讀取中…</output>
 <label for="egpu-model">大模型</label><select id="egpu-model" disabled></select><small>選擇後按套用；需要時會下載並在裝置上編譯，編譯需接上 eGPU。</small>
 <div class="actions"><button data-target="egpu" data-action="select" disabled>套用／下載模型</button><button data-target="egpu" data-action="cancel" disabled>取消下載／編譯</button></div>

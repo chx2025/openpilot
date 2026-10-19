@@ -30,7 +30,7 @@
     options('egpu-model',e.models,'不使用大模型',e.pending || e.active.ref);
     options('egpu-delete',e.models.filter(r=>r.compiled||r.downloaded),'請選擇要刪除的模型','');
     options('jetlink-model',j.models,'跟隨外部裝置',j.selected.ref);
-    const es=!e.enabled?'已停用':e.running?'大模型運作中':e.ready?'已就緒，等待解除控制':e.loading?'背景載入中':e.failed?'使用小模型，等待解除巡航與全時置中後重試':e.present?'eGPU 已連接':'未偵測到 eGPU';
+    const es=!e.enabled?'已停用':e.running?'大模型運作中':e.loading?'載入中，完成前尚無模型輸出':e.failed?'本趟改用小模型，下次 offroad／onroad 再嘗試':e.present?'eGPU 已連接':'未偵測到 eGPU';
     $('egpu-status').textContent=[es,`目前模型：${e.active.display_name || '未選擇'}`,progress(e.progress)].filter(Boolean).join('\n');
     $('jetlink-status').textContent=[`外部裝置：${s.present?'已連接':'未連接'}`,`引擎：${s.ready?'已就緒':'尚未就緒'}`,`行車將使用：${s.model || '未知'}`,`外部裝置目前模型：${j.models.find(r=>r.loaded)?.name || '未回報或不在清單內'}`,s.transport,`USB 埠：${s.port || '未知'}`,`ADB：${j.adb?'開啟':'關閉'}`,j.reason||s.reason,progress(s.progress),j.reserved?'eGPU 保留連接埠，Jetlink 暫不可使用。':''].filter(Boolean).join('\n');
     document.querySelectorAll('button,select,input').forEach(el=>{el.disabled=sending||!state.offroad;});

@@ -87,7 +87,7 @@ class EgpuModelManager:
       expired = now - self._model_wait_started >= FIRST_OUTPUT_TIMEOUT
       reason = f"no first big-model output within {FIRST_OUTPUT_TIMEOUT}s"
     if expired:
-      cloudlog.error(f"egpu: {reason}; requesting small-model fallback; retry waits for ACC and ALKA release")
+      cloudlog.error(f"egpu: {reason}; failing this drive for stock fallback")
       self.params.put_bool(P_FAILED, True, block=True)
 
   # ------------------------------------------------------------------ status
@@ -356,7 +356,7 @@ class EgpuModelManager:
 
     if self.params.get_bool("IsOnroad"):
       if not present and (self.params.get_bool(P_LOADING) or self.params.get_bool(P_RUNNING)) and not self.params.get_bool(P_FAILED):
-        cloudlog.error("egpu: USB disappeared while the big model was loading/running; requesting small-model fallback; retry waits for ACC and ALKA release")
+        cloudlog.error("egpu: USB disappeared while the big model was loading/running; failing this drive for stock fallback")
         self.params.put_bool(P_FAILED, True, block=True)
       self.check_model_progress()
       return

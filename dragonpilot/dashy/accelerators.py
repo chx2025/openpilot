@@ -23,7 +23,7 @@ def snapshot(p):
   return {'offroad': offroad(p), 'egpu': {
     'enabled': p.get_bool(c.P_ENABLED), 'present': p.get_bool(c.P_PRESENT),
     'loading': p.get_bool(c.P_LOADING), 'running': p.get_bool(c.P_RUNNING),
-    'ready': p.get_bool(c.P_READY), 'failed': p.get_bool(c.P_FAILED),
+    'ready': p.get_bool(c.P_RUNNING), 'failed': p.get_bool(c.P_FAILED),
     'active': active if isinstance(active, dict) else {}, 'pending': p.get(c.P_DOWNLOAD_REF),
     'progress': p.get(c.P_STATUS) or {}, 'models': rows,
   }, 'jetlink': {'mode': int(p.get(jl.KEYS.link) or 0),
