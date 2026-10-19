@@ -1,4 +1,4 @@
-"""Small-model-first eGPU routing with background retry and isolated inference."""
+"""Small-model-first eGPU routing with disengaged-only loading and isolated inference."""
 import atexit
 import time
 
@@ -77,7 +77,7 @@ class JoiningEgpu(EgpuAction):
       self._flags_cache = flags
 
   def _fail(self, reason, now):
-    self.log.error(f'egpu: returning to small model: {reason}; background retry scheduled')
+    self.log.error(f'egpu: returning to small model: {reason}; retry waits for ACC and ALKA release')
     if self.worker:
       self.worker.close()
     if self.chestnut:
@@ -101,7 +101,12 @@ class JoiningEgpu(EgpuAction):
         self.params.get_bool(P_FAILED) or (self.chestnut and self.frame_drop_ratio > DROP_LIMIT)):
       self._fail(self.worker.error or 'disconnected, disabled, watchdog or frame lag', now)
 
-    if not self.chestnut and (self.worker is None or self.gate.failed) and enabled and present:
+    # Cancel unfinished initialization when control resumes; never interrupt a
+    # healthy worker that has already taken over model output.
+    if controlling and not self.chestnut and not self.gate.failed and self.worker and not self.worker.ready.is_set():
+      self._fail('control resumed during loading', now)
+
+    if not controlling and not self.chestnut and (self.worker is None or self.gate.failed) and enabled and present:
       if self.gate.allow(now) and (self.worker is None or self.worker.done.is_set()):
         bundle = get_active_bundle(self.params)
         if active_ready(bundle):

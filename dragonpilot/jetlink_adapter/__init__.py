@@ -602,7 +602,7 @@ def _own_submaster():
 
 
 @_guarded(True)
-def in_control(sm) -> bool:
+def in_control(sm, allow_parked: bool = True) -> bool:
   """modeld, before every frame, onto the model: is openpilot or ALKA in control?
   jetlink's large model swaps in only while it is not.
 
@@ -620,7 +620,7 @@ def in_control(sm) -> bool:
     return True
   if sm['carControl'].enabled or sm['carControl'].latActive or sm['controlsStateExt'].alkaActive:
     return True
-  return bool(_alka() and sm['carStateExt'].lkasOn and not parked(sm['carState']))
+  return bool(_alka() and sm['carStateExt'].lkasOn and (not allow_parked or not parked(sm['carState'])))
 
 
 # dp: how long ALKA may not start steering after the large model swaps in: its

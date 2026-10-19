@@ -268,7 +268,7 @@ def main(demo=False, egpu_loader=None):
     from jetlink.openpilot.warp import prepare_reset
     model = JoiningEgpu(small_model, vipc_client_main.width, vipc_client_main.height,
                         get_nv12_info(vipc_client_main.width, vipc_client_main.height)[3], params,
-                        lambda: jetlink_adapter.in_control(sm), prepare_reset(small_model), cloudlog,
+                        lambda: jetlink_adapter.in_control(sm, allow_parked=False), prepare_reset(small_model), cloudlog,
                         LAT_SMOOTH_SECONDS, LONG_SMOOTH_SECONDS)
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 

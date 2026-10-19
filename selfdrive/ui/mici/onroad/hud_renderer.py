@@ -11,6 +11,7 @@ from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets import Widget
 from openpilot.common.filter_simple import FirstOrderFilter
 from cereal import log, custom
+from dragonpilot.selfdrive.ui import egpu_ui, jetlink_ui
 
 EventName = log.OnroadEvent.EventName
 TRAFFIC_STOP_IDX = int(custom.LongitudinalPlanDP.LongitudinalPlanSource.trafficStop)
@@ -168,6 +169,9 @@ class HudRenderer(Widget):
     self._wheel_y_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
 
     self._set_speed_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
+
+    # Share eGPU readiness/blink rules with the C3/C3X UI.
+    self._egpu_icons = jetlink_ui.JetlinkIcons(60, 44)
 
     # dp - jetlink: zoompilot's mici model-source icon
     self._txt_jetlink: rl.Texture = gui_app.texture('../../dragonpilot/selfdrive/assets/icons/jetlink.png', 60, 44)
@@ -361,6 +365,15 @@ class HudRenderer(Widget):
     shows for a moment whenever the state changes; waiting is a steady dim green."""
     if ui_state.sm.recv_frame['selfdriveState'] < ui_state.started_frame:
       return
+    # eGPU owns this slot while attached. Keep it visible instead of applying
+    # Jetlink's short state-change fade, so the ready reminder keeps blinking.
+    if ui_state.egpu_present:
+      icon, opacity = egpu_ui.icon_for(self._egpu_icons, ui_state.egpu_state)
+      if icon is not None:
+        pos = rl.Vector2(rect.x + rect.width - 10 - icon.width, rect.y + rect.height - 14 - (50 + icon.height) / 2)
+        rl.draw_texture_ex(icon, pos, 0.0, 1.0, jetlink_ui.tint(opacity))
+      return
+
     state = ui_state.jetlink_state
     loading = state == JetlinkState.LOADING
     if loading:

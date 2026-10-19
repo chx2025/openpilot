@@ -9,6 +9,9 @@ The icons are comma's chestnut icons, the same files the jetlink port ships
 Strings are Traditional Chinese written in place, as the jetlink panel does; every character used
 is one the UI font already carries (selfdrive/ui/translations/app_zh-CHT.po), otherwise it draws "?".
 """
+import time
+from dragonpilot import jetlink_adapter
+
 from openpilot.selfdrive.ui.ui_state import ui_state, EgpuState, JetlinkState
 from dragonpilot.selfdrive.ui import jetlink_ui
 from dragonpilot.egpu.bundles import pointer_for, onnx_present, model_compiled
@@ -47,7 +50,13 @@ _AS_JETLINK = {
 
 
 def icon_for(icons: "jetlink_ui.JetlinkIcons", state: EgpuState):
-  return icons.for_state(_AS_JETLINK[state])
+  texture, opacity = icons.for_state(_AS_JETLINK[state])
+  # Onroad READY comes from the warmed worker; ACTIVE means successful output.
+  # Do not blink for a merely compiled model while offroad.
+  if (ui_state.started and state in (EgpuState.READY, EgpuState.ACTIVE)
+      and not jetlink_adapter.in_control(ui_state.sm, allow_parked=False)):
+    opacity = 1.0 if int(time.monotonic() * 2) % 2 == 0 else 0.25
+  return texture, opacity
 
 
 def badge_text(state: EgpuState) -> str:
@@ -94,14 +103,14 @@ def status_note() -> str:
       return "已偵測到 eGPU，但尚未有編譯好的大模型，由內建小模型駕駛。"
     return "目前由小模型駕駛，等待 eGPU 就緒。若本趟未啟用 eGPU，請停車後重新發動。"
   if state == EgpuState.FAILED:
-    return f"{name} 無法使用，已改用小模型。裝置連線後會自動背景重試，就緒後等解除控制再切回。"
+    return f"{name} 無法使用，已改用小模型。解除 ACC 與全時置中後才重新載入。"
   if state == EgpuState.LOADING:
     return f"{name} 背景載入中，目前由小模型駕駛。"
   if state == EgpuState.ACTIVE:
-    return f"{name} 正在 eGPU 上駕駛；失敗時改用小模型，背景自動重試，就緒後等解除控制再切回。"
+    return f"{name} 正在 eGPU 上駕駛；失敗時改用小模型，解除 ACC 與全時置中後才重新載入。"
   if ui_state.started:
-    return f"{name} 已就緒；解除 ACC 與全時置中後切入，目前仍由小模型駕駛。"
-  return f"發動後先由小模型駕駛，再背景載入 {name}。"
+    return f"{name} 已載入就緒；未啟用控制時綠色圖示閃動。"
+  return f"發動後先由小模型駕駛，解除 ACC 與全時置中後才載入 {name}。"
 
 
 def _mmss(seconds) -> str:
