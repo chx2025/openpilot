@@ -90,10 +90,23 @@ set_aux_panda() {
   local mode="/sys/devices/platform/soc/a600000.ssusb/mode"
   [ -e "$mode" ] || return 0
 
+  # dp - egpu: 该端口同时承载 eGPU 底座（ASM2464，3801）。开启 eGPU 时
+  # 必须保持 host 模式让底座枚举，绝不能在检测不到第二个 panda 时 echo none
+  # 把端口切回 device 模式（会把已枚举的 eGPU 一起切断，见 dmesg usb 4-1 disconnect）。
+  local egpu=$(cat /data/params/d/dp_egpu_enabled 2>/dev/null)
+  if [ "$egpu" = "1" ]; then
+    echo host | sudo tee "$mode" >/dev/null 2>&1
+    return 0
+  fi
+
   echo host | sudo tee "$mode" >/dev/null 2>&1
   for _ in $(seq 1 6); do
     sleep 0.5
     if [ "$(lsusb 2>/dev/null | grep -c 'comma.ai panda')" -ge 2 ]; then
+      return 0
+    fi
+    # dp - egpu: 检测到 eGPU 底座（3801:0001 或 ADD1:0002）也保持 host
+    if lsusb 2>/dev/null | grep -qiE '3801:0001|3801:0002'; then
       return 0
     fi
   done
