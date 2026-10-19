@@ -172,7 +172,12 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
   elif (track is None) and ready and (lead_prob > .5):
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego, lead_prob)
 
-  if low_speed_override:
+  # dp: 轉彎（角度或角速度超門檻）時跳過原廠低速強制停車。根因：掉頭/大角度轉向時
+  # 路邊固定物（護欄/路緣石/牆壁）的雷達回波會掃過正前方，yRel 掉進 ±1m 內，
+  # potential_low_speed_lead 不看轉向、不看視覺、不看橫向走廊，會把固定物鎖成前車，
+  # 導致低速蠕行時誤踩煞車（實測 vEgo≈2m/s 掉頭時 aTarget 掉到 -0.64）。
+  is_turning = _dp_kwargs.get('is_turning', False)
+  if low_speed_override and not is_turning:
     low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
     if len(low_speed_tracks) > 0:
       closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
