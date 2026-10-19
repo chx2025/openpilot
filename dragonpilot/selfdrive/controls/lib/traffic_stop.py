@@ -6,6 +6,13 @@ settings. Apply A's speed-target and MPC-obstacle release gates (default 2.16).
 The local RELEASE_BRAKE_MPS2 constant replaces A's SP-only hot Params setting.
 A's SP diagnostic logging integration is not included in this standalone port.
 
+dp0111pre 整合修正（刻意分歧，cp 原版沒有這個閘門）：
+- 「必須煞車才給 MPC 障礙物」改為鎖存：本次 STOPPING 一旦達到必須煞車點就持續提供障礙物，
+  直到離開 STOPPING / STOPPED。A 原版每幀重判，MPC 一煞車、車速低於 v_release 就又把障礙物
+  拿掉，模擬中 30~60 km/h 進場會反覆啟用/解除 45~104 次並衝過停止線約 2 m。
+- 另外提供 near_stop_dist_m（不受閘門影響，等同原本的 stop_dist_m）給 AEM 的「接近停止線」
+  判斷；stop_dist_m 只代表「MPC 目前要不要把停止線當障礙物」。
+
 Ported from the carrot (cp) fork's traffic-stop mechanism into openpilot-dptest.
 Pure-function layer is numerically verified against cp's official
 `selfdrive/carrot/tests/test_traffic_stop.py`; the state machine is a
@@ -110,6 +117,9 @@ STOP_SIGN_LATERAL_TOLERANCE_M = 5.0
 # this constant is the fixed physical correction (not user-editable), and
 # dp_lon_traffic_stop_distance_adjust_m (settings ITEMS, +/-5m, default 0) is
 # the small user preference layered on top via get_traffic_stop_obstacle_distance().
+# dp 符號約定（與設定說明一致）：使用者值「正 = 停更後面、負 = 停更前面」。
+# 障礙物距離越大車停得越前面，所以使用者值是「減」進障礙物距離（見 update() 內呼叫處）。
+# ⚠️ 刻意分歧：cp 原版是直接加上去（正值 = 停更前面）。
 CAMERA_TO_FRONT_M = -1.5
 
 PARAM_ENABLED = "dp_lon_traffic_stop"
@@ -209,7 +219,9 @@ class TrafficStopController:
     self.gas_suppress_frames = 0
     self.stopped_grace_frames = 0
 
-    self.stop_dist_m: float | None = None
+    self.stop_dist_m: float | None = None        # 給 MPC：閘門後的障礙物距離（None = 不給）
+    self.near_stop_dist_m: float | None = None   # 給 AEM：不受閘門影響的停止線距離
+    self._obstacle_latched = False               # 本次 STOPPING 是否已達必須煞車點
     self.output_v_target = V_TARGET_SENTINEL
     self.output_a_target = 0.0
 
@@ -245,6 +257,8 @@ class TrafficStopController:
     self.reference_speed_kph = 0.0
     self.stopped_grace_frames = 0
     self.stop_dist_m = None
+    self.near_stop_dist_m = None
+    self._obstacle_latched = False
     self.output_v_target = V_TARGET_SENTINEL
     self.output_a_target = 0.0
 
@@ -273,6 +287,7 @@ class TrafficStopController:
     model_v_traj = model_v2.velocity.x
     if len(model_x_traj) < 2 or len(model_v_traj) == 0 or len(model_y_traj) == 0:
       self.stop_dist_m = None
+      self.near_stop_dist_m = None
       self.output_v_target = V_TARGET_SENTINEL
       self.output_a_target = 0.0
       return
@@ -308,6 +323,7 @@ class TrafficStopController:
       if (not lead_present and traffic_state == RED and
           entry_allowed and self.gas_suppress_frames == 0):
         self.state = STOPPING
+        self._obstacle_latched = False
         self.reference_speed_kph = get_traffic_stop_reference_speed(v_ego * 3.6, None)
         self.actual_stop_distance = get_virtual_traffic_stop_distance(
           self.stop_model_x_rl, self.reference_speed_kph)
@@ -346,6 +362,8 @@ class TrafficStopController:
       self.reference_speed_kph = 0.0
       self.stopped_grace_frames = 0
       self.stop_dist_m = None
+      self.near_stop_dist_m = None
+      self._obstacle_latched = False
       self.output_v_target = V_TARGET_SENTINEL
       self.output_a_target = 0.0
       return
@@ -362,8 +380,10 @@ class TrafficStopController:
 
     contribution = 0.0 if self.actual_stop_distance > 0.0 else self.stop_model_x_rl
     stop_dist = max(0.0, contribution + self.actual_stop_distance)
-    stop_dist = get_traffic_stop_obstacle_distance(stop_dist, CAMERA_TO_FRONT_M + self.distance_adjust_m)
+    # 使用者微調取負號：正值 -> 障礙物拉近 -> 停更後面（符合設定說明）
+    stop_dist = get_traffic_stop_obstacle_distance(stop_dist, CAMERA_TO_FRONT_M - self.distance_adjust_m)
     self.stop_dist_m = stop_dist
+    self.near_stop_dist_m = stop_dist
 
     if self.state == STOPPED:
       self.output_v_target = 0.0
@@ -379,9 +399,12 @@ class TrafficStopController:
         # No speed restriction until the comfortable stopping threshold is met.
         self.output_v_target = V_TARGET_SENTINEL
         self.output_a_target = 0.0
-        # Independently gate the obstacle; lowering this threshold releases it
-        # earlier without changing the speed-target candidate above.
-        v_release = ((2 * RELEASE_BRAKE_MPS2 * max(stop_dist - 1.0, 0.0)) ** 0.5
-                     if stop_dist < 300.0 else float('inf'))
-        if MPC_OBSTACLE_ONLY_WHEN_MUST_BRAKE and v_release >= v_ego:
-          self.stop_dist_m = None
+
+      # 障礙物閘門：在以 RELEASE_BRAKE_MPS2 減速才停得住之前不給 MPC 障礙物（遠處模型距離不準，
+      # 延後到較近處才開始煞）。達到必須煞車點後鎖存到本次停車結束，避免開始煞車後又被放掉。
+      v_release = ((2 * RELEASE_BRAKE_MPS2 * max(stop_dist - 1.0, 0.0)) ** 0.5
+                   if stop_dist < 300.0 else float('inf'))
+      if v_release < v_ego:
+        self._obstacle_latched = True
+      if MPC_OBSTACLE_ONLY_WHEN_MUST_BRAKE and not self._obstacle_latched:
+        self.stop_dist_m = None
