@@ -107,7 +107,7 @@ class DPFlags:
 # 三個倍率分別對應低／中／高速段，錨點之間線性過渡，避免階躍。
 # 只作用在 A_CRUISE_MAX_VALS 這張表上；AEM 開啟且 mode=='acc' 時走
 # accel_controller 的三檔表，本倍率不參與。
-_DP_TBL_ANCHOR_KPH = [0.0, 15.0, 50.0, 100.0]
+_DP_TBL_ANCHOR_KPH = [0.0, 30.0, 70.0, 100.0]
 _DP_TBL_REFRESH_FRAMES = 25   # 0.5s @50Hz，避免每幀讀 Params
 
 
@@ -160,7 +160,9 @@ class DPAccelTableScale:
       target = 1.0
     else:
       low, mid, high = (v / 100.0 for v in self._pct)
-      # 0~15 維持低速倍率；15~50 過渡到中速；50~100 過渡到高速；之後維持高速
+      # 0~30 維持低速倍率；30~70 過渡到中速；70~100 過渡到高速；之後維持高速
+      # 錨點刻意對齊 UI 標籤（低 0-30 / 中 30-70 / 高 70+），否則標 0-30 實際
+      # 15 km/h 就開始往中速滑，使用者會覺得「拉了沒反應」。
       target = float(np.interp(v_ego * CV.MS_TO_KPH, _DP_TBL_ANCHOR_KPH, [low, low, mid, high]))
 
     return float(self._filter.update(target))
