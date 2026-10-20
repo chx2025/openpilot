@@ -21,6 +21,7 @@ from dragonpilot.selfdrive.controls.lib.longitudinal_planner import Longitudinal
 from dragonpilot.selfdrive.controls.lib.ocm import OCM
 from dragonpilot.selfdrive.controls.lib.aem import AEM
 from dragonpilot.selfdrive.controls.lib.apm import APM
+from dragonpilot.selfdrive.controls.lib.turn_decel import TurnDecelController
 
 A_CRUISE_MAX_VALS = [1.10, 0.9, 0.80, 0.65, 0.50, 0.40, 0.35, 0.35, 0.35, 0.33, 0.31, 0.29]
 A_CRUISE_MAX_BP = [0., 2.77, 5.55, 8.33, 11.11, 13.89, 16.6, 19.4, 22.22, 25, 27.78, 33.33]
@@ -164,6 +165,7 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
     self.ocm = OCM()
     self.aem = AEM()
     self.apm = APM()
+    self.turn_decel = TurnDecelController()  # 打燈減速 + 大角度不主動加速
 
   @staticmethod
   def parse_model(model_msg):
@@ -235,6 +237,9 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
     if reset_state:
       self.v_desired_filter.x = v_ego
       self.a_desired = np.clip(sm['carState'].aEgo, accel_clip[0], accel_clip[1])
+      # [TurnDecel] 未接管/車速未就緒 = 上下文已丟失，清掉打燈累計，
+      # 避免下次接管時立刻按「燈已開很久」的舊狀態減速
+      self.turn_decel.reset()
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     _, _, _, _, throttle_prob = self.parse_model(sm['modelV2'])
@@ -411,6 +416,27 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
         self.output_should_stop = False
     else:
       self.ocm.active = False
+
+    # [TurnDecel] 打燈減速 + 大角度不主動加速（移植自 sp0920xl）。
+    # 位置刻意選在 candidates min() 之後、最終 clip 之前：
+    #   - 不進候選池 => 不會蓋掉 FCW / 前車 / MPC 該煞的；
+    #   - 在 min() 之後 => 也不會被 e2e 的正加速度覆蓋掉「不許加速」這條約束。
+    steer_angle_no_off = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
+    blinker_on = bool(sm['carState'].leftBlinker or sm['carState'].rightBlinker)
+    turn_decel_res = self.turn_decel.update(
+      blinker_on=blinker_on,
+      v_ego=v_ego,
+      steering_angle_deg=steer_angle_no_off,
+      dt=self.dt,
+      gas_pressed=bool(sm['carState'].gasPressed),
+      # 左右燈僅供診斷探針區分，不參與控制判斷
+      left_blinker=bool(sm['carState'].leftBlinker),
+      right_blinker=bool(sm['carState'].rightBlinker),
+    )
+    if turn_decel_res.a_target_override is not None:
+      output_a_target = min(output_a_target, turn_decel_res.a_target_override)
+    if turn_decel_res.block_accel and output_a_target > 0.0:
+      output_a_target = 0.0
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
