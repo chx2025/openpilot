@@ -5,6 +5,12 @@
   * GasLongCancel —— 踩油门挂起纵向，松油门 0.2 s 后恢复
                      （dragonpilot/selfdrive/controls/lib/gas_long_cancel.py）
 
+i18n：msgid 写英文，繁体译文在
+`selfdrive/ui/translations/dragonpilot_zh-CHT.po`。
+★ 不要在 msgid 里写简体中文 —— UI 的字体是预烘焙图集
+（`selfdrive/assets/fonts/OpFont-*-zh-CHT.fnt`），且 `dragonpilot/settings/process.py`
+只从 .po 收集字符；msgid 里带的字若不在图集内，raylib 会直接画成 `?`。
+
 param_type / flags 会被 dragonpilot/settings 的生成器用来产出 common/params_keys.h；
 两个键已手工同步声明在该文件里（GasLongCancel 默认 "1"、TurnDecel 默认 "1"）。
 
@@ -20,12 +26,13 @@ ITEMS = [
     "section": "Longitudinal",
     "key": "TurnDecel",
     "type": "toggle_item",
-    "title": lambda: tr("打灯减速 / 大角度不加速"),
+    "title": lambda: tr("Turn Signal Decel + Sharp Turn Accel Block"),
     "description": lambda: tr(
-      "打转向灯 2 秒后减速到 15 km/h（0.5→1.2 m/s² 渐进抬升）；"
-      "方向盘超过 15° 时暂停减速但仍不主动加速；"
-      "方向盘超过 60° 且车速超过 15 km/h 时不主动加速（与转向灯无关，"
-      "适合掉头、入库、螺旋匝道）。踩油门时本功能完全让位。"),
+      "After the turn signal is on for 2 s, decelerate toward 15 km/h "
+      "(0.5 ramping up to 1.2 m/s^2). Above 15 deg of steering the deceleration "
+      "pauses, but acceleration stays blocked. Above 60 deg and faster than 15 km/h, "
+      "acceleration is blocked regardless of the turn signal (U-turns, parking, "
+      "spiral ramps). Pressing the gas pedal overrides everything."),
     "default": "1",
     "flags": "PERSISTENT",
     "param_type": "BOOL",
@@ -34,12 +41,12 @@ ITEMS = [
     "section": "Longitudinal",
     "key": "GasLongCancel",
     "type": "toggle_item",
-    "title": lambda: tr("踩油门挂起纵向"),
+    "title": lambda: tr("Gas Pedal Suspends Longitudinal"),
     "description": lambda: tr(
-      "踩下油门即挂起整个纵向控制（本车滑行，既不加速也不主动刹车），"
-      "松开油门 0.2 秒后自动恢复。"
-      "若纵向是被刹车或按键取消的，之后踩／松油门都不会把它恢复，"
-      "必须重新 engage；挂起不会取消车辆自身的 ACC。"),
+      "Pressing the gas pedal suspends all longitudinal control (the car coasts: "
+      "no acceleration, no active braking) and it resumes 0.2 s after you release it. "
+      "If longitudinal was cancelled by braking or a button press, the pedal will not "
+      "bring it back: you must re-engage. This does not cancel the car's own ACC."),
     "default": "1",
     "flags": "PERSISTENT",
     "param_type": "BOOL",

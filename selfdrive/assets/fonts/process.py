@@ -80,6 +80,14 @@ def _char_sets():
     except FileNotFoundError:
       pass 
 
+    # dp: dragonpilot 自己的翻譯（設定頁條目）也要進圖集 —— 上游只讀 app_{code}.po，
+    # 導致 DP 新增的中文沒有字形，raylib 直接把它畫成 '?'。
+    dp_po_path = TRANSLATIONS_DIR / f"dragonpilot_{code}.po"
+    try:
+      chars.update(dp_po_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+      pass
+
     # 如果該語言沒有對應的翻譯檔，跳過處理
     if not chars:
         continue
