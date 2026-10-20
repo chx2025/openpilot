@@ -223,10 +223,12 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
 
     if dp_accel_clip := LongitudinalPlannerDP.get_accel_clip(self, v_ego, mode):
       accel_clip = dp_accel_clip
-    elif mode == 'acc':
-      accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
     else:
-      accel_clip = [ACCEL_MIN, ACCEL_MAX]
+      # dp(2026-10-20)：acc 與 blended（實驗模式）共用同一套加速度表 + 彎道削峰。
+      # 原本 blended 直接放 ACCEL_MAX(=2.0)，導致 A_CRUISE_MAX_VALS 只在 AEM 把 mode
+      # 掰回 'acc' 的瞬間才生效；實驗模式下整張表形同不存在（實測回饋：加速手感與表不符）。
+      # 要調曲線就改本檔頂部的 A_CRUISE_MAX_BP / A_CRUISE_MAX_VALS。
+      accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
     # dp(H3a 修正): 彎道加速度限制改為「acc 模式一律套用」。原本寫在 elif 裡，
     # 開啟動態加速度個性（dp_accel_clip 有值）時整段被跳過，例如 AEM 在低速路口轉彎
     # 切到 acc 時，原廠允許 0 m/s²、dp 卻允許約 1.5 m/s²。順序：先取 dp 上限，再取彎道限制。
