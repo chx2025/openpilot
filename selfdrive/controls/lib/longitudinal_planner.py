@@ -103,8 +103,74 @@ class DPFlags:
   DTSC = 2 ** 3
   pass
 
-def get_max_accel(v_ego):
-  return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
+# ── dp: 加速度曲線倍率（UI 可調）──────────────────────────────────────────────
+# 三個倍率分別對應低／中／高速段，錨點之間線性過渡，避免階躍。
+# 只作用在 A_CRUISE_MAX_VALS 這張表上；AEM 開啟且 mode=='acc' 時走
+# accel_controller 的三檔表，本倍率不參與。
+_DP_TBL_ANCHOR_KPH = [0.0, 15.0, 50.0, 100.0]
+_DP_TBL_REFRESH_FRAMES = 25   # 0.5s @50Hz，避免每幀讀 Params
+
+
+class DPAccelTableScale:
+  """把 UI 上的三個百分比倍率換算成當前車速對應的乘數。
+
+  倍率再過一階濾波（時間常數 1.5s），避免車上邊開邊調時 accel_clip 瞬間跳變。
+  任何異常（參數缺失、類型不符）都退回 1.0，保證不影響原有控制行為。
+  """
+
+  def __init__(self):
+    self._params = None
+    self._frame = 0
+    self._enabled = False
+    self._pct = (100.0, 100.0, 100.0)
+    self._filter = FirstOrderFilter(1.0, 1.5, DT_MDL)
+
+  def _params_obj(self):
+    if self._params is None:
+      try:
+        from openpilot.common.params import Params
+        self._params = Params()
+      except Exception:
+        self._params = False   # 讀不到就永久 1.0
+    return self._params
+
+  def _read(self):
+    p = self._params_obj()
+    if not p:
+      return
+    try:
+      if not p.get_bool("dp_accel_tbl_enabled"):
+        self._enabled = False
+        return
+      self._enabled = True
+      vals = []
+      for k in ("dp_accel_tbl_low_pct", "dp_accel_tbl_mid_pct", "dp_accel_tbl_high_pct"):
+        v = p.get(k)
+        vals.append(100.0 if v is None else float(v))
+      self._pct = tuple(vals)
+    except Exception:
+      self._enabled = False
+
+  def get(self, v_ego):
+    self._frame += 1
+    if self._frame == 1 or self._frame % _DP_TBL_REFRESH_FRAMES == 0:
+      self._read()
+
+    if not self._enabled:
+      target = 1.0
+    else:
+      low, mid, high = (v / 100.0 for v in self._pct)
+      # 0~15 維持低速倍率；15~50 過渡到中速；50~100 過渡到高速；之後維持高速
+      target = float(np.interp(v_ego * CV.MS_TO_KPH, _DP_TBL_ANCHOR_KPH, [low, low, mid, high]))
+
+    return float(self._filter.update(target))
+
+
+DP_ACCEL_TABLE = DPAccelTableScale()
+
+
+def get_max_accel(v_ego, scale=1.0):
+  return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS) * scale
 
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  
@@ -209,7 +275,7 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
       # 原本 blended 直接放 ACCEL_MAX(=2.0)，導致 A_CRUISE_MAX_VALS 只在 AEM 把 mode
       # 掰回 'acc' 的瞬間才生效；實驗模式下整張表形同不存在（實測回饋：加速手感與表不符）。
       # 要調曲線就改本檔頂部的 A_CRUISE_MAX_BP / A_CRUISE_MAX_VALS。
-      accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
+      accel_clip = [ACCEL_MIN, get_max_accel(v_ego, DP_ACCEL_TABLE.get(v_ego))]
       steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
       accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
 
