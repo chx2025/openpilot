@@ -87,6 +87,12 @@ HIDDEN_SETTING_FILES = {
   "brand-toyota-tss1-sng.py",
   "brand.toyota.auto-brake-hold.py",
   "brand.toyota.door-auto-lock-unlock.py",
+  "min-feat.lon.acc.py",
+  "min-feat.lon.apm.py",
+  "min-feat.ui.display-mode.py",
+  "min-feat.ui.hide-hud.py",
+  "min-feat.ui.lead-stats.py",
+  "min-feat.lon.traffic-stop.py",
 }
 
 _UI_REQUIRED_KEYS = {"section", "key", "type", "title"}
