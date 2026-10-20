@@ -214,6 +214,9 @@ class HomeLayout(Widget):
   def _refresh(self):
     self._version_text = self._get_version_text()
     update_available = self.update_alert.refresh()
+    # dp: 隱藏 offroad 首頁標題列的「UPDATE」通知按鈕，也不再自動跳進更新頁。
+    # 更新功能本身保留，仍可從 設定 -> 軟體 手動檢查與安裝。
+    update_available = False
     alert_count = self.offroad_alert.refresh()
     alerts_present = alert_count > 0
 
