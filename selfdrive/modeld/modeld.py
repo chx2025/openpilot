@@ -448,7 +448,8 @@ def main(demo=False, egpu_loader=None):
       # dp - jetlink: zoompilot's modelDataV2SP.acceleratorState and modelV2.big
       model_ext_send.modelExt.acceleratorState = getattr(model, 'big_model_state', 'none')
       model_ext_send.modelExt.bigModel = USBGPU or (bool(getattr(model, 'chestnut', False)) and model is not small_model)
-      DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob, RED.left_edge_detected, RED.right_edge_detected)
+      DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob, RED.left_edge_detected, RED.right_edge_detected,
+                list(modelv2_send.modelV2.laneLineProbs))  # dp(L3): LTD 路口判斷用
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction
       drivingdata_send.drivingModelData.meta.laneChangeState = DH.lane_change_state
