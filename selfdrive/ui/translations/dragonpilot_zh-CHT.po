@@ -805,18 +805,6 @@ msgstr "紅綠燈／停止標誌自動停車"
 #~ msgid "dashy HUD"
 #~ msgstr "dashy HUD"
 
-#: dragonpilot/settings/long.assist.py
-msgid "Turn Signal Decel + Sharp Turn Accel Block"
-msgstr "打燈減速 / 大角度不加速"
 
-#: dragonpilot/settings/long.assist.py
-msgid "After the turn signal is on for 2 s, decelerate toward 15 km/h (0.5 ramping up to 1.2 m/s^2). Above 15 deg of steering the deceleration pauses, but acceleration stays blocked. Above 60 deg and faster than 15 km/h, acceleration is blocked regardless of the turn signal (U-turns, parking, spiral ramps). Pressing the gas pedal overrides everything."
-msgstr "打轉向燈 2 秒後向 15 km/h 減速（由 0.5 逐步升至 1.2 m/s^2）；方向盤超過 15 度時暫停減速，但仍不主動加速；方向盤超過 60 度且車速超過 15 km/h 時不主動加速（與轉向燈無關，適合掉頭、入庫、螺旋匝道）。踩油門時本功能完全讓位。"
 
-#: dragonpilot/settings/long.assist.py
-msgid "Gas Pedal Suspends Longitudinal"
-msgstr "踩油門掛起縱向"
 
-#: dragonpilot/settings/long.assist.py
-msgid "Pressing the gas pedal suspends all longitudinal control (the car coasts: no acceleration, no active braking) and it resumes 0.2 s after you release it. If longitudinal was cancelled by braking or a button press, the pedal will not bring it back: you must re-engage. This does not cancel the car's own ACC."
-msgstr "踩下油門即掛起整個縱向控制（本車滑行，既不加速也不主動煞車），鬆開油門 0.2 秒後自動恢復。若縱向是被煞車或按鍵取消的，之後踩／鬆油門都不會恢復，必須重新 engage；掛起不會取消車輛自身的 ACC。"
