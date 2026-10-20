@@ -204,12 +204,14 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
 
     if dp_accel_clip := LongitudinalPlannerDP.get_accel_clip(self, v_ego, mode):
       accel_clip = dp_accel_clip
-    elif mode == 'acc':
+    else:
+      # dp(2026-10-20)：acc 與 blended（實驗模式）共用同一套加速度表 + 彎道削峰。
+      # 原本 blended 直接放 ACCEL_MAX(=2.0)，導致 A_CRUISE_MAX_VALS 只在 AEM 把 mode
+      # 掰回 'acc' 的瞬間才生效；實驗模式下整張表形同不存在（實測回饋：加速手感與表不符）。
+      # 要調曲線就改本檔頂部的 A_CRUISE_MAX_BP / A_CRUISE_MAX_VALS。
       accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
       steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
       accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
-    else:
-      accel_clip = [ACCEL_MIN, ACCEL_MAX]
 
     if reset_state:
       self.v_desired_filter.x = v_ego
