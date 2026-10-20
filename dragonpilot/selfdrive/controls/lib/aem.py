@@ -116,11 +116,11 @@ CONFIRM_TIME_S   = 0.5   # 任一切換條件需連續成立這麼久（秒）�
 MIN_DWELL_TIME_S = 2.0   # 車速模式切換後至少維持這麼久（秒）才允許下一次切換
 
 # 接近模型停止線門檻（m），含遲滯
-# 距離來源為 traffic_stop.py 的 stop_dist_m（已經過 median + moving-average 平滑與物理
-# 偏移修正），不是原始 model_msg.position.x。stop_dist_m 為 None 明確視為「不接近」。
+# ⚠️ 2026-10-20：紅綠燈/停止標誌自動停車功能已移除，stop_dist_m 目前沒有任何來源，
+# update_states(stop_dist_m=...) 一律收到預設 None，因此「接近停止線」永不成立 ——
+# 下面這組門檻與 _update_near_stop() 屬休眠程式碼（保留，方便日後接新的距離來源）。
 NEAR_STOP_ENTER_M = 40.0   # 距離 <= 40 m -> 進入「接近停止線」狀態
-NEAR_STOP_EXIT_M  = 50.0   # 距離 > 50 m -> 解除（10 m 遲滯緩衝；50 m 對應 traffic_stop.py
-                            # TRAFFIC_STOP_DISTANCE_FADE_BP_M 的上限值）
+NEAR_STOP_EXIT_M  = 50.0   # 距離 > 50 m -> 解除（10 m 遲滯緩衝）
 
 # 接近停止線時，是否連 mode 也一併強制 blended 的車速閘門（km/h）
 STOP_MODE_SPEED_ENTER_KPH = 60.0   # <= 60 km/h -> 允許「接近停止線」強制切 mode
@@ -240,8 +240,8 @@ class AEM:
       self._curve_active = self._curve_pending
 
   def _update_near_stop(self, stop_dist_m):
-    # None = traffic_stop 目前沒有主動停等（功能關閉或沒偵測到紅燈／停止標誌），
-    # 必須視為「不接近」，不能當成距離 0
+    # None = 沒有可用的停止線距離（紅綠燈功能已移除，恆為 None），必須視為「不接近」，
+    # 不能當成距離 0
     if stop_dist_m is None:
       candidate = False
     else:

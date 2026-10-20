@@ -26,6 +26,11 @@ JETLINK_ICON_WIDTH = 180
 JETLINK_ICON_HEIGHT = 133
 METRIC_START_Y = 300  # zoompilot sidebar: four cards fit above the home button from here
 
+# dp - egpu: the TEMP card's slot now carries the eGPU icon (always drawn, grey while disconnected)
+EGPU_ICON_WIDTH = 120
+EGPU_ICON_HEIGHT = 89
+EGPU_LABEL_SIZE = 36
+
 ThermalStatus = log.DeviceState.ThermalStatus
 NetworkType = log.DeviceState.NetworkType
 
@@ -76,7 +81,6 @@ class Sidebar(Widget):
     self._net_type = NETWORK_TYPES.get(NetworkType.none)
     self._net_strength = 0
 
-    self._temp_status = MetricData(tr_noop("TEMP"), tr_noop("GOOD"), Colors.GOOD)
     self._panda_status = MetricData(tr_noop("VEHICLE"), tr_noop("ONLINE"), Colors.GOOD)
     self._connect_status = MetricData(tr_noop("CONNECT"), tr_noop("OFFLINE"), Colors.WARNING)
     self._recording_audio = False
@@ -127,7 +131,6 @@ class Sidebar(Widget):
 
     self._recording_audio = ui_state.recording_audio
     self._update_network_status(device_state)
-    self._update_temperature_status(device_state)
     if not ui_state.dp_dev_disable_connect:
       self._update_connection_status(device_state)
     self._update_panda_status()
@@ -148,14 +151,6 @@ class Sidebar(Widget):
     self._net_type = NETWORK_TYPES.get(device_state.networkType.raw, tr_noop("Unknown"))
     strength = device_state.networkStrength
     self._net_strength = max(0, min(5, strength.raw + 1)) if strength.raw > 0 else 0
-
-  def _update_temperature_status(self, device_state):
-    thermal_status = device_state.thermalStatus
-
-    if thermal_status == ThermalStatus.ok:
-      self._temp_status.update(tr_noop("TEMP"), tr_noop("GOOD"), Colors.GOOD)
-    else:
-      self._temp_status.update(tr_noop("TEMP"), tr_noop("HIGH"), Colors.DANGER)
 
   def _update_connection_status(self, device_state):
     last_ping = device_state.lastAthenaPingTime
@@ -205,11 +200,8 @@ class Sidebar(Widget):
 
       tint = Colors.BUTTON_PRESSED if (ui_state.started and flag_pressed) else Colors.BUTTON_NORMAL
       # dp - jetlink: as zoompilot, the link's icon takes the home/flag button's place while there is a link
+      # dp - egpu: the chestnut icon moved up to the TEMP card's slot, so this stays the home/flag button
       icon, opacity = self._jetlink_icons.for_state(ui_state.jetlink_state)
-      if icon is None:
-        # dp - egpu: as sunnypilot, the chestnut icon takes the home/flag button's place while an eGPU is plugged in
-        # (jetlink is off beside an eGPU, so the two never compete for this slot)
-        icon, opacity = egpu_ui.icon_for(self._jetlink_icons, ui_state.egpu_state)
       if icon is not None:
         pos = rl.Vector2(HOME_BTN.x + (HOME_BTN.width - icon.width) / 2, HOME_BTN.y + (HOME_BTN.height - icon.height) / 2)
         tint = jetlink_ui.tint(opacity * (0.65 if (ui_state.started and flag_pressed) else 1.0))
@@ -247,22 +239,44 @@ class Sidebar(Widget):
     rl.draw_text_ex(self._font_regular, tr(self._net_type), text_pos, FONT_SIZE, 0, Colors.WHITE)
 
   def _draw_metrics(self, rect: rl.Rectangle):
-    metrics = [(self._temp_status, 338), (self._panda_status, 496)]
+    # dp - egpu: the TEMP card used to live here; the eGPU icon takes its slot and is always drawn
+    slots: list[tuple[str, MetricData, float]] = [("egpu", self._egpu_status, 338), ("card", self._panda_status, 496)]
     if not ui_state.dp_dev_disable_connect:
-      metrics.append((self._connect_status, 654))
+      slots.append(("card", self._connect_status, 654))
 
     # dp - jetlink: a JETLINK card while there is a link; the cards share the space above the home button
-    # dp - egpu: likewise an eGPU card while an eGPU is plugged in
-    extra = ([self._jetlink_status] if ui_state.jetlink_view is not None else []) + \
-            ([self._egpu_status] if ui_state.egpu_state != EgpuState.DISCONNECTED else [])
-    if extra:
-      cards = [m for m, _ in metrics] + extra
+    if ui_state.jetlink_view is not None:
+      slots.append(("card", self._jetlink_status, 0))
       available = max(0, int(HOME_BTN.y) - METRIC_MARGIN - METRIC_HEIGHT - METRIC_START_Y)
-      spacing = min(158, available / max(1, len(cards) - 1))
-      metrics = [(m, METRIC_START_Y + i * spacing) for i, m in enumerate(cards)]
+      spacing = min(158, available / max(1, len(slots) - 1))
+      slots = [(kind, metric, METRIC_START_Y + i * spacing) for i, (kind, metric, _) in enumerate(slots)]
 
-    for metric, y_offset in metrics:
-      self._draw_metric(rect, metric, rect.y + y_offset)
+    for kind, metric, y_offset in slots:
+      if kind == "egpu":
+        self._draw_egpu_icon(rect, rect.y + y_offset)
+      else:
+        self._draw_metric(rect, metric, rect.y + y_offset)
+
+  def _draw_egpu_icon(self, rect: rl.Rectangle, y: float):
+    """dp - egpu: the chestnut icon in the old TEMP slot, drawn whether or not an eGPU is attached
+    (grey for 未連線), with the state underneath."""
+    state = ui_state.egpu_state
+    icon, opacity = egpu_ui.icon_for(self._jetlink_icons, state)
+    if icon is None:
+      icon = self._jetlink_icons.default
+      tint = rl.Color(110, 110, 110, 255)
+    else:
+      tint = jetlink_ui.tint(opacity)
+
+    scale = EGPU_ICON_WIDTH / icon.width
+    x = rect.x + METRIC_MARGIN + (METRIC_WIDTH - EGPU_ICON_WIDTH) / 2
+    rl.draw_texture_ex(icon, rl.Vector2(x, y), 0.0, scale, tint)
+
+    label = tr(egpu_ui.STATE_TEXT[state])
+    size = measure_text_cached(self._font_bold, label, EGPU_LABEL_SIZE)
+    rl.draw_text_ex(self._font_bold, label,
+                    rl.Vector2(rect.x + METRIC_MARGIN + (METRIC_WIDTH - size.x) / 2, y + EGPU_ICON_HEIGHT + 6),
+                    EGPU_LABEL_SIZE, 0, egpu_ui.STATE_COLOR[state])
 
   def _draw_metric(self, rect: rl.Rectangle, metric: MetricData, y: float):
     metric_rect = rl.Rectangle(rect.x + METRIC_MARGIN, y, METRIC_WIDTH, METRIC_HEIGHT)

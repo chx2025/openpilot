@@ -97,16 +97,14 @@ class DeveloperLayout(Widget):
     )
     self._on_enable_ui_debug(self._params.get_bool("ShowDebugInfo"))
 
+    # dp: 隱藏 縱向操作模式 / 橫向控制模式 / 介面除錯模式 / 顯示最近錯誤
+    # 對應的物件仍建立（_update_toggles 與各 callback 還在引用），只是不進顯示列表
     self._scroller = Scroller([
       self._adb_toggle,
       self._ssh_toggle,
       self._ssh_keys,
       self._joystick_toggle,
-      self._long_maneuver_toggle,
-      self._lat_maneuver_toggle,
       self._alpha_long_toggle,
-      self._ui_debug_toggle,
-      button_item(lambda: tr("Show Last Errors"), lambda: tr("Show"), callback=self._on_show_last_errors),
     ], line_separator=True, spacing=0)
 
     # Toggles should be not available to change in onroad state

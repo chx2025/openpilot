@@ -12,7 +12,6 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 
 from dragonpilot.selfdrive.controls.lib.dtsc import DTSC
 from dragonpilot.selfdrive.controls.lib.accel_controller import AccelPersonalityController
-from dragonpilot.selfdrive.controls.lib.traffic_stop import TrafficStopController
 from opendbc.car.interfaces import ACCEL_MIN
 
 LongitudinalPlanSource = custom.LongitudinalPlanDP.LongitudinalPlanSource
@@ -23,7 +22,6 @@ class LongitudinalPlannerDP:
     # self.acm = ACM()
     self.dtsc = DTSC() # 統一正名為 dtsc
     self.accel_controller = AccelPersonalityController() # 初始化 accel_controller
-    self.traffic_stop = TrafficStopController() # 紅綠燈/停止標誌虛擬停止線
     self.source = LongitudinalPlanSource.cruise
     self.output_v_target = 0.0
     self.output_a_target = 0.0
@@ -56,10 +54,6 @@ class LongitudinalPlannerDP:
 
     # [修改] 已經移除 self.dtsc.update(...) 呼叫，因為 DTSC 已純淨化，不再依賴外部動態刷新
 
-    # 紅綠燈/停止標誌虛擬停止線：內部自行輪詢 Params 開關，關閉時 output_v_target
-    # 維持 V_CRUISE_MAX，min() 選擇時自然不會勝出，故不需要額外的 dp_flags 閘門
-    self.traffic_stop.update(sm['modelV2'], CS, sm['radarState'], v_ego, a_ego, v_cruise)
-
     # 控制參考來源
     # output_v_target = 目標巡航速度
     # output_a_target = 目標加速度
@@ -67,7 +61,6 @@ class LongitudinalPlannerDP:
       LongitudinalPlanSource.cruise: (v_cruise, a_ego),
       # LongitudinalPlanSource.acm: (self.acm.output_v_target, self.acm.output_a_target),
       LongitudinalPlanSource.dtsc: (self.dtsc.output_v_target, self.dtsc.output_a_target),
-      LongitudinalPlanSource.trafficStop: (self.traffic_stop.output_v_target, self.traffic_stop.output_a_target),
       # 使用範例 Smart Cruise Control
       # LongitudinalPlanSource.sccVision: (self.scc.vision.output_v_target, self.scc.vision.output_a_target),
       # LongitudinalPlanSource.sccMap: (self.scc.map.output_v_target, self.scc.map.output_a_target),
@@ -101,8 +94,5 @@ class LongitudinalPlannerDP:
       if controller is not None and hasattr(controller, 'write_to_msg'):
         idx = enum_value
         controller.write_to_msg(targets_list[idx])
-
-    # 列舉名稱 trafficStop 與屬性名稱 traffic_stop 不同，上面的 getattr 對不到，明確寫入（UI 讀取用）
-    self.traffic_stop.write_to_msg(targets_list[LongitudinalPlanSource.trafficStop])
 
     pm.send('longitudinalPlanDP', plan_dp_send)

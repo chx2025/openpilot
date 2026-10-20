@@ -4,7 +4,7 @@ import threading
 import time
 import pyray as rl
 from dataclasses import dataclass
-from cereal import custom
+from cereal import custom, log
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
@@ -23,18 +23,6 @@ SET_SPEED_NA = 255
 KM_TO_MILE = 0.621371
 CRUISE_DISABLED_CHAR = '–'
 Congestion = custom.Tdx.Congestion
-TRAFFIC_STOP_IDX = int(custom.LongitudinalPlanDP.LongitudinalPlanSource.trafficStop)
-
-# dp - 紅綠燈減速中 banner（基準尺寸 x1.5）：佔用 TDX「前方車速」的位置（中央車速正下方），顯示期間 TDX 全部讓位
-TS_HOLD_TIME = 0.5          # 秒；braking 訊號短暫掉落時維持顯示，避免閃爍
-TS_FONT_SIZE = 144
-TS_BANNER_HEIGHT = 225
-TS_TOP_OFFSET = 5           # 相對 header_height 的位移（km/h 單位文字底緣約在 header 內）
-TS_PADDING_X = 60
-TS_ICON_TEXT_GAP = 36
-TS_LIGHT_RADIUS = 36
-TS_LIGHT_GAP = 18
-TS_BORDER = 9
 
 # dp - jetlink: onroad badge under the experimental-mode button
 JETLINK_BADGE_W = 120
@@ -47,6 +35,11 @@ PERF_PADDING = 14
 PERF_MARGIN_BOTTOM = 0   # 設定為 0 以貼齊底部
 PERF_ITEM_GAP = 50
 PERF_BG_COLOR = rl.Color(0, 0, 0, 160)
+
+# dp: the sidebar's TEMP/GOOD card moved to the right side of the onroad screen
+TEMP_CARD_W = 240
+TEMP_CARD_H = 126
+TEMP_FONT_SIZE = 35
 
 
 @dataclass(frozen=True)
@@ -108,9 +101,9 @@ class HudRenderer(Widget):
     # dp: 右下角資訊列 - 方向盤角度（取代原本的駕駛/自動控制狀態文字）
     self.steering_angle_deg: float = 0.0
 
-    # --- 紅綠燈減速中 ---
-    self.ts_braking: bool = False
-    self._ts_last_braking_t: float = -1e9
+    # dp: 溫度卡片（原 sidebar 的 TEMP/GOOD），移到行駛畫面右側
+    self._temp_value: str = "GOOD"
+    self._temp_color: rl.Color = COLORS.WHITE
 
     # --- TDX 路況預警變數 ---
     self.tdx_next_speed: int = -1
@@ -150,11 +143,7 @@ class HudRenderer(Widget):
 
       # 重置 TDX 變數，避免殘留上次熄火前的資料
       self._reset_tdx()
-      self.ts_braking = False
-      self._ts_last_braking_t = -1e9
       return
-
-    self._update_traffic_stop(sm)
 
     controls_state = sm['controlsState']
     car_state = sm['carState']
@@ -203,18 +192,11 @@ class HudRenderer(Widget):
     # dp: 右下角資訊列 - 方向盤角度
     self.steering_angle_deg = car_state.steeringAngleDeg
 
-  def _update_traffic_stop(self, sm) -> None:
-    """紅綠燈減速中：讀 longitudinalPlanDP.targets[trafficStop].braking，且 openpilot 正在控制縱向"""
-    braking = False
-    if sm.recv_frame['longitudinalPlanDP'] >= ui_state.started_frame and sm.alive['longitudinalPlanDP']:
-      targets = sm['longitudinalPlanDP'].targets
-      if len(targets) > TRAFFIC_STOP_IDX:
-        braking = bool(targets[TRAFFIC_STOP_IDX].braking) and sm['carControl'].longActive
-
-    now = rl.get_time()
-    if braking:
-      self._ts_last_braking_t = now
-    self.ts_braking = (now - self._ts_last_braking_t) < TS_HOLD_TIME
+    # dp: 溫度（sidebar 的 TEMP/GOOD 卡片搬到行駛畫面右側）
+    if sm.updated['deviceState']:
+      ok = sm['deviceState'].thermalStatus == log.DeviceState.ThermalStatus.ok
+      self._temp_value = "GOOD" if ok else "HIGH"
+      self._temp_color = COLORS.WHITE if ok else rl.Color(201, 34, 49, 255)
 
   def _reset_tdx(self) -> None:
     self.tdx_next_speed = -1
@@ -239,12 +221,11 @@ class HudRenderer(Widget):
 
     self._draw_current_speed(rect)
 
-    # --- 紅綠燈減速中（優先）/ TDX 雙行顯示資訊 ---
-    # 紅綠燈減速期間 TDX（前方車速 + 底部事件）全部讓位，避免搶注意力
-    if self.ts_braking:
-      self._draw_traffic_stop(rect)
-    else:
-      self._draw_tdx_info(rect)
+    # dp: 溫度卡片，放在右上角實驗按鈕左邊
+    self._draw_temp_card(rect)
+
+    # --- TDX 雙行顯示資訊 ---
+    self._draw_tdx_info(rect)
 
     button_x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size
     button_y = rect.y + UI_CONFIG.border_size
@@ -260,6 +241,31 @@ class HudRenderer(Widget):
 
     # Draw performance info at bottom
     self._draw_performance_info(rect)
+
+  def _draw_temp_card(self, rect: rl.Rectangle) -> None:
+    """dp: the sidebar's TEMP card, moved to the right of the speed readout."""
+    w, h = TEMP_CARD_W, TEMP_CARD_H
+    x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size - 24 - w
+    y = rect.y + UI_CONFIG.border_size + (UI_CONFIG.button_size - h) / 2
+
+    card = rl.Rectangle(x, y, w, h)
+    rl.draw_rectangle_rounded(card, 0.3, 10, COLORS.BLACK_TRANSLUCENT)
+
+    # colored left edge, clipped to the rounded corner like the sidebar cards
+    rl.begin_scissor_mode(int(x + 4), int(y), 18, int(h))
+    rl.draw_rectangle_rounded(rl.Rectangle(x + 4, y + 4, 100, h - 8), 0.3, 10, self._temp_color)
+    rl.end_scissor_mode()
+    rl.draw_rectangle_rounded_lines_ex(card, 0.3, 10, 2, COLORS.BORDER_TRANSLUCENT)
+
+    labels = [tr("TEMP"), tr(self._temp_value)]
+    line_h = TEMP_FONT_SIZE * 1.15
+    text_y = y + (h - len(labels) * line_h) / 2
+    for text in labels:
+      size = measure_text_cached(self._font_semi_bold, text, TEMP_FONT_SIZE)
+      rl.draw_text_ex(self._font_semi_bold, text,
+                      rl.Vector2(x + 22 + (w - 22 - size.x) / 2, text_y),
+                      TEMP_FONT_SIZE, 0, rl.WHITE)
+      text_y += line_h
 
   def _draw_egpu_badge(self, center_x: float, top_y: float) -> None:
     """dp - egpu: sunnypilot's onroad chestnut icon, in jetlink's badge slot (jetlink is off beside an
@@ -406,37 +412,6 @@ class HudRenderer(Widget):
       else:
         # 文字沒超長 -> 直接單行置中顯示
         rl.draw_text_ex(self._font_semi_bold, text, rl.Vector2(event_x, draw_y), tdx_event_font_size, 0, rl.WHITE)
-
-  def _draw_traffic_stop(self, rect: rl.Rectangle) -> None:
-    """中央車速正下方（TDX 前方車速的位置）：大型紅綠燈圖示 + 「紅綠燈減速中」"""
-    text = "紅綠燈減速中"
-    text_size = measure_text_cached(self._font_bold, text, TS_FONT_SIZE)
-    icon_w = TS_LIGHT_RADIUS * 6 + TS_LIGHT_GAP * 4
-    icon_h = TS_LIGHT_RADIUS * 2 + TS_LIGHT_GAP * 2
-    banner_w = TS_PADDING_X * 2 + icon_w + TS_ICON_TEXT_GAP + text_size.x
-
-    x = rect.x + rect.width / 2 - banner_w / 2
-    y = rect.y + UI_CONFIG.header_height + TS_TOP_OFFSET
-
-    banner = rl.Rectangle(x, y, banner_w, TS_BANNER_HEIGHT)
-    rl.draw_rectangle_rounded(banner, 0.3, 10, rl.Color(0, 0, 0, 190))
-    border_alpha = 170 + int(85 * math.sin(rl.get_time() * 6))
-    rl.draw_rectangle_rounded_lines_ex(banner, 0.3, 10, TS_BORDER, rl.Color(255, 70, 70, border_alpha))
-
-    # 橫式紅綠燈：外框 + 紅（呼吸閃爍）/ 黃 / 綠（暗）
-    icon_x = x + TS_PADDING_X
-    icon_y = y + (TS_BANNER_HEIGHT - icon_h) / 2
-    rl.draw_rectangle_rounded(rl.Rectangle(icon_x, icon_y, icon_w, icon_h), 0.5, 8, rl.Color(30, 30, 30, 240))
-    cy = int(icon_y + icon_h / 2)
-    red_alpha = 180 + int(75 * math.sin(rl.get_time() * 6))
-    light_colors = (rl.Color(255, 60, 60, red_alpha), rl.Color(90, 75, 20, 255), rl.Color(20, 70, 35, 255))
-    for i, color in enumerate(light_colors):
-      cx = int(icon_x + TS_LIGHT_GAP + TS_LIGHT_RADIUS + i * (TS_LIGHT_RADIUS * 2 + TS_LIGHT_GAP))
-      rl.draw_circle(cx, cy, TS_LIGHT_RADIUS, color)
-
-    text_x = icon_x + icon_w + TS_ICON_TEXT_GAP
-    text_y = y + (TS_BANNER_HEIGHT - text_size.y) / 2
-    rl.draw_text_ex(self._font_bold, text, rl.Vector2(text_x, text_y), TS_FONT_SIZE, 0, rl.WHITE)
 
   def _draw_set_speed(self, rect: rl.Rectangle) -> None:
     set_speed_width = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial

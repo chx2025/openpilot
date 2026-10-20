@@ -242,15 +242,9 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
     LongitudinalPlannerDP.update(self, sm)
 
     if dp_flags & DPFlags.AEM:
-      # ⚠️ self.traffic_stop.stop_dist_m 要到後段 LongitudinalPlannerDP.update_targets()
-      # 才會刷新成這一幀的值，這裡讀到的是上一幀（約 50 ms 前）。near-stop 判斷本身有
-      # 0.5 秒防彈跳與 10 m 遲滯，一幀落差可忽略；若要完全同步需把 update_targets()
-      # 提前，但會牽動它使用 self.v_desired_filter.x / self.a_desired（上一幀平滑值）
-      # 作為輸入的既有設計，風險較高，暫不動。
       # ⚠️ AEM 啟用時，get_mode() 預設忽略這裡傳入的 mode（即實驗模式開關），屬刻意分歧，
       # 見 aem.py 檔頭與 AEM_EXPERIMENTAL_OFF_FORCES_ACC。
-      self.aem.update_states(model_msg=sm['modelV2'], radar_msg=sm['radarState'], v_ego=sm['carState'].vEgo,
-                              stop_dist_m=self.traffic_stop.stop_dist_m)
+      self.aem.update_states(model_msg=sm['modelV2'], radar_msg=sm['radarState'], v_ego=sm['carState'].vEgo)
       mode = self.aem.get_mode(mode)
 
     if len(sm['carControl'].orientationNED) == 3:
@@ -367,12 +361,8 @@ class LongitudinalPlanner(LongitudinalPlannerDP):
       v_cruise_target = 0.0
 
     # 傳遞 a_min_arr 與 a_max_arr 給修改後的 MPC
-    # dp: 紅綠燈/停止標誌虛擬停止線直接餵給 MPC 當障礙物（而非只靠 v_cruise_target
-    # 軟限速），求解出來的煞車曲線比純降速平順。self.traffic_stop.stop_dist_m 由上面
-    # LongitudinalPlannerDP.update_targets() 這一幀已經算好；None 代表目前沒有主動
-    # 停等中，MPC 端會用 disabled sentinel（1000m），不影響一般行駛。
     self.mpc.update(sm['radarState'], v_cruise_target, personality=personality, a_cruise_min_override=a_cruise_min_override,
-                     a_min_arr=a_min_dtsc_out, a_max_arr=a_max_dtsc_out, traffic_stop_obstacle_m=self.traffic_stop.stop_dist_m)
+                     a_min_arr=a_min_dtsc_out, a_max_arr=a_max_dtsc_out)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
