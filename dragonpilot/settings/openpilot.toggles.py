@@ -87,7 +87,7 @@ ITEMS = [
     "title": lambda: tr("Driving Personality"),
     "description": lambda: tr(_TOGGLES_DESC["LongitudinalPersonality"]),
     "options": [lambda: tr("Aggressive"), lambda: tr("Standard"), lambda: tr("Relaxed")],
-    "default": "1",  # Standard
+    "default": "2",  # Relaxed (comfort)
     "condition": _DASHY,
   },
 ]
