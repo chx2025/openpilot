@@ -70,9 +70,9 @@ _SECTION_TITLE_MSGIDS = (
 # current car's brand doesn't match. Generic sections (Lateral/UI/...) are
 # unconditional.
 SECTION_CONDITIONS = {
-  # dp: 使用者要求隱藏整組（原廠縱向控制 / TSS1 走走停停 / TSS2 自動煞車維持 / 車門自動鎖定）。
-  # 條件恆假 → 標題與 4 條都不渲染；參數鍵與底層功能仍在，只是沒有 UI 入口。
-  "Toyota / Lexus": "brand == '__hidden__'",
+  # dp: 使用者要求保留「使用原廠縱向控制」，只隱藏 TSS1 走走停停、TSS2 自動煞車維持、
+  # 車門自動鎖定這三條 —— 做法是移除那三個條目檔，本組條件維持原樣。
+  "Toyota / Lexus": "brand == 'toyota'",
   "Honda":          "brand == 'honda'",
   "HKG":            "brand == 'hyundai'",
   "VAG":            "brand == 'volkswagen'",
