@@ -92,7 +92,6 @@ HIDDEN_SETTING_FILES = {
   "min-feat.ui.display-mode.py",
   "min-feat.ui.hide-hud.py",
   "min-feat.ui.lead-stats.py",
-  "min-feat.lon.traffic-stop.py",
 }
 
 _UI_REQUIRED_KEYS = {"section", "key", "type", "title"}
