@@ -93,6 +93,23 @@ def _emit_probe(res, *, left_blinker: bool, right_blinker: bool, blinker_on: boo
     pass
 
 
+# === 开关（dp 2026-10-20：UI 按钮，默认开）=================================
+# 运行期开关（BOOL，默认 "1" = 开）。声明见 common/params_keys.h。
+# 1 Hz 轮询 ⇒ 拨开关后约 1 s 内生效，不需要重启。
+# 关闭时本模块逐位透明：不减速、不 block 加速，输出与未安装时完全一致。
+TURN_DECEL_PARAM_KEY: str = "TurnDecel"
+TURN_DECEL_PARAMS_PERIOD_S: float = 1.0
+
+
+def _as_bool(value) -> bool:
+  """★ Params.get() 返回 '0'/'1' 字符串（或 bytes），而 bool('0') 是 True。
+  直接 bool() 会让开关永远关不掉，必须显式解析。"""
+  if isinstance(value, bytes):
+    value = value.decode()
+  if isinstance(value, bool):
+    return value
+  return str(value).strip().lower() not in ('', '0', 'false', 'off', 'none')
+
 # === 配置常量（按用户需求固定） ===
 # 转向灯开启后等多久开始减速（秒）
 BLINKER_DEBOUNCE_S: float = 2.0
@@ -157,7 +174,8 @@ class TurnDecelResult:
   active: bool                    # 控制器是否在主动减速
   phase: str                      # 'idle' / 'waiting' / 'paused' / 'deceling'
                                   #   / 'at_target' / 'big_angle_guard'
-                                  #   / 'driver_override'
+                                  #   / 'driver_override' / 'off'
+                                  # 'off': UI 开关关闭（参数 TurnDecel = 0）
                                   # 'big_angle_guard': 转向灯关闭但大角度条件仍成立
                                   # 'driver_override': 驾驶员在踩油门 / 刚松开（见文件头）
 
@@ -169,11 +187,43 @@ class TurnDecelController:
   状态（用于检测上升沿和关闭事件）。
   """
 
-  def __init__(self) -> None:
+  def __init__(self, params=None) -> None:
     self._blinker_on_time: float = 0.0    # 转向灯累计开启时长（dt 累加）
     self._blinker_on_last: bool = False   # 上一帧转向灯状态（用于检测下降沿）
     self._decel_a: float = 0.0            # 当前 ramp 后的减速度（0..DECEL_MAX_M_S2）
     self._gas_hold_left: float = 0.0      # [2026-09-21] 驾驶员让位窗口剩余时长（s）
+    # ---- 运行期开关（dp 2026-10-20）----
+    self._params = params                 # None ⇒ 首次 update 时懒加载
+    self.enabled: bool = True             # 参数读不到时的兜底：开
+    self._param_t: float = -TURN_DECEL_PARAMS_PERIOD_S   # 负值 ⇒ 第一帧立刻读一次
+
+  def _refresh_params(self, now: float) -> None:
+    """1 Hz 热刷新开关。任何异常都只影响"能不能开关"，绝不影响纵向控制。"""
+    if self._params is None:
+      try:
+        from openpilot.common.params import Params
+        self._params = Params()
+      except Exception:
+        self._params = False    # 建不出来就不再重试（保持兜底值）
+        return
+    if self._params is False:
+      return
+    if now - self._param_t < TURN_DECEL_PARAMS_PERIOD_S:
+      return
+    self._param_t = now
+    try:
+      raw = self._params.get(TURN_DECEL_PARAM_KEY)   # 不带默认回退：None = 从未写过
+    except Exception:     # 参数未声明 / 读取失败 ⇒ 保持当前值
+      return
+    if raw is None:
+      # dp: 首次运行把声明里的默认值（"1"）落盘。否则 UI 的 get_bool() 读不到
+      # params_keys.h 的 default ⇒ 开关显示"关"，但控制侧按默认值在跑，两边打架。
+      try:
+        self._params.put_bool(TURN_DECEL_PARAM_KEY, bool(self.enabled))
+      except Exception:
+        pass
+      return
+    self.enabled = _as_bool(raw)
 
   def reset(self) -> None:
     """外部强制重置（disengage、模式切换等）。"""
@@ -209,13 +259,21 @@ class TurnDecelController:
     Returns:
       TurnDecelResult 含 a_target_override / block_accel / active / phase
     """
-    res = self._update_impl(
-      blinker_on=blinker_on,
-      v_ego=v_ego,
-      steering_angle_deg=steering_angle_deg,
-      dt=dt,
-      gas_pressed=gas_pressed,
-    )
+    now = _time.monotonic()
+    self._refresh_params(now)
+    if not self.enabled:
+      # UI 开关关闭 ⇒ 逐位透明（不减速、不 block）。顺带清掉累计态，
+      # 重新打开时不会按"灯已开很久"的旧状态立刻减速。
+      self.reset()
+      res = TurnDecelResult(None, False, False, "off")
+    else:
+      res = self._update_impl(
+        blinker_on=blinker_on,
+        v_ego=v_ego,
+        steering_angle_deg=steering_angle_deg,
+        dt=dt,
+        gas_pressed=gas_pressed,
+      )
     _emit_probe(res,
                 left_blinker=left_blinker,
                 right_blinker=right_blinker,

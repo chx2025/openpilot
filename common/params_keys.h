@@ -52,6 +52,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"GsmApn", {PERSISTENT, STRING}},
     {"GsmMetered", {PERSISTENT, BOOL, "1"}},
     {"GsmRoaming", {PERSISTENT, BOOL}},
+    {"GasLongCancel", {PERSISTENT, BOOL, "1"}},
+    {"GasLongCancelResumeMs", {PERSISTENT, INT, "200"}},
     {"HardwareSerial", {PERSISTENT, STRING}},
     {"HasAcceptedTerms", {PERSISTENT, STRING, "0"}},
     {"InstallDate", {PERSISTENT, TIME}},
@@ -206,4 +208,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_egpu_delete_ref", {CLEAR_ON_MANAGER_START, STRING}},
     {"dp_egpu_auto_default", {PERSISTENT, BOOL, "1"}},
     {"dp_egpu_seen", {PERSISTENT, BOOL, "0"}},
+    // dp 2026-10-20：纵向辅助两个 UI 开关，默认开启（对应 dragonpilot/settings/long.assist.py）
+    {"TurnDecel", {PERSISTENT, BOOL, "1"}},
 };

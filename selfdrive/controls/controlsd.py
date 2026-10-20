@@ -27,6 +27,8 @@ from dragonpilot.selfdrive.controls.lib.human_turn_detection import HumanTurnDet
 # dp: 車道置中 (Lane Centering)，移植自 StarPilot，核心演算法見 lane_centering.py，
 # dp_ 參數讀取與啟用邏輯見 dp_lane_centering.py
 from dragonpilot.selfdrive.controls.lib.dp_lane_centering import DpLaneCentering
+# dp: 踩油門掛起縱向 / 鬆油門 0.2 s 後恢復（UI 開關 GasLongCancel，預設開）
+from dragonpilot.selfdrive.controls.lib.gas_long_cancel import GasLongCancel
 from dragonpilot import jetlink_adapter
 
 State = log.SelfdriveState.OpenpilotState
@@ -58,6 +60,9 @@ class Controls:
     self.calibrated_pose: Pose | None = None
 
     self.LoC = LongControl(self.CP)
+    # dp: 踩油門掛起縱向 / 鬆油門 0.2 s 後恢復。參數見 common/params_keys.h
+    # （GasLongCancel 預設 "1"、GasLongCancelResumeMs 預設 "200"）。
+    self.gas_long_cancel = GasLongCancel(self.params)
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
@@ -157,6 +162,14 @@ class Controls:
     CC.latActive = lat_active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
+
+    # dp: 踩油門 ⇒ 掛起縱向；鬆油門 0.2 s 後恢復。
+    # 位置必須在 CC.longActive 算完之後、下面的 `if not CC.longActive: self.LoC.reset()` 之前 ——
+    # 這樣掛起與恢復都會順帶 reset 縱向 PID，恢復時是「從零重新接管」，
+    # 不帶掛起期間累積的積分量。被煞車/按鍵取消（CC.enabled=False）時本模組自行解除武裝，
+    # 之後踩/鬆油門都不會把縱向「偷」回來 —— 必須使用者重新 engage。
+    if self.gas_long_cancel.update(bool(CS.gasPressed), CC.enabled, CS.vEgo, CS.aEgo):
+      CC.longActive = False
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
