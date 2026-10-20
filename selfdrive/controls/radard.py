@@ -172,16 +172,22 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
   elif (track is None) and ready and (lead_prob > .5):
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego, lead_prob)
 
-  # dp: 轉彎（角度或角速度超門檻）時跳過原廠低速強制停車。根因：掉頭/大角度轉向時
-  # 路邊固定物（護欄/路緣石/牆壁）的雷達回波會掃過正前方，yRel 掉進 ±1m 內，
-  # potential_low_speed_lead 不看轉向、不看視覺、不看橫向走廊，會把固定物鎖成前車，
+  # dp: 轉彎（角度或角速度超門檻）時，只跳過「純雷達、視覺未確認」的低速強制停車。
+  # 根因：掉頭/大角度轉向時路邊固定物（護欄/路緣石/牆壁）的雷達回波會掃過正前方，
+  # yRel 掉進 ±1m 內，potential_low_speed_lead 不看轉向/視覺/橫向走廊，把固定物鎖成前車，
   # 導致低速蠕行時誤踩煞車（實測 vEgo≈2m/s 掉頭時 aTarget 掉到 -0.64）。
+  # 收緊版：若該低速 track 已被視覺匹配（identifier == track.identifier），仍保留保護，
+  # 以免低速過彎跟車時失去「前車停了我也停」的兜底；只有純雷達、視覺未確認才跳過。
   is_turning = _dp_kwargs.get('is_turning', False)
-  if low_speed_override and not is_turning:
-    low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
-    if len(low_speed_tracks) > 0:
-      closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
+  low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
+  if len(low_speed_tracks) > 0:
+    closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
 
+    # 轉彎時：視覺未確認（純雷達）的目標一律不採用；視覺已確認的保留
+    if is_turning and track is not None and closest_track.identifier != track.identifier:
+      closest_track = None
+
+    if closest_track is not None and low_speed_override:
       # Only choose new track if it is actually closer than the previous one
       if (not lead_dict['status']) or (closest_track.dRel < lead_dict['dRel']):
         lead_dict = closest_track.get_RadarState()
