@@ -1,0 +1,19 @@
+# dp - SSH rescue keys, seeded by launch_chffrplus.sh::seed_ssh_keys().
+#
+# Why this file exists: the car only accepts publickey logins, and the keys it
+# trusts come from the /data/params/d/GithubSshKeys param. A reinstall wipes
+# /data, so that param disappears together with everything else. If the install
+# then fails and the UI is stuck on the comma logo, there is no way to enter a
+# GitHub username either - the box is unreachable over the network and the only
+# way back in is a physical reflash.
+#
+# seed_ssh_keys() copies this file into /data/params/d/GithubSshKeys before
+# build.py runs, so SSH stays available no matter how far the install got. It
+# never overwrites an existing param, so a username entered from the UI wins.
+#
+# PUBLIC KEYS ONLY. The matching private key (id_ed25519, the file without the
+# .pub suffix) must never be committed here - this repository is source, and
+# anyone holding that private key can log into the device.
+#
+# To let another machine in: generate a keypair there and append its .pub line.
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMIqxlfrAOt5NQJ/O6Ozxn9h8RGEuXfKXgiaYHyN0sc8 workbuddy@dell-pc

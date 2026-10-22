@@ -193,6 +193,37 @@ set_model_fingerprint() {
   fi
 }
 
+seed_ssh_keys() {
+  # dp - 重裝後的 SSH 救命通道。
+  #
+  # 車機只允許 publickey 登入，而它信任的公鑰清單就是 /data/params/d/GithubSshKeys
+  # 這個 param 檔（sshd 透過 /usr/comma/setup_keys 讀它）。重裝會清空 /data，
+  # 這個檔一起消失，於是形成死鎖：
+  #   裝完卡在 comma logo → 進不了 UI、填不了 GitHub 使用者名稱 → SSH 也被拒 → 只能線刷。
+  #
+  # 這裡在 build.py 之前把倉庫自帶的公鑰種進該 param，所以不管安裝卡在哪一步，
+  # SSH 都還在。只寫公鑰（本身是公開資料），param 已有內容則完全不動 ——
+  # 使用者在 UI 裡填過的使用者名稱優先。
+  local src="$DIR/system/hardware/tici/authorized_keys"
+  local dst="/data/params/d/GithubSshKeys"
+
+  [ -s "$src" ] || return 0
+  [ -s "$dst" ] && return 0
+
+  mkdir -p /data/params/d
+  # 跟 Params.put() 一樣走「暫存檔 + rename」，避免 sshd 剛好讀到寫一半的內容。
+  # 權限對齊 params 自己的慣例（mkstemp 出來的 0600）：sshd 以 root 讀得到，
+  # 又不會被其他人改寫。
+  if cp "$src" "$dst.tmp" 2>/dev/null; then
+    chmod 600 "$dst.tmp" 2>/dev/null
+    if mv -f "$dst.tmp" "$dst" 2>/dev/null; then
+      echo "dp: seeded SSH authorized keys from system/hardware/tici/authorized_keys"
+      return 0
+    fi
+  fi
+  rm -f "$dst.tmp" 2>/dev/null
+}
+
 function launch {
   [ -f "$DIR/.git/index.lock" ] && rm -f $DIR/.git/index.lock
 
@@ -229,6 +260,10 @@ function launch {
       fi
     fi
   fi
+
+  # dp - 放在 git 覆蓋更新之後、build.py 之前：git 分支可能整個換掉，
+  # 但 seed 用的是剛落地的這份 $DIR，而且一定要早於編譯階段。
+  seed_ssh_keys
 
   ln -sfn $(pwd) /data/pythonpath
   export PYTHONPATH="$PWD"
