@@ -37,48 +37,41 @@ ensure_usb_host() {
 }
 
 set_tici_hw() {
-  local model
-  # devicetree 的 model 帶結尾 NUL：「comma tici」(C3) / 「comma tizi」(C3X)。
-  # 順手把兩端空白去掉，免得某個 DT 版本多一個尾隨空格就整段判定失配。
-  model=$(tr -d '\000' < /sys/firmware/devicetree/base/model 2>/dev/null | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  grep -q "comma " /sys/firmware/devicetree/base/model 2>/dev/null || return 0
+  export TICI_HW=1
 
-  # dp(2026-10-22): 平台由機型串決定，不再靠探測 panda MCU 類型。
+  # dp(2026-10-22): 選哪套 panda 庫，只看「哪一套真的打得開 panda」。
   #
-  # 舊邏輯是「F4 -> TICI_DOS / H7 -> TICI_TRES」，把 panda 的 MCU 型號當成平台
-  # 判據，兩頭都是錯的：
-  #   1. TICI_DOS 真正的語義是「這台是 comma 3」—— 它決定 manager 載入哪套 panda
-  #      庫（panda_tici 對 panda）、pandad 跑 pandad_tici 還是 pandad，modem 也靠它
-  #      選 QMI 而不是 PPP。TICI_TRES 只影響 home.py 的版本字串（Lite / XLite）。
-  #      拿 MCU 型號去推這兩個變數，等於用「panda 是哪個型號」回答「這台是什麼機器」。
-  #   2. 判據來自 /persist/dp_dev_panda_mcu_type，而 /persist 跨重裝保留。只要曾經
-  #      插過 external white panda（F4），探測就會把它寫進快取，之後每次開機都按
-  #      F4 走 TICI_DOS，重裝 /data 也清不掉。
-  # 現在 C3 / C3X 各自短路，完全不讀快取、也不做那 15 次 × 3 秒的慢速探測。
-  case "$model" in
-    *tizi)
-      export TICI_HW=1
-      export TICI_TRES=1
-      unset TICI_DOS
-      echo "dp: C3X (tizi) -> TICI_TRES=1, standard panda library"
-      ;;
-    *tici)
-      export TICI_HW=1
-      export TICI_DOS=1
-      unset TICI_TRES
-      echo "dp: C3 (tici) -> TICI_DOS=1, panda_tici library"
-      ;;
-    *)
-      return 0
-      ;;
-  esac
+  # 原本這裡把 /persist/dp_dev_panda_mcu_type 當判據：F4 -> TICI_DOS（panda_tici
+  # 庫 / pandad_tici），H7 -> TICI_TRES。三個問題：
+  #   - 快取在 /persist，跨重裝保留。插過一次外接白 panda（F4）就會永久寫成 F4。
+  #   - MCU 型號回答不了「該用哪套庫」。實測本機快取是 F4、真實 MCU 是 H7，而
+  #     能打開內建 panda 的正是 panda_tici（內建 panda 掛在 SPI 上，USB 那套
+  #     庫找不到它）。按 H7 走反而會挑到打不開 panda 的那套。
+  #   - 原本的慢速探測寫的是 `python -c ...`，但服務環境的 PATH 裡沒有 `python`
+  #     （venv 不在 PATH，systemd 預設 PATH 不含 /usr/local/venv/bin），系統的
+  #     /usr/bin/python3 又缺 usb1，import 直接失敗。所以那 15 次探測每次都是
+  #     command-not-found，永遠偵測不到，快取一旦缺失兩個變數都是空的 —— 正好落到
+  #     打不開 panda 的那套庫。這裡改成明確指定 venv 的解釋器。
+  # 所以直接試：panda_tici 開得起來就 TICI_DOS=1（manager、pandad、card 的
+  # CAN converter、modem 的 QMI/PPP 都跟著走這條），否則維持原本的標準 panda 庫。
+  # 結果不再寫回 /persist —— 每次開機現測，成本約 1 秒。
+  local py=""
+  for cand in /usr/local/venv/bin/python3 /usr/local/venv/bin/python python3; do
+    if command -v "$cand" >/dev/null 2>&1; then py="$cand"; break; fi
+  done
+
+  if [ -n "$py" ] && "$py" -c "from panda_tici import Panda; p = Panda(cli=False); p.get_mcu_type(); p.close()" >/dev/null 2>&1; then
+    export TICI_DOS=1
+    unset TICI_TRES
+    echo "dp: panda reachable via panda_tici -> TICI_DOS=1"
+  else
+    unset TICI_DOS
+    export TICI_TRES=1
+    echo "dp: panda not reachable via panda_tici -> standard panda library"
+  fi
 
   ensure_usb_host
-
-  # 舊快取已廢棄：只在存在時提一下，方便日後看開機日誌的人知道那個 F4 從哪來。
-  # 不刪它 —— 刪要 remount /persist rw，為了清一行歷史狀態不值得多擔一次風險。
-  if [ -f /persist/dp_dev_panda_mcu_type ]; then
-    echo "dp: NOTE /persist/dp_dev_panda_mcu_type=$(cat /persist/dp_dev_panda_mcu_type 2>/dev/null) is stale, ignored"
-  fi
 
   # NVMe 只在真的有裝置時才掛，避免沒有 NVMe 的機器白等 mount_nvme 的輪詢
   [ -b /dev/nvme0n1p1 ] && mount_nvme
