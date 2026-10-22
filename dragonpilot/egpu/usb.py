@@ -27,6 +27,24 @@ def egpu_present() -> bool:
   return any(is_egpu_usb_id(*i) for i in _ids())
 
 
+def egpu_link_speed() -> float | None:
+  """The dock's negotiated USB rate in Mbps (5000 for the 5 Gbps this tunnel wants), None when the
+  device is absent or speed cannot be read. A drop to 480 (high speed) still enumerates and still
+  drives, just starved - that is what the indicator paints red."""
+  try:
+    devices = list(USB_DEVICES_PATH.glob("*"))
+  except OSError:
+    return None
+  for d in devices:
+    try:
+      if not is_egpu_usb_id(int((d / "idVendor").read_text(), 16), int((d / "idProduct").read_text(), 16)):
+        continue
+      return float((d / "speed").read_text())
+    except (OSError, ValueError):
+      continue
+  return None
+
+
 def egpu_rom_present() -> bool:
   """an ASM2464 on the bus with factory / ROM firmware (174C:2464/2463): seen, but tinygrad cannot open it"""
   return any(i in EGPU_ROM_USB_IDS for i in _ids())

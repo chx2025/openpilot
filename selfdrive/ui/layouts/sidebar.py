@@ -30,6 +30,7 @@ METRIC_START_Y = 300  # zoompilot sidebar: four cards fit above the home button 
 EGPU_ICON_WIDTH = 120
 EGPU_ICON_HEIGHT = 89
 EGPU_LABEL_SIZE = 36
+EGPU_SUB_SIZE = 24      # the speed / power+temp line under the state word
 
 ThermalStatus = log.DeviceState.ThermalStatus
 NetworkType = log.DeviceState.NetworkType
@@ -95,7 +96,8 @@ class Sidebar(Widget):
     self._jetlink_status = MetricData("JETLINK", "未連線", Colors.GRAY)
     self._jetlink_icons = jetlink_ui.JetlinkIcons(JETLINK_ICON_WIDTH, JETLINK_ICON_HEIGHT)
     # dp - egpu: sunnypilot's sidebar chestnut icon (same icon files and size as jetlink's) and an eGPU card
-    self._egpu_status = MetricData("eGPU", "未連線", Colors.GRAY)
+    self._egpu_status = MetricData("eGPU", "未連接", Colors.GRAY)
+    self._egpu_sub: tuple[str, rl.Color] | None = None   # the line under the state word
 
     # QR code for dashy
     self._qr = DashyQR()
@@ -141,6 +143,9 @@ class Sidebar(Widget):
     # dp - egpu
     state = ui_state.egpu_state
     self._egpu_status.update("eGPU", egpu_ui.STATE_TEXT[state], egpu_ui.STATE_COLOR[state])
+    # the line under the state word: link speed, or the GPU's power/temperature while it drives.
+    # Computed here (deviceState rate), not per frame: it reads sysfs.
+    self._egpu_sub = egpu_ui.sub_line(state)
 
   def _update_jetlink_status(self):
     # dp - jetlink: the card is shown only while there is a link to show (ui_state.jetlink_view)
@@ -275,8 +280,18 @@ class Sidebar(Widget):
     label = tr(egpu_ui.STATE_TEXT[state])
     size = measure_text_cached(self._font_bold, label, EGPU_LABEL_SIZE)
     rl.draw_text_ex(self._font_bold, label,
-                    rl.Vector2(rect.x + METRIC_MARGIN + (METRIC_WIDTH - size.x) / 2, y + EGPU_ICON_HEIGHT + 6),
+                    rl.Vector2(rect.x + METRIC_MARGIN + (METRIC_WIDTH - size.x) / 2, y + EGPU_ICON_HEIGHT + 2),
                     EGPU_LABEL_SIZE, 0, egpu_ui.STATE_COLOR[state])
+
+    # dp - egpu: second line - the link speed while idle, the GPU's power and temperature while
+    # driving (green 5 G / red a starved link / green a healthy reading)
+    if self._egpu_sub is None:
+      return
+    sub, color = self._egpu_sub
+    sub_size = measure_text_cached(self._font_bold, sub, EGPU_SUB_SIZE)
+    rl.draw_text_ex(self._font_bold, sub,
+                    rl.Vector2(rect.x + METRIC_MARGIN + (METRIC_WIDTH - sub_size.x) / 2, y + EGPU_ICON_HEIGHT + 42),
+                    EGPU_SUB_SIZE, 0, color)
 
   def _draw_metric(self, rect: rl.Rectangle, metric: MetricData, y: float):
     metric_rect = rl.Rectangle(rect.x + METRIC_MARGIN, y, METRIC_WIDTH, METRIC_HEIGHT)

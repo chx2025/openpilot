@@ -10,7 +10,10 @@ Strings are Traditional Chinese written in place, as the jetlink panel does; eve
 is one the UI font already carries (selfdrive/ui/translations/app_zh-CHT.po), otherwise it draws "?".
 """
 import time
+import pyray as rl
+
 from dragonpilot import jetlink_adapter
+from dragonpilot.egpu import telemetry, usb
 
 from openpilot.selfdrive.ui.ui_state import ui_state, EgpuState, JetlinkState
 from dragonpilot.selfdrive.ui import jetlink_ui
@@ -20,19 +23,26 @@ from dragonpilot.egpu.constants import (ST_IDLE, ST_RESOLVING, ST_DOWNLOADING, S
 
 NONE_TEXT = jetlink_ui.NONE_TEXT
 
+# the dock's USB 3.2 Gen1 link: 5 Gbps is what the PCIe tunnel needs, anything slower is a bad cable/port
+SPEED_FAST_MBPS = 5000
+RED = rl.Color(240, 76, 76, 255)
+
+# three states the driver cares about - not plugged in, plugged in but idle, driving on the big model.
+# LOADING/FAILED stay separate: they are short-lived or a warning, and folding them into "已連接"
+# would hide a failure behind a green word.
 STATE_TEXT = {
-  EgpuState.DISCONNECTED: "未連線",
-  EgpuState.NO_MODEL: "未使用",
-  EgpuState.READY: "就緒",
+  EgpuState.DISCONNECTED: "未連接",
+  EgpuState.NO_MODEL: "已連接",
+  EgpuState.READY: "已連接",
   EgpuState.LOADING: "載入中",
-  EgpuState.ACTIVE: "大模型",
+  EgpuState.ACTIVE: "執行中",
   EgpuState.FAILED: "失敗",
 }
 
 STATE_COLOR = {
   EgpuState.DISCONNECTED: jetlink_ui.GREY,
-  EgpuState.NO_MODEL: jetlink_ui.ORANGE,
-  EgpuState.READY: jetlink_ui.GREEN,
+  EgpuState.NO_MODEL: jetlink_ui.ORANGE,   # attached, but nothing will drive on it
+  EgpuState.READY: jetlink_ui.GREEN,       # compiled and chosen: takes over next drive
   EgpuState.LOADING: jetlink_ui.YELLOW,
   EgpuState.ACTIVE: jetlink_ui.GREEN,
   EgpuState.FAILED: jetlink_ui.ORANGE,
@@ -69,6 +79,34 @@ def badge_text(state: EgpuState) -> str:
 def model_name() -> str:
   b = ui_state.egpu_bundle
   return b["display_name"] if b else "未選擇（由內建小模型駕駛）"
+
+
+def speed_text(mbps: float) -> str:
+  """5000 -> '5G', 480 -> '480M': the link's negotiated rate, not the PCIe LTSSM state"""
+  return f"{mbps / 1000:.0f}G" if mbps >= 1000 else f"{mbps:.0f}M"
+
+
+def sub_line(state: EgpuState) -> tuple[str, rl.Color] | None:
+  """The line under the state word. While the big model drives it is the GPU's power and
+  temperature; otherwise the USB link speed - green on the 5 Gbps this dock's PCIe tunnel needs,
+  red when the link fell back to a slower one (which is what a bad cable looks like: the dock
+  still enumerates, the model still "works", the tunnel is just starved).
+
+  None when there is nothing honest to show: no eGPU, or a speed sysfs that cannot be read.
+  """
+  if state == EgpuState.DISCONNECTED:
+    return None
+
+  if state == EgpuState.ACTIVE:
+    reading = telemetry.temp_power()
+    if reading is not None:
+      temp_c, power_w = reading
+      return f"{power_w:.0f}W {temp_c:.0f}°C", jetlink_ui.GREEN
+
+  mbps = usb.egpu_link_speed()
+  if mbps is None:
+    return None
+  return speed_text(mbps), (jetlink_ui.GREEN if mbps >= SPEED_FAST_MBPS else RED)
 
 
 def model_state(ref: str) -> str:
