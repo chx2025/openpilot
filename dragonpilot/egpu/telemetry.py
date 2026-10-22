@@ -9,10 +9,15 @@ copied into DRAM, ~2 ms over the USB link. That is why this module is used from 
 from the UI: a second process cannot open the device, and issuing the transfer from another thread
 would race tinygrad's own USB transfers.
 
-The struct is read through tinygrad's own generated definitions rather than by offset arithmetic -
-`SMU_TABLE_SMU_METRICS` + `SmuMetricsExternal_t` is what tinygrad's am_smi uses for exactly this
-card family (MP0 != (13,0,6), (13,0,12), (13,0,15)), so the layout follows the vendored autogen
-instead of a hand copied header. Measured on the unit, idle, after a power cycle: 11 W, edge 34 C.
+The struct is read through tinygrad's own generated definitions - `SmuMetricsExternal_t` is what
+tinygrad's am_smi uses for this card family (MP0 not in (13,0,6), (13,0,12), (13,0,15)) - but the
+table id is NOT `smu_mod.SMU_TABLE_SMU_METRICS`: that autogen enum comes from a different PMFW
+variant and numbers metrics 8, while this firmware's smu14_driver_if_v14_0.h defines
+TABLE_SMU_METRICS as 5. Reading table 8 returns a struct whose edge temperature is out of range (the
+range check below rejects it, which is how this was caught) whereas 5 gives the real numbers.
+
+Measured on the unit: idle after a power cycle 11 W / edge 34 C, idle once warm 21 W / 42 C, and
+during the big model's benchmark socket power in the tens of watts with edge in the 40s.
 
 A different SMU version is refused rather than parsed with another PMFW's layout, and every reading
 is range checked, so a wrong guess reports nothing instead of a plausible-looking lie on the
@@ -21,6 +26,9 @@ windscreen.
 import time
 
 from openpilot.common.swaglog import cloudlog
+
+# smu14_driver_if_v14_0.h: TABLE_SMU_METRICS 5 (the #define list, not the shifted autogen enum)
+TABLE_SMU_METRICS = 5
 
 # TEMP_e, from the autogen module: TEMP_EDGE is the one the sidebar shows
 TEMPERATURE_EDGE = 0
@@ -41,13 +49,13 @@ def supported(adev) -> bool:
     return False
   mod = getattr(smu, "smu_mod", None)
   return (getattr(mod, "__name__", "").rsplit(".", 1)[-1] == "smu_14_0_2"
-          and hasattr(mod, "SmuMetricsExternal_t") and hasattr(mod, "SMU_TABLE_SMU_METRICS"))
+          and hasattr(mod, "SmuMetricsExternal_t"))
 
 
 def _metrics(adev):
   """The metrics struct, as the PMFW just copied it into DRAM"""
   smu = adev.smu
-  table = smu.read_table(smu.smu_mod.SmuMetricsExternal_t, smu.smu_mod.SMU_TABLE_SMU_METRICS)
+  table = smu.read_table(smu.smu_mod.SmuMetricsExternal_t, TABLE_SMU_METRICS)
   return table.SmuMetrics
 
 
