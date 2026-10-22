@@ -58,8 +58,13 @@ CACHE_TAG = f"tg{VENDORED_TINYGRAD_REF[:8]}v{COMPILE_VERSION}"
 
 # sunnypilot-master selfdrive/modeld/SConscript tg_flags (comma) / chestnut_tg_flags without FRAME_DEV=CPU
 TG_FLAGS_QCOM = {"DEV": "QCOM", "IMAGE": "1", "FLOAT16": "1", "NOLOCALS": "1", "JIT_BATCH_SIZE": "0", "OPENPILOT_HACKS": "1"}
+# AM_POWER_LIMIT matters more than it looks: without it tinygrad pins the top clocks and lets the card draw
+# everything it can (amdev.init_hw, "else: set_clocks(level=-1)"), and the compile then dies every time after
+# ~165 s of sustained load - the SMU stops answering, the USB timeline read times out and only a power cycle
+# brings the dock back. modeld_egpu has always set 100 W for inference; the compile has to run under the same
+# limit, otherwise it is the only thing in the pipeline that asks the card for its maximum.
 TG_FLAGS_AMD = {"DEBUG": "1", "DEV": "USB+AMD:LLVM", "FLOAT16": "1", "JIT_BATCH_SIZE": "0", "GMMU": "0",
-                "TC_OPT": "2", "TC_MIN_GLOBALS": "32"}
+                "TC_OPT": "2", "TC_MIN_GLOBALS": "32", "AM_POWER_LIMIT": "100"}
 
 MODEL_INPUT_SIZE = (512, 256)  # common/transformations/model.py MEDMODEL_INPUT_SIZE
 # camera NV12 geometries (selfdrive/modeld/SConscript CAMERA_CONFIGS): tici/3X 1928x1208, mici 1344x760
