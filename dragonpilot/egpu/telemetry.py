@@ -64,20 +64,36 @@ class Sampler:
   """
 
   def __init__(self, device: str, params):
+    self._device = device
     self._params = params
     self._next = 0.0
     self._last: tuple[int, int] | None = None
     self._failures = 0
     self._adev = None
+    self._resolved = False
+
+  def _open(self) -> bool:
+    """The device is looked up on the first sample, not at load: by then inference has run and the
+    device is certainly open, whereas resolving it during load would touch the GPU on a path that
+    a timeout is watching"""
+    self._resolved = True
     try:
       from tinygrad.device import Device
-      adev = Device[device].iface.dev_impl
+      adev = Device[self._device].iface.dev_impl
     except Exception:
-      return
-    if supported(adev):
-      self._adev = adev
+      cloudlog.warning(f"egpu: cannot reach the device at {self._device} for its SMU metrics table")
+      return False
+    if not supported(adev):
+      smu = getattr(adev, "smu", None)
+      cloudlog.warning(f"egpu: SMU {getattr(getattr(smu, 'smu_mod', None), '__name__', None)} has no known "
+                       "metrics layout, no power/temperature this drive")
+      return False
+    self._adev = adev
+    return True
 
   def sample(self) -> None:
+    if not self._resolved and not self._open():
+      return
     if self._adev is None:
       return
     now = time.monotonic()
