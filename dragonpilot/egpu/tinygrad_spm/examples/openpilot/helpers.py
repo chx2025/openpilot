@@ -57,6 +57,18 @@ def load_pickle(f, *, out_of_band=False):
   return pickle.load(io.BytesIO(opcodes), buffers=buffers())
 
 
+def _log_thermal(which: str) -> None:
+  """dp - egpu: one SMU read at a point where the device is idle again (nothing in flight, so it
+  cannot race tinygrad's own transfers), because the big model's compile dies after ~165 s of
+  sustained load and the last temperature in compile.log is what tells a thermal death from a link
+  death. Never raises: a card that cannot answer is already the interesting case."""
+  try:
+    from dragonpilot.egpu.telemetry import read_detail
+    print(f"  smu {which}: {read_detail(Device.default.iface.dev_impl)}", flush=True)
+  except Exception as e:
+    print(f"  smu {which}: unavailable ({type(e).__name__}: {e})", flush=True)
+
+
 def compile_jit(function:Callable, make_inputs:Callable[[int], tuple[tuple, dict]], benchmark_runs=20, *, out_of_band=False):
   """The factory creates fresh inputs, including any mutable state, for each seed."""
   if benchmark_runs < 1: raise ValueError("benchmark_runs must be at least 1")
@@ -71,12 +83,15 @@ def compile_jit(function:Callable, make_inputs:Callable[[int], tuple[tuple, dict
       output = fn(*args, **kwargs)
       if tensors := get_parameters(output): Tensor.realize(*tensors)
       Device.default.synchronize()
-      print(f"  [{i+1}/{count}] {(time.perf_counter()-start)*1e3:.2f} ms")
+      print(f"  [{i+1}/{count}] {(time.perf_counter()-start)*1e3:.2f} ms", flush=True)
+      _log_thermal(f"after run {i+1}/{count}")
       if i == 0:
         result = [t.numpy().copy() for t in get_parameters(output)], [t.numpy().copy() for t in get_parameters((args, kwargs))]
     return result
 
+  _log_thermal("before the first run")
   expected = run(jit, 42, 3)
+  _log_thermal("after the benchmark")
   with tempfile.TemporaryFile(dir=".") as f:
     dump_pickle(jit, f, out_of_band=out_of_band)
     f.seek(0)

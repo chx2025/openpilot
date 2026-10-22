@@ -32,6 +32,7 @@ TABLE_SMU_METRICS = 5         # TABLE_SMU_METRICS in smu14_driver_if_v14_0.h
 SOCKET_POWER_OFFSET = 136
 TEMPERATURE_OFFSET = 140
 TEMPERATURE_EDGE = 0
+FAN_RPM_OFFSET = 170
 READ_SIZE = TEMPERATURE_OFFSET + 24   # AvgTemperature[TEMP_COUNT] + the fan-intake word
 
 PERIOD = 5.0                  # seconds between readings; each one is a USB round trip
@@ -53,6 +54,33 @@ def read(adev) -> tuple[float, float] | None:
   if not 10 <= temp <= 120 or not 0 < power < 1000:
     return None
   return float(temp), float(power)
+
+
+def read_detail(adev) -> dict | None:
+  """Everything in the table that tells you why a long run died, for the compile log.
+
+  Not used in the driving loop: read() already answers what the sidebar needs, and each extra word
+  here is another offset to keep honest. This one exists because the big model's compile dies after
+  ~165 s of sustained load, and "was the card at 95 C with the fan stopped" is the question that
+  separates a thermal problem from a link problem."""
+  if not supported(adev):
+    return None
+  smu = adev.smu
+  smu._send_msg(smu.smu_mod.PPSMC_MSG_TransferTableSmu2Dram, TABLE_SMU_METRICS)
+  raw = bytes(bytearray(adev.vram.view(smu.driver_table_paddr, FAN_RPM_OFFSET + 2)[:]))
+  temps = struct.unpack_from("<8H", raw, TEMPERATURE_OFFSET)
+  detail = {
+    "sock_w": struct.unpack_from("<H", raw, SOCKET_POWER_OFFSET)[0],
+    "brd_w": struct.unpack_from("<H", raw, SOCKET_POWER_OFFSET + 2)[0],
+    "edge": temps[0], "hot": temps[1], "mem": temps[4], "vr": temps[5],
+    "fan": struct.unpack_from("<H", raw, FAN_RPM_OFFSET)[0],
+    # CurrClock[PPCLK_COUNT] at 0, amdgpu's order: GFXCLK, SOCCLK, UCLK, ...
+    "gfx_clk": struct.unpack_from("<H", raw, 0)[0],
+    "mem_clk": struct.unpack_from("<H", raw, 4)[0],
+  }
+  if not 10 <= detail["edge"] <= 130:
+    return None
+  return detail
 
 
 class Sampler:
