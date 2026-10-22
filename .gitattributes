@@ -1,0 +1,5 @@
+# dp - sshd parses authorized_keys line by line. A CRLF line ending leaves a
+# trailing \r on every key, the key is then silently rejected and the client
+# only sees "Permission denied (publickey)" - no hint about why. Pin LF here so
+# the file survives a Windows checkout with core.autocrlf=true.
+system/hardware/tici/authorized_keys text eol=lf
