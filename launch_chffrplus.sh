@@ -24,7 +24,29 @@ function agnos_init {
 }
 
 set_tici_hw() {
-  grep -q "tici" /sys/firmware/devicetree/base/model 2>/dev/null || return 0
+  local model
+  # devicetree 的 model 帶結尾 NUL：「comma tici」(C3) / 「comma tizi」(C3X)
+  model=$(tr -d '\000' < /sys/firmware/devicetree/base/model 2>/dev/null)
+
+  case "$model" in
+    *tizi)
+      # dp - C3X 強制 H7，完全不信任 /persist 上的快取。
+      # C3X 只有 red panda（H7），F4 只存在於 comma two / EON。但是
+      # /persist/dp_dev_panda_mcu_type 會跨刷機保留：只要曾經被寫成 F4，之後每次開機
+      # 都走 TICI_DOS=1 -> pandad_tici（C2 的 panda 庫），再由 set_aux_panda 把內建
+      # panda 從 USB 匯流排上摘掉，症狀就是「panda 不見了」；而且重裝系統也不會復原，
+      # 因為快取在 /persist 而不是 /data。這裡直接短路成 H7，不讀快取也不做慢速探測。
+      export TICI_HW=1
+      echo "C3X (tizi): forcing panda MCU H7, /persist cache ignored"
+      export TICI_TRES=1
+      # NVMe 掛載只在真的有裝置時才做，避免沒有 NVMe 時白等 mount_nvme 的輪詢
+      [ -b /dev/nvme0n1p1 ] && mount_nvme
+      return 0
+      ;;
+    *tici) ;;
+    *) return 0 ;;
+  esac
+
   export TICI_HW=1
 
   local cache="/persist/dp_dev_panda_mcu_type"
