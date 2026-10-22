@@ -115,7 +115,11 @@ set_aux_panda() {
   # dp - egpu: 该端口同时承载 eGPU 底座（ASM2464，3801）。开启 eGPU 时
   # 必须保持 host 模式让底座枚举，绝不能在检测不到第二个 panda 时 echo none
   # 把端口切回 device 模式（会把已枚举的 eGPU 一起切断，见 dmesg usb 4-1 disconnect）。
+  # dp(2026-10-22): 檔名不存在時（首次開機，manager 還沒把預設值寫進 /data/params）
+  # 一律按宣告的預設值 "1" 處理。原本讀到空字串會讓這道保護失效，直接走到
+  # 下面的 echo none，把內建 panda 從 USB 匯流排摘掉。
   local egpu=$(cat /data/params/d/dp_egpu_enabled 2>/dev/null)
+  [ -z "$egpu" ] && egpu=1
   if [ "$egpu" = "1" ]; then
     echo host | sudo tee "$mode" >/dev/null 2>&1
     return 0
@@ -132,7 +136,11 @@ set_aux_panda() {
       return 0
     fi
   done
-  echo none | sudo tee "$mode" >/dev/null 2>&1
+  # dp(2026-10-22): 以前這裡是 `echo none`，把沒有第二個 panda 的內建 panda 從
+  # USB 匯流排上摘掉 —— 摘掉之後 pandad 找不到裝置，症狀是「panda 不見了」，
+  # 而且看起來像硬體故障。內建 panda 永遠不該被摘掉，找不到第二個就留在 host
+  # 模式即可（多一個裝置不會有害）。
+  echo "dp: no second panda on the aux port, keeping it in host mode (no echo none)"
 }
 
 mount_nvme() {
@@ -165,8 +173,23 @@ set_model_fingerprint() {
   local model
   model=$(cat /data/params/d/dp_dev_model_selected 2>/dev/null)
   if [ -n "$model" ] && [ "$model" != "0" ]; then
+    # dp(2026-10-22): 只接受 opendbc 裡真的存在的車型名。原本只要參數非空就
+    # export FINGERPRINT + SKIP_FW_QUERY=1：一個打錯或殘留的名字會讓整台車用錯的
+    # 車型上車（按鍵全錯、車機報錯），症狀看起來像硬體故障，而且 /data 重裝前
+    # 一直復現。這裡用一次 grep 對照 values.py 的車型定義，成本可忽略。
+    case "$model" in
+      ""|*[!A-Z0-9_]*)
+        echo "WARNING: dp_dev_model_selected='$model' is malformed, ignoring"
+        return 0
+        ;;
+    esac
+    if ! grep -rqsE "^[[:space:]]*${model} = " "$DIR"/opendbc_repo/opendbc/car/*/values.py; then
+      echo "WARNING: dp_dev_model_selected='$model' is not a known platform, ignoring"
+      return 0
+    fi
     export FINGERPRINT="$model"
     export SKIP_FW_QUERY=1
+    echo "dp: forcing fingerprint $model (SKIP_FW_QUERY=1)"
   fi
 }
 
