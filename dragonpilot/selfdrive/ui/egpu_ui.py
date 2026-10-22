@@ -13,7 +13,7 @@ import time
 import pyray as rl
 
 from dragonpilot import jetlink_adapter
-from dragonpilot.egpu import telemetry, usb
+from dragonpilot.egpu import usb
 
 from openpilot.selfdrive.ui.ui_state import ui_state, EgpuState, JetlinkState
 from dragonpilot.selfdrive.ui import jetlink_ui
@@ -98,10 +98,9 @@ def sub_line(state: EgpuState) -> tuple[str, rl.Color] | None:
     return None
 
   if state == EgpuState.ACTIVE:
-    reading = telemetry.temp_power()
-    if reading is not None:
-      temp_c, power_w = reading
-      return f"{power_w:.0f}W {temp_c:.0f}°C", jetlink_ui.GREEN
+    # modeld_egpu publishes these from the SMU metrics table (dragonpilot/egpu/telemetry.py)
+    if ui_state.egpu_power and ui_state.egpu_temp:
+      return f"{ui_state.egpu_power}W {ui_state.egpu_temp}°C", jetlink_ui.GREEN
 
   mbps = usb.egpu_link_speed()
   if mbps is None:

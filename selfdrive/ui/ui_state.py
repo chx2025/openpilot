@@ -143,6 +143,8 @@ class UIState:
     self.egpu_enabled: bool = True
     self.egpu_bundle: dict | None = None
     self.egpu_status: dict = {}
+    self.egpu_power: int = 0    # W, published by modeld_egpu from the SMU metrics table
+    self.egpu_temp: int = 0     # degrees C, same source
     self.egpu_state = EgpuState.DISCONNECTED
 
 
@@ -321,6 +323,10 @@ class UIState:
     self.egpu_bundle = bundle if isinstance(bundle, dict) and bundle.get("ref") else None
     status = p.get(egpu_const.P_STATUS)
     self.egpu_status = status if isinstance(status, dict) else {}
+    # dp - egpu: the card's power and temperature; only modeld_egpu can read the SMU, so these
+    # stay 0 unless the big model is driving (dragonpilot/egpu/telemetry.py)
+    self.egpu_power = p.get("dp_egpu_power") or 0
+    self.egpu_temp = p.get("dp_egpu_temp") or 0
     # an eGPU on USB owns the big model, as dp's own USB GPU does: jetlink stays off beside it
     # (jetlink_adapter.should_run checks the same USB ids), and mici's home shows its eGPU icon
     self.usbgpu = self.usbgpu or self.egpu_present

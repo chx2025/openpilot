@@ -33,6 +33,7 @@ from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, get_curvature_from_plan, smooth_value
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
+from dragonpilot.egpu import telemetry
 
 STATEFUL_FRAME = 'new_img'
 DRIVING_OUTPUT = 'outputs'
@@ -55,7 +56,7 @@ class EgpuModelState:
   chestnut = True
   handovers = 0
 
-  def __init__(self, cam_w: int, cam_h: int, bundle: dict, model_pkl: str, warp_pkl: str):
+  def __init__(self, cam_w: int, cam_h: int, bundle: dict, model_pkl: str, warp_pkl: str, params=None):
     self.bundle = bundle
     self.generation = int(bundle.get("generation", 0))
     overrides = bundle.get("overrides", {})
@@ -78,6 +79,8 @@ class EgpuModelState:
     self.run_model = art['run']
     self.specs = {name: (tuple(shape), np.dtype(dtype), device) for name, (shape, dtype, device) in art['input_specs'].items()}
     self.model_device = self.specs[STATEFUL_FRAME][2]
+    # dp - egpu: the SMU holds the card's power and temperature and only this process can ask it
+    self._telemetry = telemetry.Sampler(self.model_device, params) if params is not None else None
     self.state_names = [n for n in art['state_inputs'] if n in self.specs]
     self.host_names = [n for n in self.specs if n not in self.state_names]
     self.output_slices = output_slices(art['metadata'])
@@ -133,6 +136,8 @@ class EgpuModelState:
     except Exception:
       cloudlog.exception(f"egpu: inference failed during {self.stage} (warmup={self._warming_up})")
       raise
+    if self._telemetry is not None:
+      self._telemetry.sample()   # one SMU read every few seconds, published as dp_egpu_{power,temp}
     if not self._warming_up:
       self._first_frame = False
     return result

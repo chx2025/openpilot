@@ -66,7 +66,7 @@ def make_loader(params: Params):
     def load():
       try:
         st = time.monotonic()
-        m = EgpuModelState(cam_w, cam_h, bundle, model_pkl, warp_pkl)
+        m = EgpuModelState(cam_w, cam_h, bundle, model_pkl, warp_pkl, params)
         m.warmup()
         result['model'] = m
         cloudlog.warning(f"egpu: {bundle['short_name']} ({m.layout}) loaded in {time.monotonic() - st:.1f}s")

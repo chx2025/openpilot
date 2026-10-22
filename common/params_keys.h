@@ -208,6 +208,10 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_egpu_loading", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
     {"dp_egpu_running", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
     {"dp_egpu_failed", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0"}},
+    // the card's own power and temperature, read from the SMU metrics table by modeld_egpu
+    // (dragonpilot/egpu/telemetry.py) and shown under the onroad eGPU icon
+    {"dp_egpu_power", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},
+    {"dp_egpu_temp", {CLEAR_ON_MANAGER_START|CLEAR_ON_OFFROAD_TRANSITION, INT, "0"}},
     {"dp_egpu_pointers", {PERSISTENT, JSON}},
     {"dp_egpu_delete_ref", {CLEAR_ON_MANAGER_START, STRING}},
     {"dp_egpu_auto_default", {PERSISTENT, BOOL, "1"}},
