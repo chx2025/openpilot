@@ -39,8 +39,8 @@ TEMPERATURE_VR = 5
 PERIOD = 5.0                  # seconds between readings; each one is a USB round trip
 MAX_FAILURES = 3              # then stop poking the SMU in the driving loop
 
-# 10 kHz units in the metrics table (amdgpu multiplies by 10 to get kHz)
-CLOCK_DIVISOR = 100
+# CurrClock in the table, reported as-is: this card answers in MHz (1000 idle with the clocks pinned),
+# and dividing by amdgpu's 10 kHz factor turns that into a number that reads like a broken sensor.
 
 
 def supported(adev) -> bool:
@@ -86,8 +86,8 @@ def read_detail(adev) -> dict | None:
     "edge": temps[TEMPERATURE_EDGE], "hot": temps[TEMPERATURE_HOTSPOT],
     "mem": temps[TEMPERATURE_MEM], "vr": temps[TEMPERATURE_VR],
     "fan_rpm": m.AvgFanRpm, "fan_pwm": m.AvgFanPwm,
-    "gfx_mhz": m.CurrClock[adev.smu.smu_mod.PPCLK_GFXCLK] // CLOCK_DIVISOR,
-    "mem_mhz": m.CurrClock[adev.smu.smu_mod.PPCLK_UCLK] // CLOCK_DIVISOR,
+    "gfx_clk": m.CurrClock[adev.smu.smu_mod.PPCLK_GFXCLK],
+    "mem_clk": m.CurrClock[adev.smu.smu_mod.PPCLK_UCLK],
     "gfx_busy": m.AverageGfxActivity,
   }
 
