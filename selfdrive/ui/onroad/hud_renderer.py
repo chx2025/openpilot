@@ -4,7 +4,7 @@ import threading
 import time
 import pyray as rl
 from dataclasses import dataclass
-from cereal import custom
+from cereal import custom, log
 from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.onroad.exp_button import ExpButton
 from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
@@ -47,6 +47,11 @@ PERF_PADDING = 14
 PERF_MARGIN_BOTTOM = 0   # 設定為 0 以貼齊底部
 PERF_ITEM_GAP = 50
 PERF_BG_COLOR = rl.Color(0, 0, 0, 160)
+
+# dp: the sidebar's TEMP/GOOD card moved to the right side of the onroad screen
+TEMP_CARD_W = 240
+TEMP_CARD_H = 126
+TEMP_FONT_SIZE = 35
 
 
 @dataclass(frozen=True)
@@ -111,6 +116,10 @@ class HudRenderer(Widget):
     # --- 紅綠燈減速中 ---
     self.ts_braking: bool = False
     self._ts_last_braking_t: float = -1e9
+
+    # dp: 溫度卡片（原 sidebar 的 TEMP/GOOD），移到行駛畫面右側
+    self._temp_value: str = "GOOD"
+    self._temp_color: rl.Color = COLORS.WHITE
 
     # --- TDX 路況預警變數 ---
     self.tdx_next_speed: int = -1
@@ -203,6 +212,12 @@ class HudRenderer(Widget):
     # dp: 右下角資訊列 - 方向盤角度
     self.steering_angle_deg = car_state.steeringAngleDeg
 
+    # dp: 溫度（sidebar 的 TEMP/GOOD 卡片搬到行駛畫面右側）
+    if sm.updated['deviceState']:
+      ok = sm['deviceState'].thermalStatus == log.DeviceState.ThermalStatus.ok
+      self._temp_value = "GOOD" if ok else "HIGH"
+      self._temp_color = COLORS.WHITE if ok else rl.Color(201, 34, 49, 255)
+
   def _update_traffic_stop(self, sm) -> None:
     """紅綠燈減速中：讀 longitudinalPlanDP.targets[trafficStop].braking，且 openpilot 正在控制縱向"""
     braking = False
@@ -239,6 +254,9 @@ class HudRenderer(Widget):
 
     self._draw_current_speed(rect)
 
+    # dp: 溫度卡片，放在右上角實驗按鈕左邊
+    self._draw_temp_card(rect)
+
     # --- 紅綠燈減速中（優先）/ TDX 雙行顯示資訊 ---
     # 紅綠燈減速期間 TDX（前方車速 + 底部事件）全部讓位，避免搶注意力
     if self.ts_braking:
@@ -260,6 +278,31 @@ class HudRenderer(Widget):
 
     # Draw performance info at bottom
     self._draw_performance_info(rect)
+
+  def _draw_temp_card(self, rect: rl.Rectangle) -> None:
+    """dp: the sidebar's TEMP card, moved to the right of the speed readout."""
+    w, h = TEMP_CARD_W, TEMP_CARD_H
+    x = rect.x + rect.width - UI_CONFIG.border_size - UI_CONFIG.button_size - 24 - w
+    y = rect.y + UI_CONFIG.border_size + (UI_CONFIG.button_size - h) / 2
+
+    card = rl.Rectangle(x, y, w, h)
+    rl.draw_rectangle_rounded(card, 0.3, 10, COLORS.BLACK_TRANSLUCENT)
+
+    # colored left edge, clipped to the rounded corner like the sidebar cards
+    rl.begin_scissor_mode(int(x + 4), int(y), 18, int(h))
+    rl.draw_rectangle_rounded(rl.Rectangle(x + 4, y + 4, 100, h - 8), 0.3, 10, self._temp_color)
+    rl.end_scissor_mode()
+    rl.draw_rectangle_rounded_lines_ex(card, 0.3, 10, 2, COLORS.BORDER_TRANSLUCENT)
+
+    labels = [tr("TEMP"), tr(self._temp_value)]
+    line_h = TEMP_FONT_SIZE * 1.15
+    text_y = y + (h - len(labels) * line_h) / 2
+    for text in labels:
+      size = measure_text_cached(self._font_semi_bold, text, TEMP_FONT_SIZE)
+      rl.draw_text_ex(self._font_semi_bold, text,
+                      rl.Vector2(x + 22 + (w - 22 - size.x) / 2, text_y),
+                      TEMP_FONT_SIZE, 0, rl.WHITE)
+      text_y += line_h
 
   def _draw_egpu_badge(self, center_x: float, top_y: float) -> None:
     """dp - egpu: sunnypilot's onroad chestnut icon, in jetlink's badge slot (jetlink is off beside an
