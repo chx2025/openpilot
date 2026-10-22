@@ -23,124 +23,66 @@ function agnos_init {
   fi
 }
 
-set_tici_hw() {
-  local model
-  # devicetree 的 model 帶結尾 NUL：「comma tici」(C3) / 「comma tizi」(C3X)
-  model=$(tr -d '\000' < /sys/firmware/devicetree/base/model 2>/dev/null)
-
-  case "$model" in
-    *tizi)
-      # dp - C3X 強制 H7，完全不信任 /persist 上的快取。
-      # C3X 只有 red panda（H7），F4 只存在於 comma two / EON。但是
-      # /persist/dp_dev_panda_mcu_type 會跨刷機保留：只要曾經被寫成 F4，之後每次開機
-      # 都走 TICI_DOS=1 -> pandad_tici（C2 的 panda 庫），再由 set_aux_panda 把內建
-      # panda 從 USB 匯流排上摘掉，症狀就是「panda 不見了」；而且重裝系統也不會復原，
-      # 因為快取在 /persist 而不是 /data。這裡直接短路成 H7，不讀快取也不做慢速探測。
-      export TICI_HW=1
-      echo "C3X (tizi): forcing panda MCU H7, /persist cache ignored"
-      export TICI_TRES=1
-      # NVMe 掛載只在真的有裝置時才做，避免沒有 NVMe 時白等 mount_nvme 的輪詢
-      [ -b /dev/nvme0n1p1 ] && mount_nvme
-      return 0
-      ;;
-    *tici) ;;
-    *) return 0 ;;
-  esac
-
-  export TICI_HW=1
-
-  local cache="/persist/dp_dev_panda_mcu_type"
-  local attempts=15 confirm=3
-  local mcu="" count=0 last="" cur cached
-
-  # 快取極速通道
-  cached=$(cat "$cache" 2>/dev/null)
-  case "$cached" in
-    F4|H7) mcu="$cached"; echo "panda MCU $mcu [cached]" ;;
-  esac
-
-  # 慢速偵測通道 (快取不存在時執行)
-  if [ -z "$mcu" ]; then
-    echo "Querying panda MCU type..."
-    for attempt in $(seq 1 "$attempts"); do
-      if [ -n "$last" ]; then sleep 1; else sleep 3; fi
-
-      case "$(python -c "from panda_tici import Panda; p = Panda(cli=False); print(p.get_mcu_type()); p.close()" 2>/dev/null)" in
-        *McuType.F4*) cur="F4" ;;
-        *McuType.H7*) cur="H7" ;;
-        *)            cur="" ;;
-      esac
-
-      if [ -n "$cur" ] && [ "$cur" = "$last" ]; then
-        count=$((count + 1))
-      else
-        count=1
-        last="$cur"
-      fi
-
-      if [ -n "$cur" ] && [ "$count" -ge "$confirm" ]; then
-        mcu="$cur"
-        break
-      fi
-    done
-
-    # 優雅降級：成功才寫入快取，失敗則不寫入並繼續放行（不 exit，維持快速開機）
-    if [ -n "$mcu" ]; then
-      if sudo mount -o remount,rw /persist 2>/dev/null; then
-        echo "$mcu" | sudo tee "$cache" >/dev/null 2>&1
-        sudo mount -o remount,ro /persist 2>/dev/null
-      fi
-    else
-      echo "WARNING: Panda MCU detection failed after $attempts attempts. TICI_DOS/TICI_TRES not set, proceeding anyway."
-    fi
-  fi
-
-  # 硬體變數指派與防禦性掛載
-  if [ "$mcu" = "F4" ]; then
-    mount_nvme
-    export TICI_DOS=1
-    set_aux_panda
-  elif [ "$mcu" = "H7" ]; then
-    export TICI_TRES=1
-  else
-    # 就算 MCU 偵測失敗，依舊嘗試掛載 NVMe，避免 F4 硬體失去錄影空間
-    mount_nvme
-  fi
-}
-
-set_aux_panda() {
+ensure_usb_host() {
+  # dp - USB-C 口（dwc3, a600000.ssusb）始终保持 host 模式。
+  #
+  # 这个口同时承载 eGPU 底座（ASM2464, VID 3801）和外接 panda。旧代码在没有
+  # 第二个 panda 时会 `echo none` 把口切回 device 模式，等于把 eGPU 和外接 panda
+  # 一起摘掉。而内建 panda 走的是 SPI（panda_tici.Panda 先试 USB，失败转
+  # spi_connect），跟这个口毫无关系 —— 所以 echo none 既救不了内建 panda，又会
+  # 弄断底座的 USB 链路，纯粹是负收益。这里只保证 host，不做任何关闭动作。
   local mode="/sys/devices/platform/soc/a600000.ssusb/mode"
   [ -e "$mode" ] || return 0
+  echo host | sudo tee "$mode" >/dev/null 2>&1
+}
 
-  # dp - egpu: 该端口同时承载 eGPU 底座（ASM2464，3801）。开启 eGPU 时
-  # 必须保持 host 模式让底座枚举，绝不能在检测不到第二个 panda 时 echo none
-  # 把端口切回 device 模式（会把已枚举的 eGPU 一起切断，见 dmesg usb 4-1 disconnect）。
-  # dp(2026-10-22): 檔名不存在時（首次開機，manager 還沒把預設值寫進 /data/params）
-  # 一律按宣告的預設值 "1" 處理。原本讀到空字串會讓這道保護失效，直接走到
-  # 下面的 echo none，把內建 panda 從 USB 匯流排摘掉。
-  local egpu=$(cat /data/params/d/dp_egpu_enabled 2>/dev/null)
-  [ -z "$egpu" ] && egpu=1
-  if [ "$egpu" = "1" ]; then
-    echo host | sudo tee "$mode" >/dev/null 2>&1
-    return 0
+set_tici_hw() {
+  local model
+  # devicetree 的 model 帶結尾 NUL：「comma tici」(C3) / 「comma tizi」(C3X)。
+  # 順手把兩端空白去掉，免得某個 DT 版本多一個尾隨空格就整段判定失配。
+  model=$(tr -d '\000' < /sys/firmware/devicetree/base/model 2>/dev/null | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+  # dp(2026-10-22): 平台由機型串決定，不再靠探測 panda MCU 類型。
+  #
+  # 舊邏輯是「F4 -> TICI_DOS / H7 -> TICI_TRES」，把 panda 的 MCU 型號當成平台
+  # 判據，兩頭都是錯的：
+  #   1. TICI_DOS 真正的語義是「這台是 comma 3」—— 它決定 manager 載入哪套 panda
+  #      庫（panda_tici 對 panda）、pandad 跑 pandad_tici 還是 pandad，modem 也靠它
+  #      選 QMI 而不是 PPP。TICI_TRES 只影響 home.py 的版本字串（Lite / XLite）。
+  #      拿 MCU 型號去推這兩個變數，等於用「panda 是哪個型號」回答「這台是什麼機器」。
+  #   2. 判據來自 /persist/dp_dev_panda_mcu_type，而 /persist 跨重裝保留。只要曾經
+  #      插過 external white panda（F4），探測就會把它寫進快取，之後每次開機都按
+  #      F4 走 TICI_DOS，重裝 /data 也清不掉。
+  # 現在 C3 / C3X 各自短路，完全不讀快取、也不做那 15 次 × 3 秒的慢速探測。
+  case "$model" in
+    *tizi)
+      export TICI_HW=1
+      export TICI_TRES=1
+      unset TICI_DOS
+      echo "dp: C3X (tizi) -> TICI_TRES=1, standard panda library"
+      ;;
+    *tici)
+      export TICI_HW=1
+      export TICI_DOS=1
+      unset TICI_TRES
+      echo "dp: C3 (tici) -> TICI_DOS=1, panda_tici library"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  ensure_usb_host
+
+  # 舊快取已廢棄：只在存在時提一下，方便日後看開機日誌的人知道那個 F4 從哪來。
+  # 不刪它 —— 刪要 remount /persist rw，為了清一行歷史狀態不值得多擔一次風險。
+  if [ -f /persist/dp_dev_panda_mcu_type ]; then
+    echo "dp: NOTE /persist/dp_dev_panda_mcu_type=$(cat /persist/dp_dev_panda_mcu_type 2>/dev/null) is stale, ignored"
   fi
 
-  echo host | sudo tee "$mode" >/dev/null 2>&1
-  for _ in $(seq 1 6); do
-    sleep 0.5
-    if [ "$(lsusb 2>/dev/null | grep -c 'comma.ai panda')" -ge 2 ]; then
-      return 0
-    fi
-    # dp - egpu: 检测到 eGPU 底座（3801:0001 或 ADD1:0002）也保持 host
-    if lsusb 2>/dev/null | grep -qiE '3801:0001|3801:0002'; then
-      return 0
-    fi
-  done
-  # dp(2026-10-22): 以前這裡是 `echo none`，把沒有第二個 panda 的內建 panda 從
-  # USB 匯流排上摘掉 —— 摘掉之後 pandad 找不到裝置，症狀是「panda 不見了」，
-  # 而且看起來像硬體故障。內建 panda 永遠不該被摘掉，找不到第二個就留在 host
-  # 模式即可（多一個裝置不會有害）。
-  echo "dp: no second panda on the aux port, keeping it in host mode (no echo none)"
+  # NVMe 只在真的有裝置時才掛，避免沒有 NVMe 的機器白等 mount_nvme 的輪詢
+  [ -b /dev/nvme0n1p1 ] && mount_nvme
+  return 0
 }
 
 mount_nvme() {
