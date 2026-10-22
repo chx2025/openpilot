@@ -4,53 +4,58 @@ There is no kernel driver behind this GPU: tinygrad builds its PCIe config space
 userspace through the ASM2464 controller (tinygrad/runtime/support/usb.py), so the card never
 appears on the PCI bus and /sys/class/hwmon has nothing for it - the TEMP card in the sidebar
 could not be fed from sysfs. The numbers live in the SMU's metrics table instead, and only the
-process that owns the device can fetch them: one SMU message plus a DRAM read over the USB link,
-~2 ms. That is why this module is used from modeld_egpu and not from the UI: a second process
-cannot open the device, and issuing the transfer from another thread would race tinygrad's own
-USB transfers.
+process that owns the device can fetch them: one SMU message plus a read of the struct the PMFW
+copied into DRAM, ~2 ms over the USB link. That is why this module is used from modeld_egpu and not
+from the UI: a second process cannot open the device, and issuing the transfer from another thread
+would race tinygrad's own USB transfers.
 
-Offsets come from amdgpu's smu14_driver_if_v14_0.h (SmuMetrics_t), the PMFW this dock's RDNA4 card
-speaks, and were checked against the live table on the unit:
+The struct is read through tinygrad's own generated definitions rather than by offset arithmetic -
+`SMU_TABLE_SMU_METRICS` + `SmuMetricsExternal_t` is what tinygrad's am_smi uses for exactly this
+card family (MP0 != (13,0,6), (13,0,12), (13,0,15)), so the layout follows the vendored autogen
+instead of a hand copied header. Measured on the unit, idle, after a power cycle: 11 W, edge 34 C.
 
-  132  uint32  EnergyAccumulator
-  136  uint16  AverageSocketPower       watts  (amdgpu scales it with MILLIWATT_PER_WATT)
-  138  uint16  AverageTotalBoardPower   watts
-  140  uint16  AvgTemperature[12]       degrees C  (amdgpu scales it with MILLIDEGREE_PER_DEGREE)
-       [0] TEMP_EDGE  [1] TEMP_HOTSPOT  [2] HOTSPOT_GFX  [3] HOTSPOT_SOC  [4] TEMP_MEM  [5] VR_GFX ...
-
-Measured on the unit while idle: socket 21 W, edge 42 C, hotspot 44 C, mem 61 C, VR 42 C, fan 0 rpm.
-
-A different SMU version is refused rather than parsed with these offsets, and every reading is range
-checked, so a wrong guess reports nothing instead of a plausible-looking lie on the windscreen.
+A different SMU version is refused rather than parsed with another PMFW's layout, and every reading
+is range checked, so a wrong guess reports nothing instead of a plausible-looking lie on the
+windscreen.
 """
-import struct
 import time
 
 from openpilot.common.swaglog import cloudlog
 
-TABLE_SMU_METRICS = 5         # TABLE_SMU_METRICS in smu14_driver_if_v14_0.h
-SOCKET_POWER_OFFSET = 136
-TEMPERATURE_OFFSET = 140
+# TEMP_e, from the autogen module: TEMP_EDGE is the one the sidebar shows
 TEMPERATURE_EDGE = 0
-FAN_RPM_OFFSET = 170
-READ_SIZE = TEMPERATURE_OFFSET + 24   # AvgTemperature[TEMP_COUNT] + the fan-intake word
+TEMPERATURE_HOTSPOT = 1
+TEMPERATURE_MEM = 4
+TEMPERATURE_VR = 5
 
 PERIOD = 5.0                  # seconds between readings; each one is a USB round trip
 MAX_FAILURES = 3              # then stop poking the SMU in the driving loop
 
+# 10 kHz units in the metrics table (amdgpu multiplies by 10 to get kHz)
+CLOCK_DIVISOR = 100
+
 
 def supported(adev) -> bool:
   smu = getattr(adev, "smu", None)
-  return smu is not None and smu.smu_mod.__name__.rsplit(".", 1)[-1] == "smu_14_0_2"
+  if smu is None or not hasattr(smu, "read_table"):
+    return False
+  mod = getattr(smu, "smu_mod", None)
+  return (getattr(mod, "__name__", "").rsplit(".", 1)[-1] == "smu_14_0_2"
+          and hasattr(mod, "SmuMetricsExternal_t") and hasattr(mod, "SMU_TABLE_SMU_METRICS"))
+
+
+def _metrics(adev):
+  """The metrics struct, as the PMFW just copied it into DRAM"""
+  smu = adev.smu
+  table = smu.read_table(smu.smu_mod.SmuMetricsExternal_t, smu.smu_mod.SMU_TABLE_SMU_METRICS)
+  return table.SmuMetrics
 
 
 def read(adev) -> tuple[float, float] | None:
   """(celsius, watts), or None when the table did not come back sane"""
-  smu = adev.smu
-  smu._send_msg(smu.smu_mod.PPSMC_MSG_TransferTableSmu2Dram, TABLE_SMU_METRICS)
-  raw = bytes(bytearray(adev.vram.view(smu.driver_table_paddr, READ_SIZE)[:]))
-  power = struct.unpack_from("<H", raw, SOCKET_POWER_OFFSET)[0]
-  temp = struct.unpack_from("<H", raw, TEMPERATURE_OFFSET + 2 * TEMPERATURE_EDGE)[0]
+  m = _metrics(adev)
+  power = m.AverageSocketPower
+  temp = m.AvgTemperature[TEMPERATURE_EDGE]
   if not 10 <= temp <= 120 or not 0 < power < 1000:
     return None
   return float(temp), float(power)
@@ -59,28 +64,24 @@ def read(adev) -> tuple[float, float] | None:
 def read_detail(adev) -> dict | None:
   """Everything in the table that tells you why a long run died, for the compile log.
 
-  Not used in the driving loop: read() already answers what the sidebar needs, and each extra word
-  here is another offset to keep honest. This one exists because the big model's compile dies after
-  ~165 s of sustained load, and "was the card at 95 C with the fan stopped" is the question that
-  separates a thermal problem from a link problem."""
+  Not used in the driving loop: read() already answers what the sidebar needs. This one exists
+  because the big model's compile dies after ~165 s of sustained load, and "was the card at 95 C
+  with the fan stopped" is the question that separates a thermal death from a link death."""
   if not supported(adev):
     return None
-  smu = adev.smu
-  smu._send_msg(smu.smu_mod.PPSMC_MSG_TransferTableSmu2Dram, TABLE_SMU_METRICS)
-  raw = bytes(bytearray(adev.vram.view(smu.driver_table_paddr, FAN_RPM_OFFSET + 2)[:]))
-  temps = struct.unpack_from("<8H", raw, TEMPERATURE_OFFSET)
-  detail = {
-    "sock_w": struct.unpack_from("<H", raw, SOCKET_POWER_OFFSET)[0],
-    "brd_w": struct.unpack_from("<H", raw, SOCKET_POWER_OFFSET + 2)[0],
-    "edge": temps[0], "hot": temps[1], "mem": temps[4], "vr": temps[5],
-    "fan": struct.unpack_from("<H", raw, FAN_RPM_OFFSET)[0],
-    # CurrClock[PPCLK_COUNT] at 0, amdgpu's order: GFXCLK, SOCCLK, UCLK, ...
-    "gfx_clk": struct.unpack_from("<H", raw, 0)[0],
-    "mem_clk": struct.unpack_from("<H", raw, 4)[0],
-  }
-  if not 10 <= detail["edge"] <= 130:
+  m = _metrics(adev)
+  temps = list(m.AvgTemperature)
+  if not 10 <= temps[TEMPERATURE_EDGE] <= 130:
     return None
-  return detail
+  return {
+    "sock_w": m.AverageSocketPower, "brd_w": m.AverageTotalBoardPower,
+    "edge": temps[TEMPERATURE_EDGE], "hot": temps[TEMPERATURE_HOTSPOT],
+    "mem": temps[TEMPERATURE_MEM], "vr": temps[TEMPERATURE_VR],
+    "fan_rpm": m.AvgFanRpm, "fan_pwm": m.AvgFanPwm,
+    "gfx_mhz": m.CurrClock[adev.smu.smu_mod.PPCLK_GFXCLK] // CLOCK_DIVISOR,
+    "mem_mhz": m.CurrClock[adev.smu.smu_mod.PPCLK_UCLK] // CLOCK_DIVISOR,
+    "gfx_busy": m.AverageGfxActivity,
+  }
 
 
 class Sampler:
