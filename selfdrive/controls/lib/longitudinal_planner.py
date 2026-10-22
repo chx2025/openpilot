@@ -107,8 +107,14 @@ class DPFlags:
 
 # ── dp: 加速度曲線倍率（UI 可調）──────────────────────────────────────────────
 # 三個倍率分別對應低／中／高速段，錨點之間線性過渡，避免階躍。
-# 只作用在 A_CRUISE_MAX_VALS 這張表上；AEM 開啟且 mode=='acc' 時走
-# accel_controller 的三檔表，本倍率不參與。
+# 加速度上限的優先順序（預設參數下就是這個組合，兩張表不疊加）：
+#   實驗模式（mode=='blended'）        → A_CRUISE_MAX_VALS × 本倍率，一律參與；
+#                                         accel_controller 的三檔表完全不參與，
+#                                         與 AccelPersonalityEnabled 的開關無關。
+#   非實驗模式 + AccelPersonalityEnabled=1 → accel_controller 的三檔表，
+#                                         A_CRUISE_MAX_VALS 不參與。
+#   非實驗模式 + AccelPersonalityEnabled=0 → A_CRUISE_MAX_VALS × 本倍率。
+# 也就是說「實驗模式由這張表說話」是預設行為，不是某個開關的副作用。
 _DP_TBL_ANCHOR_KPH = [0.0, 30.0, 70.0, 100.0]
 _DP_TBL_REFRESH_FRAMES = 25   # 0.5s @50Hz，避免每幀讀 Params
 

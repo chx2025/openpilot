@@ -30,6 +30,9 @@ class LongitudinalPlannerDP:
 
   # accel_controller 限制最大加速度
   def get_accel_clip(self, v_ego: float, mode: str) -> list[float] | None:
+    # dp: mode == 'acc' 這道閘門是刻意的，不要拿掉。實驗模式（'blended'）回 None，
+    # 呼叫端就會用 A_CRUISE_MAX_VALS × UI 倍率那一套上限；也就是說實驗模式一律由
+    # 那張表說話，不管 AccelPersonalityEnabled 是 0 還是 1、也不管三檔表怎麼調。
     if mode == 'acc' and self.accel_controller.is_enabled():
       return [ACCEL_MIN, self.accel_controller.get_max_accel(v_ego)]
     return None
