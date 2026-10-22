@@ -70,11 +70,28 @@ _SECTION_TITLE_MSGIDS = (
 # current car's brand doesn't match. Generic sections (Lateral/UI/...) are
 # unconditional.
 SECTION_CONDITIONS = {
+  # dp: 使用者要求保留「使用原廠縱向控制」，只隱藏 TSS1 走走停停、TSS2 自動煞車維持、
+  # 車門自動鎖定這三條 —— 檔案留在原處（參數鍵與後端邏輯全保留），
+  # 僅在 HIDDEN_SETTING_FILES 裡登記，設定頁不列出。本組條件維持原樣。
   "Toyota / Lexus": "brand == 'toyota'",
   "Honda":          "brand == 'honda'",
   "HKG":            "brand == 'hyundai'",
   "VAG":            "brand == 'volkswagen'",
   "Mazda":          "brand == 'mazda'",
+}
+
+# dp: 只隐藏、不删除。这里登记的档案照常 import（参数键仍会进 params_keys.h、
+# 仍参与 depends_on 校验），但不会出现在设置页。
+# 要恢复显示：把档名从下面删掉即可，无需改任何其他档案。
+HIDDEN_SETTING_FILES = {
+  "brand-toyota-tss1-sng.py",
+  "brand.toyota.auto-brake-hold.py",
+  "brand.toyota.door-auto-lock-unlock.py",
+  "min-feat.lon.acc.py",
+  "min-feat.lon.apm.py",
+  "min-feat.ui.display-mode.py",
+  "min-feat.ui.hide-hud.py",
+  "min-feat.ui.lead-stats.py",
 }
 
 _UI_REQUIRED_KEYS = {"section", "key", "type", "title"}
@@ -168,9 +185,12 @@ def _build_settings():
       print(f"[dragonpilot.settings] Failed to load {py_file.name}: {e}")
       continue
 
+    hidden = py_file.name in HIDDEN_SETTING_FILES
     for item in items:
       if "key" in item:
         all_keys.add(item["key"])
+      if hidden:
+        continue  # dp: 参数键已登记，只是不渲染到设置页
       if not _validate_item(item, py_file.name):
         continue
       ui_items.append((py_file.name, item))
