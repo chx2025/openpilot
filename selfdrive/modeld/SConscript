@@ -61,9 +61,22 @@ USBGPU = usbgpu_present() # or release # TODO always build big model on release
 # dp - egpu: the built-in big model (models/big_driving_{vision,policy}.onnx) may be deleted to save space, the
 # eGPU then runs a downloaded bundle instead (dragonpilot/egpu). Without this guard get_existing_chunks()
 # raises FileNotFoundError and the whole build stops whenever the eGPU is plugged in at build time.
-if USBGPU and not all(os.path.isfile(File(f"models/big_{m}.onnx").abspath) or
-                      os.path.isfile(File(f"models/big_{m}.onnx.chunkmanifest").abspath)
-                      for m in ('driving_vision', 'driving_policy')):
+#
+# dp - fix (2026-10-29): when the eGPU route is enabled (dp_egpu_enabled=1) modeld runs modeld_egpu via
+# egpu_loader and never pickle.loads(modeld_pkl_path(usbgpu=True)) -> the built-in big_driving_tinygrad.pkl
+# is dead weight. Compiling it anyway (a) wastes ~10 min and (b) races the dock's PCIe bring-up at
+# vehicle power-on, hitting "TLP error ret_status=255" and failing the whole build. Skip it outright.
+def _egpu_route_enabled():
+  try:
+    return open("/data/params/d/dp_egpu_enabled").read().strip() == "1"
+  except OSError:
+    return False
+if USBGPU and _egpu_route_enabled():
+  print("modeld: eGPU route enabled (dp_egpu_enabled=1), skipping the built-in big model (modeld_egpu uses downloaded bundles)")
+  USBGPU = False
+elif USBGPU and not all(os.path.isfile(File(f"models/big_{m}.onnx").abspath) or
+                        os.path.isfile(File(f"models/big_{m}.onnx.chunkmanifest").abspath)
+                        for m in ('driving_vision', 'driving_policy')):
   print("modeld: big_driving_*.onnx not found, skipping the built-in big model (eGPU uses downloaded bundles)")
   USBGPU = False
 if USBGPU:
