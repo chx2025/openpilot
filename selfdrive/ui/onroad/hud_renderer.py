@@ -40,6 +40,9 @@ TS_BORDER = 9
 JETLINK_BADGE_W = 120
 JETLINK_BADGE_H = 89
 JETLINK_LABEL_SIZE = 40
+# dp - egpu: grow the whole eGPU badge (icon + card + word + bar) by 5 mm on each side. 5 mm at
+# this panel's ~13.4 px/mm is ~67 px.
+EGPU_BADGE_GROW = 67
 
 # DP Perf Constants (字體恢復為 50)
 PERF_FONT_SIZE = 50
@@ -315,9 +318,24 @@ class HudRenderer(Widget):
     # dp - egpu: while LOADING, grow the badge a touch so a progress bar fits under the label.
     loading = state == EgpuState.LOADING
     bar_h = 10 if loading else 0
-    bg = rl.Rectangle(center_x - JETLINK_BADGE_W / 2 - 14, top_y - 10, JETLINK_BADGE_W + 28, JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 30 + (bar_h + 16 if loading else 0))
+
+    # dp - egpu: the whole card is grown by EGPU_BADGE_GROW (5 mm) on each side. The icon is drawn
+    # with draw_texture_pro so its width and height each grow by the same 5 mm (a slight aspect
+    # change, imperceptible at this size); the card, word and progress bar follow the same growth.
+    g = EGPU_BADGE_GROW
+    icon_w = JETLINK_BADGE_W + g
+    icon_h = JETLINK_BADGE_H + g
+    card_w = JETLINK_BADGE_W + 28 + g
+    card_h = JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 30 + (bar_h + 16 if loading else 0) + g
+
+    bg = rl.Rectangle(center_x - card_w / 2, top_y - 10, card_w, card_h)
     rl.draw_rectangle_rounded(bg, 0.25, 10, COLORS.BLACK_TRANSLUCENT)
-    rl.draw_texture_ex(icon, rl.Vector2(center_x - icon.width / 2, top_y), 0.0, 1.0, jetlink_ui.tint(opacity))
+
+    # non-uniform scale so width and height each grow the full 5 mm (draw_texture_ex only scales uniformly)
+    src = rl.Rectangle(0.0, 0.0, float(icon.width), float(icon.height))
+    dst = rl.Rectangle(center_x - icon_w / 2, top_y, float(icon_w), float(icon_h))
+    rl.draw_texture_pro(icon, src, dst, rl.Vector2(0.0, 0.0), 0.0, jetlink_ui.tint(opacity))
+
     label = egpu_ui.badge_text(state)
     color = egpu_ui.STATE_COLOR[state]
     if state == EgpuState.LOADING:
@@ -328,18 +346,18 @@ class HudRenderer(Widget):
     if size.x > bg.width - 8:  # a long model short name (e.g. TTTTFBRL)
       font_size = int(JETLINK_LABEL_SIZE * 0.75)
       size = measure_text_cached(self._font_semi_bold, label, font_size)
-    rl.draw_text_ex(self._font_semi_bold, label, rl.Vector2(center_x - size.x / 2, top_y + JETLINK_BADGE_H + 8),
+    rl.draw_text_ex(self._font_semi_bold, label, rl.Vector2(center_x - size.x / 2, top_y + icon_h + 8),
                     font_size, 0, color)
 
     # dp - egpu: the load progress bar under the word, only while LOADING. Painted every frame from
     # the same 36 s estimate the sidebar uses, so it sweeps 0..100% smoothly.
     if loading:
       pct = egpu_ui.loading_progress() / 100.0
-      bar_w = JETLINK_BADGE_W + 28
+      bar_w = card_w
       bar_x = center_x - bar_w / 2
-      bar_y = top_y + JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 16
-      rl.draw_rectangle_rounded(rl.Rectangle(bar_x, bar_y, bar_w, bar_h), 0.5, bar_h / 2, rl.Color(70, 70, 70, 255))
-      rl.draw_rectangle_rounded(rl.Rectangle(bar_x, bar_y, int(bar_w * pct), bar_h), 0.5, bar_h / 2, color)
+      bar_y = top_y + icon_h + JETLINK_LABEL_SIZE + 16
+      rl.draw_rectangle_rounded(rl.Rectangle(bar_x, bar_y, bar_w, bar_h), 0.5, bar_h // 2, rl.Color(70, 70, 70, 255))
+      rl.draw_rectangle_rounded(rl.Rectangle(bar_x, bar_y, int(bar_w * pct), bar_h), 0.5, bar_h // 2, color)
 
   def _draw_jetlink_badge(self, center_x: float, top_y: float) -> None:
     """dp - jetlink: the icon (pulsing while it joins, dim green while it waits for a
