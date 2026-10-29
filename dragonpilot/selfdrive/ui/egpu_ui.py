@@ -27,6 +27,10 @@ NONE_TEXT = jetlink_ui.NONE_TEXT
 SPEED_FAST_MBPS = 5000
 RED = rl.Color(240, 76, 76, 255)
 
+# dp - egpu: nominal big-model load time, used to paint a smooth 0..100% progress estimate while
+# LOADING (the actual load is ~33-36 s on a C3XL; the estimate never claims more than the clock).
+LOADING_NOMINAL_S = 36.0
+
 # three states the driver cares about - not plugged in, plugged in but idle, driving on the big model.
 # LOADING/FAILED stay separate: they are short-lived or a warning, and folding them into "已連接"
 # would hide a failure behind a green word.
@@ -86,6 +90,16 @@ def speed_text(mbps: float) -> str:
   return f"{mbps / 1000:.0f}G" if mbps >= 1000 else f"{mbps:.0f}M"
 
 
+def loading_progress() -> int:
+  """0..100 % estimate of the big-model load, against LOADING_NOMINAL_S. Uses ui_state's
+  egpu_loading_started latch so it is callable every frame; clamps to 100 so the bar never runs
+  past the nominal time even if the real load overshoots it a little."""
+  if ui_state.egpu_loading_started == 0.0:
+    return 0
+  elapsed = time.monotonic() - ui_state.egpu_loading_started
+  return int(min(100.0, max(0.0, elapsed / LOADING_NOMINAL_S * 100.0)))
+
+
 def sub_line(state: EgpuState) -> tuple[str, rl.Color] | None:
   """The line under the state word. While the big model drives it is the GPU's power and
   temperature; otherwise the USB link speed - green on the 5 Gbps this dock's PCIe tunnel needs,
@@ -96,6 +110,9 @@ def sub_line(state: EgpuState) -> tuple[str, rl.Color] | None:
   """
   if state == EgpuState.DISCONNECTED:
     return None
+
+  if state == EgpuState.LOADING:
+    return f"{loading_progress()}%", jetlink_ui.YELLOW
 
   if state == EgpuState.ACTIVE:
     # modeld_egpu publishes these from the SMU metrics table (dragonpilot/egpu/telemetry.py)

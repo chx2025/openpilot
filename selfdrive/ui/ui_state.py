@@ -146,6 +146,7 @@ class UIState:
     self.egpu_power: int = 0    # W, published by modeld_egpu from the SMU metrics table
     self.egpu_temp: int = 0     # degrees C, same source
     self.egpu_state = EgpuState.DISCONNECTED
+    self.egpu_loading_started: float = 0.0  # monotonic() at the moment LOADING began, for the progress readout
 
 
     # dp
@@ -346,6 +347,14 @@ class UIState:
     else:
       state = EgpuState.READY
     self.egpu_state = state
+
+    # dp - egpu: progress readout. Latch the monotonic time when LOADING first begins so the UI can
+    # paint a 0..100% estimate against the nominal load time; clear it the moment we leave LOADING.
+    if state == EgpuState.LOADING:
+      if self.egpu_loading_started == 0.0:
+        self.egpu_loading_started = time.monotonic()
+    else:
+      self.egpu_loading_started = 0.0
 
   # dp - jetlink -----------------------------------------------------------------
 

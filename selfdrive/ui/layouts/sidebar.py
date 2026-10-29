@@ -284,10 +284,15 @@ class Sidebar(Widget):
                     EGPU_LABEL_SIZE, 0, egpu_ui.STATE_COLOR[state])
 
     # dp - egpu: second line - the link speed while idle, the GPU's power and temperature while
-    # driving (green 5 G / red a starved link / green a healthy reading)
-    if self._egpu_sub is None:
-      return
-    sub, color = self._egpu_sub
+    # driving (green 5 G / red a starved link / green a healthy reading). While LOADING, repaint the
+    # 0..100% estimate every frame (the cached _egpu_sub is only refreshed at deviceState rate).
+    if state == EgpuState.LOADING:
+      sub = f"{egpu_ui.loading_progress()}%"
+      color = jetlink_ui.YELLOW
+    else:
+      if self._egpu_sub is None:
+        return
+      sub, color = self._egpu_sub
     sub_size = measure_text_cached(self._font_bold, sub, EGPU_SUB_SIZE)
     rl.draw_text_ex(self._font_bold, sub,
                     rl.Vector2(rect.x + METRIC_MARGIN + (METRIC_WIDTH - sub_size.x) / 2, y + EGPU_ICON_HEIGHT + 42),
