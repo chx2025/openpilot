@@ -312,12 +312,16 @@ class HudRenderer(Widget):
     icon, opacity = egpu_ui.icon_for(self._jetlink_icons, state)
     if icon is None:
       return
-    bg = rl.Rectangle(center_x - JETLINK_BADGE_W / 2 - 14, top_y - 10, JETLINK_BADGE_W + 28, JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 30)
+    # dp - egpu: while LOADING, grow the badge a touch so a progress bar fits under the label.
+    loading = state == EgpuState.LOADING
+    bar_h = 10 if loading else 0
+    bg = rl.Rectangle(center_x - JETLINK_BADGE_W / 2 - 14, top_y - 10, JETLINK_BADGE_W + 28, JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 30 + (bar_h + 16 if loading else 0))
     rl.draw_rectangle_rounded(bg, 0.25, 10, COLORS.BLACK_TRANSLUCENT)
     rl.draw_texture_ex(icon, rl.Vector2(center_x - icon.width / 2, top_y), 0.0, 1.0, jetlink_ui.tint(opacity))
     label = egpu_ui.badge_text(state)
     color = egpu_ui.STATE_COLOR[state]
     if state == EgpuState.LOADING:
+      label = f"{egpu_ui.loading_progress()}%"
       color = rl.Color(color.r, color.g, color.b, int(255 * max(0.5, opacity)))
     font_size = JETLINK_LABEL_SIZE
     size = measure_text_cached(self._font_semi_bold, label, font_size)
@@ -326,6 +330,16 @@ class HudRenderer(Widget):
       size = measure_text_cached(self._font_semi_bold, label, font_size)
     rl.draw_text_ex(self._font_semi_bold, label, rl.Vector2(center_x - size.x / 2, top_y + JETLINK_BADGE_H + 8),
                     font_size, 0, color)
+
+    # dp - egpu: the load progress bar under the word, only while LOADING. Painted every frame from
+    # the same 36 s estimate the sidebar uses, so it sweeps 0..100% smoothly.
+    if loading:
+      pct = egpu_ui.loading_progress() / 100.0
+      bar_w = JETLINK_BADGE_W + 28
+      bar_x = center_x - bar_w / 2
+      bar_y = top_y + JETLINK_BADGE_H + JETLINK_LABEL_SIZE + 16
+      rl.draw_rectangle_rounded(rl.Rectangle(bar_x, bar_y, bar_w, bar_h), 0.5, bar_h / 2, rl.Color(70, 70, 70, 255))
+      rl.draw_rectangle_rounded(rl.Rectangle(bar_x, bar_y, int(bar_w * pct), bar_h), 0.5, bar_h / 2, color)
 
   def _draw_jetlink_badge(self, center_x: float, top_y: float) -> None:
     """dp - jetlink: the icon (pulsing while it joins, dim green while it waits for a
