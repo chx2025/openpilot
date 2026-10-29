@@ -13,6 +13,7 @@ The active bundle (dp_egpu_bundle) additionally carries "sha256": the ONNX it wa
 import os
 
 from openpilot.common.params import Params
+from dragonpilot.egpu.usb import egpu_present
 from dragonpilot.egpu.constants import (P_ENABLED, P_PRESENT, P_ACTIVE_BUNDLE, P_POINTERS, P_FAILED,
                                         CAMERA_CONFIGS, DEFAULT_BUNDLE, DEFAULT_REF, JETLINK_POINTERS_PARAM, KNOWN_POINTERS, JETLINK_CATALOG_PARAM, model_root, model_pkl_name, warp_pkl_name, onnx_path)
 
@@ -110,8 +111,15 @@ def active_ready(bundle: dict | None) -> bool:
 
 
 def egpu_should_drive(params: Params) -> bool:
-  """Whether the next drive should run modeld_egpu instead of the stock modeld."""
-  if not params.get_bool(P_ENABLED) or not params.get_bool(P_PRESENT) or params.get_bool(P_FAILED):
+  """Whether the next drive should run modeld_egpu instead of the stock modeld.
+
+  dp - fix: probe the USB dock live instead of trusting dp_egpu_present. egpu_manager writes that
+  param once per second, but EGPU_ROUTE.update() latches on the first onroad tick and that can race
+  the manager's first write on a slow-enumerating dock -> the big model is skipped for the whole
+  drive. egpu_present() is a cheap sysfs VID/PID scan, safe to call here."""
+  if not params.get_bool(P_ENABLED) or params.get_bool(P_FAILED):
+    return False
+  if not params.get_bool(P_PRESENT) and not egpu_present():
     return False
   return active_ready(get_active_bundle(params))
 
