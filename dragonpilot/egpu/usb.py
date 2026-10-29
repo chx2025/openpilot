@@ -108,13 +108,21 @@ def pcie_ltssm(power_on: bool = True) -> int | None:
 
 
 def wait_pcie_link(timeout: float = 10.0, should_stop=None) -> tuple[bool, int | None]:
-  """(up, last LTSSM). Up when L0 is read; also returned as up when the state cannot be read at all (tinygrad then
-  makes its own single check and raises its own error), so this never blocks a device it cannot talk to."""
+  """(up, last LTSSM). Up only when L0 is actually read.
+
+  dp - fix: the previous version also returned up when the LTSSM state could NOT be read at all
+  (state is None). On a dock whose PCIe is still training right after power-on, the LTSSM ioctl
+  fails and pcie_ltssm() returns None; treating that as "up" let modeld_egpu proceed into tinygrad
+  before the AMD GPU was usable, which then raised "No interface for AMD:0 is available". So the
+  load raced the dock's PCIe bring-up and failed ~3/10 drives. Now a None read keeps waiting until
+  the deadline (or should_stop); only a genuine LTSSM_L0 read returns up. If the device genuinely
+  cannot ever be talked to, we now block for the full timeout instead of failing fast, which is the
+  correct trade-off for a dock that just needs a few more seconds to train."""
   deadline = time.monotonic() + timeout
   state = None
   while True:
     state = pcie_ltssm()
-    if state is None or state == LTSSM_L0:
+    if state == LTSSM_L0:
       return True, state
     if time.monotonic() >= deadline or (should_stop is not None and should_stop()):
       return False, state
